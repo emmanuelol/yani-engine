@@ -1,31 +1,26 @@
-#!/bin/bash
-set -e
+#!/usr/bin/env bash
+set -euo pipefail
 
-echo "Checking Node.js version..."
-NODE_VERSION=$(node -v | cut -d 'v' -f 2)
-NODE_MAJOR=$(echo $NODE_VERSION | cut -d '.' -f 1)
+echo "🧙♂️ Initializing DumbleDoer Plugin for agy..."
 
+# 1. Verify Node.js 20+
+NODE_MAJOR=$(node --version 2>/dev/null | sed 's/v\([0-9]*\).*/\1/')
 if [ -z "$NODE_MAJOR" ] || [ "$NODE_MAJOR" -lt 20 ]; then
-  echo "Error: Node.js version 20+ is required. Found: $NODE_VERSION"
-  exit 1
-fi
-echo "Node.js version check passed (v$NODE_VERSION)."
-
-echo "Removing legacy .git directories to prevent accidental commits..."
-# Prevents removing the root .git directory
-find . -mindepth 2 -type d -name ".git" -exec rm -rf {} +
-
-echo "Initializing CodeGraph index..."
-npx codegraph init -i
-
-echo "Installing Python dependencies using uv..."
-if ! command -v uv &> /dev/null; then
-    echo "uv could not be found. Please install uv first."
+    echo "✗ Node.js 20+ required." >&2
     exit 1
 fi
 
-uv venv
-source .venv/bin/activate
-uv pip install -e .
+# 2. Clean up legacy .git
+if [ -d ".git" ] && [ ! -f "main.py" ]; then
+    rm -rf .git
+fi
 
-echo "Installation complete."
+# 3. Initialize CodeGraph index
+echo "📦 Building semantic index..."
+npx -y --package=@colbymchenry/codegraph codegraph init -i
+
+# 4. Build isolated Python environment
+echo "⚡ Setting up Python environment..."
+uv venv && uv sync
+
+echo "Setup complete!"

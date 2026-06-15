@@ -1,0 +1,214 @@
+
+==============================
+📂 FILE: ./kandalf_cli.py
+==============================
+import os
+import sys
+import argparse
+import asyncio
+from typing import List, Optional, Dict, Any, Callable
+from dotenv import load_dotenv
+from google import genai
+from rich.console import Console
+from rich.markdown import Markdown
+from rich.panel import Panel
+from mcp import ClientSession, StdioServerParameters
+from mcp.stdio_client import stdio_client
+from contextlib import AsyncExitStack
+
+load_dotenv()
+
+console = Console()
+
+# --- Local Tools ---
+
+def read_file(path: str) -> str:
+    """Reads a file from the file system.
+    
+    Args:
+        path: The path to the file to read.
+    """
+    try:
+        with open(path, "r") as f:
+            return f.read()
+    except Exception as e:
+        return f"Error reading file {path}: {e}"
+
+def write_file(path: str, content: str) -> str:
+    """Writes content to a file on the file system.
+    
+    Args:
+        path: The path to the file to write.
+        content: The content to write to the file.
+    """
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True) if os.path.dirname(path) else None
+        with open(path, "w") as f:
+            f.write(content)
+        return f"Successfully wrote to {path}"
+    except Exception as e:
+        return f"Error writing to file {path}: {e}"
+
+def update_memory_registry(content: str) -> str:
+    """Updates the memory.md file with the provided content. 
+    Use this specifically for managing the project state.
+    
+    Args:
+        content: The full updated content of memory.md.
+    """
+    return write_file("memory.md", content)
+
+# --- Orchestrator ---
+
+class KandalfCLI:
+    def __init__(self, api_key: Optional[str] = None, model_id: str = "gemini-2.0-flash"):
+        self.api_key = api_key or os.getenv("GOOGLE_API_KEY")
+        if not self.api_key:
+            console.print("[red]Error: GOOGLE_API_KEY not found in environment or provided as argument.[/red]")
+            sys.exit(1)
+        
+        self.client = genai.Client(api_key=self.api_key)
+        self.model_id = model_id
+        self.chat_session = None
+        self.mcp_sessions: Dict[str, ClientSession] = {}
+        self.exit_stack = AsyncExitStack()
+        
+        # Initial tools
+        self.local_tools = [read_file, write_file, update_memory_registry]
+        self.gemini_tools = list(self.local_tools)
+
+    async def _init_mcp(self, name: str, command: str, args: List[str]):
+        console.print(f"[dim]Initializing MCP server: {name}...[/dim]")
+        try:
+            params = StdioServerParameters(command=command, args=args)
+            read, write = await self.exit_stack.enter_async_context(stdio_client(params))
+            session = await self.exit_stack.enter_async_context(ClientSession(read, write))
+            await session.initialize()
+            self.mcp_sessions[name] = session
+            
+            # List tools and wrap them
+            mcp_tools = await session.list_tools()
+            for tool in mcp_tools.tools:
+                wrapper = self._create_mcp_wrapper(name, tool.name)
+                wrapper.__name__ = f"{name}_{tool.name}"
+                wrapper.__doc__ = f"{tool.description}\n\nMCP Server: {name}"
+                self.gemini_tools.append(wrapper)
+                
+            console.print(f"[green]✓ MCP server {name} initialized with {len(mcp_tools.tools)} tools.[/green]")
+        except Exception as e:
+            console.print(f"[yellow]⚠ Failed to initialize MCP server {name}: {e}[/yellow]")
+
+    def _create_mcp_wrapper(self, server_name: str, tool_name: str):
+        async def mcp_wrapper(**kwargs):
+            session = self.mcp_sessions[server_name]
+            result = await session.call_tool(tool_name, arguments=kwargs)
+            return result.content
+        return mcp_wrapper
+
+    def _read_file_safe(self, path: str) -> str:
+        try:
+            with open(path, "r") as f:
+                return f.read()
+        except FileNotFoundError:
+            return ""
+
+    def _get_system_instructions(self) -> str:
+        claude_md = self._read_file_safe("CLAUDE.md")
+        preamble = self._read_file_safe("lib/common-preamble.md")
+        knowledge_protocol = self._read_file_safe("lib/knowledge-protocol.md")
+        memory_schema = self._read_file_safe("lib/memory-schema.md")
+        memory_md = self._read_file_safe("memory.md")
+
+        instructions = [
+            "# MISSION",
+            "You are Kandalf, an Agent Engineering Harness. Your goal is to systematically analyze, improve, and validate agent projects.",
+            "",
+            "# CORE RULES (CLAUDE.md)",
+            claude_md,
+            "",
+            "# COMMON PREAMBLE",
+            preamble,
+            "",
+            "# KNOWLEDGE PROTOCOL",
+            knowledge_protocol,
+            "",
+            "# MEMORY SCHEMA",
+            memory_schema,
+            "",
+            "# CURRENT STATE (memory.md)",
+            memory_md if memory_md else "No memory.md found. You are starting a new project. Use the 'start' command logic to initialize the project structure.",
+            "",
+            "# TOOL USAGE",
+            "You have tools to read/write files and specialized tools from MCP servers (Context7, CodeGraph).",
+            "Use them to investigate the codebase and maintain the project state.",
+        ]
+        return "\n\n".join(instructions)
+
+    async def start_chat(self, docs_path: Optional[str] = None):
+        # Phase 4: Init MCP servers
+        await self._init_mcp("context7", "npx", ["-y", "@upstash/context7-mcp"])
+        await self._init_mcp("codegraph", "npx", ["-y", "@colbymchenry/codegraph"])
+        
+        system_instruction = self._get_system_instructions()
+        
+        console.print(Panel(f"Starting Kandalf Orchestrator with model: [bold blue]{self.model_id}[/bold blue]", title="Kandalf CLI"))
+        
+        # Use aio for async support
+        self.chat_session = self.client.aio.chats.create(
+            model=self.model_id,
+            config={
+                "system_instruction": system_instruction,
+                "tools": self.gemini_tools
+            }
+        )
+        
+        initial_message = f"I am starting the session. Docs path: {docs_path or 'not provided'}"
+        response = await self.chat_session.send_message(initial_message)
+        self._print_response(response)
+        
+        await self._interactive_loop()
+
+    def _print_response(self, response):
+        if response.text:
+            console.print(Markdown(response.text))
+
+    async def _interactive_loop(self):
+        console.print("[italic cyan]Type 'exit' or 'quit' to end the session.[/italic cyan]")
+        while True:
+            try:
+                user_input = await asyncio.to_thread(console.input, "[bold green]You> [/bold green]")
+                if user_input.lower() in ["exit", "quit"]:
+                    break
+                
+                response = await self.chat_session.send_message(user_input)
+                self._print_response(response)
+                console.print("-" * 40)
+            except KeyboardInterrupt:
+                break
+            except Exception as e:
+                console.print(f"[red]Error: {e}[/red]")
+        
+        # Cleanup MCP sessions
+        await self.exit_stack.aclose()
+
+async def main_async():
+    parser = argparse.ArgumentParser(description="Kandalf Agent Engineering Harness - Gemini Orchestrator")
+    parser.add_argument("command", choices=["start"], help="Command to execute")
+    parser.add_argument("--docs", type=str, help="Path to documentation directory")
+    parser.add_argument("--model", type=str, default="gemini-2.0-flash", help="Gemini model ID")
+    parser.add_argument("--api-key", type=str, help="Google API Key")
+
+    args = parser.parse_args()
+
+    if args.command == "start":
+        kandalf = KandalfCLI(api_key=args.api_key, model_id=args.model)
+        await kandalf.start_chat(docs_path=args.docs)
+
+def main():
+    try:
+        asyncio.run(main_async())
+    except KeyboardInterrupt:
+        pass
+
+if __name__ == "__main__":
+    main()

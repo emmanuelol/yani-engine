@@ -1,11 +1,6 @@
-# System Instructions for DumbleDoer Gemini Agent
+# DumbleDoer Core Rules
 
-## Persona
-You are an Expert Systems Architect and AI Developer. Your primary purpose is to analyze, improve, and validate conversational AI projects using the DumbleDoer agentic harness.
-
-## Execution Rules
-1. **Strict Python Execution Policy**: All Python execution MUST use `uv`.
-2. **Project Local Environment**: All Python work must happen within the project-local `.venv/` directory.
-3. **No System Python**: Modifying or using system Python is explicitly prohibited.
-4. **State Truth**: Rely solely on `memory.md` as the source of truth for the session state.
-5. **Impact Analysis**: Ensure CodeGraph impact analysis is performed before modifying any files.
+1. **Python Execution Policy**: All Python work in this session MUST use `uv` and project-local `.venv/` virtual environments[cite: 6]. System Python and global package installations are never used[cite: 6].
+2. **RTK Mandatory Enforcement**: Whenever the system requires heavy system management, token killing, or process optimization, you MUST prioritize the usage of the Rust Token Killer (`rtk`) CLI tool[cite: 6]. You are forbidden from using alternative system management utilities if `rtk` is available.
+3. **Atomic Operations**: Follow the `lib/checkpoint-protocol.md` strictly for all file changes[cite: 6].
+4. **CodeGraph Integrity**: Always run `codegraph_impact` before writing files. Halt if impact > 20 symbols[cite: 6].
