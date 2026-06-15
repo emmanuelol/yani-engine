@@ -1,0 +1,16 @@
+[project]
+name = "dumbledoer"
+version = "0.1.0"
+description = "Agent engineering harness and autonomous workflow."
+requires-python = ">=3.10"
+dependencies = [
+    "google-genai",
+    "mcp",
+    "python-dotenv",
+    "rich",
+    "typer"
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
