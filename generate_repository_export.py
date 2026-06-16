@@ -1,8 +1,12 @@
 import os
+import math
 from pathlib import Path
 
 # Configuration
-OUTPUT_FILE = "repository_export.txt"
+OUTPUT_PREFIX = "repository_export"
+MAX_FILES = 10
+IDEAL_MAX_FILE_SIZE = 500 * 1024  # 500 KB target size before splitting
+
 ALLOWED_EXTENSIONS = {
     '.py', '.sh', '.md', '.yml', '.yaml', '.txt', '.ini', '.json', '.csv',
     'Dockerfile', 'Makefile', 'requirements.txt', 'crontab.txt'
@@ -69,42 +73,93 @@ def generate_tree(root_dir: Path, prefix: str = "") -> list[str]:
 
 def generate_repository_export():
     root = Path('.')
-    print(f"Generating repository export to {OUTPUT_FILE}...")
+    print("Scanning repository...")
     
-    with open(OUTPUT_FILE, 'w', encoding='utf-8') as outfile:
-        # Header
-        outfile.write(f"# Repository Export: {root.resolve().name}\n")
-        outfile.write(f"# Generated on: {os.popen('date').read().strip()}\n\n")
-        
-        # 1. Directory Tree
-        outfile.write("## Directory Structure\n\n```text\n")
-        tree_lines = generate_tree(root)
-        outfile.write(".\n" + "\n".join(tree_lines) + "\n```\n\n")
-        
-        # 2. File Contents
-        outfile.write("## File Contents\n\n")
-        
-        file_count = 0
-        for path in sorted(root.rglob('*')):
-            if path.is_file() and is_text_file(path):
-                try:
-                    rel_path = path.relative_to('.')
-                    outfile.write(f"### FILE: {rel_path}\n")
-                    outfile.write("```" + (path.suffix.lstrip('.') if path.suffix else "") + "\n")
-                    
-                    with open(path, 'r', encoding='utf-8', errors='ignore') as f:
-                        content = f.read()
-                        outfile.write(content)
-                        if not content.endswith('\n'):
-                            outfile.write('\n')
-                    
-                    outfile.write("```\n\n")
-                    file_count += 1
-                    print(f"Added: {rel_path}")
-                except Exception as e:
-                    print(f"Error reading '{path}': {e}")
+    # 1. Gather all files and calculate total size
+    all_files = []
+    total_size = 0
+    
+    for path in sorted(root.rglob('*')):
+        if path.is_file() and is_text_file(path):
+            all_files.append(path)
+            total_size += path.stat().st_size
+            
+    if not all_files:
+        print("No eligible files found to export.")
+        return
 
-    print(f"\nDone! Exported {file_count} files to '{OUTPUT_FILE}'.")
+    # 2. Determine target size per split file
+    # Ensure it's bounded by IDEAL_MAX_FILE_SIZE unless we are forced to exceed it by the 10-file cap
+    target_size_per_file = max(IDEAL_MAX_FILE_SIZE, math.ceil(total_size / MAX_FILES))
+    
+    # State variables for splitting
+    file_index = 1
+    current_out_file = None
+    current_out_size = 0
+    file_count = 0
+    
+    def open_next_file():
+        nonlocal file_index, current_out_file, current_out_size
+        if current_out_file:
+            current_out_file.close()
+            
+        # Determine naming (e.g. repository_export_part1.txt)
+        filename = f"{OUTPUT_PREFIX}_part{file_index}.txt"
+        print(f"\n-> Opening {filename}...")
+        
+        current_out_file = open(filename, 'w', encoding='utf-8')
+        current_out_file.write(f"# Repository Export: {root.resolve().name} (Part {file_index} of {MAX_FILES})\n")
+        current_out_file.write(f"# Generated on: {os.popen('date').read().strip()}\n\n")
+        current_out_size = 0
+        return current_out_file
+
+    # Open first file
+    out_f = open_next_file()
+    
+    # Write directory tree to the first file only
+    print("Generating directory tree...")
+    tree_content = "## Directory Structure\n\n```text\n.\n" + "\n".join(generate_tree(root)) + "\n```\n\n"
+    out_f.write(tree_content)
+    current_out_size += len(tree_content)
+    
+    out_f.write("## File Contents\n\n")
+    
+    # 3. Iterate and write files, splitting when necessary
+    for path in all_files:
+        try:
+            rel_path = path.relative_to('.')
+            
+            # Read content
+            with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+                content = f.read()
+                
+            # Format block
+            file_header = f"### FILE: {rel_path}\n```{(path.suffix.lstrip('.') if path.suffix else '')}\n"
+            file_footer = "\n```\n\n"
+            full_block = file_header + content + ('' if content.endswith('\n') else '\n') + file_footer
+            block_size = len(full_block)
+            
+            # Check if adding this file exceeds our size threshold AND we have room for more parts
+            if (current_out_size + block_size > target_size_per_file) and (file_index < MAX_FILES) and (current_out_size > 0):
+                file_index += 1
+                out_f = open_next_file()
+                out_f.write("## File Contents (Continued)\n\n")
+            
+            # Write to current file
+            out_f.write(full_block)
+            current_out_size += block_size
+            file_count += 1
+            print(f"Added: {rel_path} (to Part {file_index})")
+            
+        except Exception as e:
+            print(f"Error reading '{path}': {e}")
+
+    # Close the last open file
+    if current_out_file:
+        current_out_file.close()
+
+    print(f"\nDone! Exported {file_count} files across {file_index} text file(s).")
 
 if __name__ == "__main__":
     generate_repository_export()
+    

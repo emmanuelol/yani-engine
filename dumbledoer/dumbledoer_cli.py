@@ -8,8 +8,8 @@ from google import genai
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
-from mcp import ClientSession, StdioServerParameters
-from mcp.stdio_client import stdio_client
+from mcp.client.session import ClientSession
+from mcp.client.stdio import StdioServerParameters, stdio_client
 from contextlib import AsyncExitStack
 
 load_dotenv()
@@ -52,7 +52,7 @@ def run_rtk(command: str) -> str:
         return "Error: RTK binary not found in system PATH."
 
 class DumbleDoerCLI:
-    def __init__(self, api_key: Optional[str] = None, model_id: str = "gemini-2.0-flash"):
+    def __init__(self, api_key: Optional[str] = None, model_id: str = "gemini-2.5-flash"):
         self.api_key = api_key or os.getenv("GOOGLE_API_KEY")
         if not self.api_key:
             console.print("[red]Error: GOOGLE_API_KEY not found.[/red]")

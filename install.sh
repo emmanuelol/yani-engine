@@ -1,26 +1,45 @@
 #!/usr/bin/env bash
-set -euo pipefail
+# DumbleDoer Automated Installer 🧙♂️
 
-echo "🧙♂️ Initializing DumbleDoer Plugin for agy..."
+set -e
 
-# 1. Verify Node.js 20+
-NODE_MAJOR=$(node --version 2>/dev/null | sed 's/v\([0-9]*\).*/\1/')
-if [ -z "$NODE_MAJOR" ] || [ "$NODE_MAJOR" -lt 20 ]; then
-    echo "✗ Node.js 20+ required." >&2
+echo "🪄 Preparing the DumbleDoer environment..."
+
+# 1. Check for Python 3.10+
+if ! command -v python3 &> /dev/null; then
+    echo "❌ Error: python3 is not installed."
     exit 1
 fi
 
-# 2. Clean up legacy .git
-if [ -d ".git" ] && [ ! -f "main.py" ]; then
-    rm -rf .git
+# 2. Create the Virtual Environment if it doesn't exist
+if [ ! -d ".venv" ]; then
+    echo "📦 Creating virtual environment..."
+    python3 -m venv .venv
 fi
 
-# 3. Initialize CodeGraph index
-echo "📦 Building semantic index..."
-npx -y --package=@colbymchenry/codegraph codegraph init -i
+# 3. Activate the Virtual Environment
+source .venv/bin/activate
 
-# 4. Build isolated Python environment
-echo "⚡ Setting up Python environment..."
-uv venv && uv sync
+# 4. Install Dependencies
+echo "📜 Installing dependencies from requirements.txt..."
+pip install --upgrade pip
+pip install -r requirements.txt
 
-echo "Setup complete!"
+# 5. Make sub-tools executable (e.g., RTK)
+if [ -f "bin/rtk" ]; then
+    echo "⚙️ Granting execution permissions to RTK..."
+    chmod +x bin/rtk
+fi
+
+# 6. Initialize the Agent Workspace
+if [ ! -d ".dumbledoer" ]; then
+    echo "🏗️ Initializing .dumbledoer workspace directories..."
+    mkdir -p .dumbledoer/tmp
+    mkdir -p .dumbledoer/checkpoints
+    mkdir -p .dumbledoer/rollbacks
+fi
+
+echo ""
+echo "✨ DumbleDoer installation complete! ✨"
+echo "To activate your spellbook, run:"
+echo "  source .venv/bin/activate"

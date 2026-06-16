@@ -1,0 +1,41 @@
+# --- Python Environment ---
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# --- Local Secrets ---
+# NEVER commit these! They hold your API keys (GOOGLE_API_KEY)
+.env
+.env.local
+.env.*.local
+
+# --- DumbleDoer Session Data ---
+# Ignore the agent's ephemeral working directory
+.dumbledoer/
+# If you use memory.md as a persistent "Project Brain," keep it in Git.
+# If memory.md is purely for local session logs, ignore it:
+memory.md
+
+# --- OS & IDE Metadata ---
+.DS_Store
+.vscode/
+.idea/
+.ipynb_checkpoints/
+
+# --- Logs & Temp ---
+*.log
+*.tmp
+tmp/
+
+# --- Miscellaneous ---
+dist/
+build/
+*.egg-info/
+repository_export*
+konfio_opentelemetry_full_code_part_*

@@ -1,0 +1,25 @@
+# Orchestrator & AI Core
+google-genai>=0.1.0
+mcp>=0.1.0  # Model Context Protocol
+
+# Data Validation & Typing
+pydantic>=2.0.0
+pydantic-settings>=2.0.0
+annotated-types>=0.6.0
+
+# CLI & Terminal UI
+click>=8.1.0
+rich>=13.0.0
+markdown-it-py>=3.0.0
+pygments>=2.15.0
+
+# Networking & Resilience
+httpx>=0.28.0
+httpx-sse>=0.4.0
+requests>=2.31.0
+tenacity>=8.2.0
+certifi>=2024.0.0
+
+# Environment & Utils
+python-dotenv>=1.0.0
+distro>=1.9.0
