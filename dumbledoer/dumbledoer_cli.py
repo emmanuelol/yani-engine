@@ -1,5 +1,6 @@
 import os
 import sys
+from filelock import FileLock
 import asyncio
 import subprocess
 from typing import List, Optional, Dict
@@ -14,6 +15,7 @@ from contextlib import AsyncExitStack
 
 load_dotenv()
 console = Console()
+REGISTRY_LOCK = FileLock("memory.md.lock", timeout=10)
 
 def read_file(path: str) -> str:
     """Reads a file from the file system."""
@@ -35,8 +37,11 @@ def write_file(path: str, content: str) -> str:
         return f"Error writing to file {path}: {e}"
 
 def update_memory_registry(content: str) -> str:
-    """Updates the memory.md file with the provided content."""
-    return write_file("memory.md", content)
+    """Updates the memory.md file with the provided content.
+    CRITICAL CONSTRAINT: You MUST preserve the entire Config block exactly as it was, including 'budget_limit' and 'budget_threshold_pct'. Do not compress, omit, or truncate the Config section under any circumstances.
+    """
+    with REGISTRY_LOCK:
+        return write_file("memory.md", content)
 
 def run_rtk(command: str) -> str:
     """

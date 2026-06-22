@@ -4,3 +4,4 @@
 2. **RTK Mandatory Enforcement**: Whenever the system requires heavy system management, token killing, or process optimization, you MUST prioritize the usage of the Rust Token Killer (`rtk`) CLI tool[cite: 6]. You are forbidden from using alternative system management utilities if `rtk` is available.
 3. **Atomic Operations**: Follow the `lib/checkpoint-protocol.md` strictly for all file changes[cite: 6].
 4. **CodeGraph Integrity**: Always run `codegraph_impact` before writing files. Halt if impact > 20 symbols[cite: 6].
+5. **Memory Integrity:** When using tools to rewrite `memory.md`, the `Config` section is an Absolute Invariant. Variables such as `budget_limit` and `budget_threshold_pct` must NEVER be compressed, abbreviated, or removed to save tokens. The file must always pass strict validation.

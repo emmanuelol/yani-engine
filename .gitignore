@@ -39,3 +39,4 @@ build/
 *.egg-info/
 repository_export*
 konfio_opentelemetry_full_code_part_*
+*.bak
