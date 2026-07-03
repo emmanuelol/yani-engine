@@ -3,6 +3,7 @@ import sys
 from filelock import FileLock
 import asyncio
 import subprocess
+import shlex
 from typing import List, Optional, Dict
 from dotenv import load_dotenv
 from google import genai
@@ -25,8 +26,8 @@ def read_file(path: str) -> str:
     except Exception as e:
         return f"Error reading file {path}: {e}"
 
-def write_file(path: str, content: str) -> str:
-    """Writes content to a file on the file system."""
+def _write_file(path: str, content: str) -> str:
+    """Internal function to write content to a file on the file system."""
     try:
         if os.path.dirname(path):
             os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -36,12 +37,51 @@ def write_file(path: str, content: str) -> str:
     except Exception as e:
         return f"Error writing to file {path}: {e}"
 
+def write_file_with_review(path: str, content: str) -> str:
+    """Writes content to a file via a VS Code Diff-Gate for user approval."""
+    try:
+        tmp_dir = ".dumbledoer/tmp"
+        os.makedirs(tmp_dir, exist_ok=True)
+        filename = os.path.basename(path)
+        tmp_path = os.path.join(tmp_dir, f"{filename}.tmp")
+        
+        with open(tmp_path, "w") as f:
+            f.write(content)
+            
+        if os.path.exists(path):
+            subprocess.run(["code", "--wait", "--diff", path, tmp_path], check=True)
+        else:
+            subprocess.run(["code", "--wait", tmp_path], check=True)
+            
+        console.print(f"[yellow]Review proposed changes for {path} in VS Code.[/yellow]")
+        approval = input("Approve changes? [Y/n]: ").strip().lower()
+        if approval in ('', 'y', 'yes'):
+            os.replace(tmp_path, path)
+            return f"Successfully wrote to {path} (Approved by user)"
+        else:
+            return f"Error: Changes to {path} were rejected by the user."
+    except Exception as e:
+        return f"Error in write_file_with_review for {path}: {e}"
+
+def execute_bash(command: str) -> str:
+    """
+    Executes a bash command in the execution sandbox.
+    Use this to run tests, uv, and git commands autonomously.
+    """
+    try:
+        result = subprocess.run(command, shell=True, capture_output=True, text=True, check=True)
+        return result.stdout
+    except subprocess.CalledProcessError as e:
+        return f"Error ({e.returncode}):\nSTDOUT: {e.stdout}\nSTDERR: {e.stderr}"
+    except Exception as e:
+        return f"Exception executing command: {e}"
+
 def update_memory_registry(content: str) -> str:
     """Updates the memory.md file with the provided content.
     CRITICAL CONSTRAINT: You MUST preserve the entire Config block exactly as it was, including 'budget_limit' and 'budget_threshold_pct'. Do not compress, omit, or truncate the Config section under any circumstances.
     """
     with REGISTRY_LOCK:
-        return write_file("memory.md", content)
+        return _write_file("memory.md", content)
 
 def run_rtk(command: str) -> str:
     """
@@ -49,7 +89,8 @@ def run_rtk(command: str) -> str:
     Use this for all system management and heavy optimization tasks.
     """
     try:
-        result = subprocess.run(["rtk", command], capture_output=True, text=True, check=True)
+        args = ["rtk"] + shlex.split(command)
+        result = subprocess.run(args, capture_output=True, text=True, check=True)
         return f"RTK Output: {result.stdout}"
     except subprocess.CalledProcessError as e:
         return f"RTK Error: {e.stderr}"
@@ -69,8 +110,15 @@ class DumbleDoerCLI:
         self.mcp_sessions: Dict[str, ClientSession] = {}
         self.exit_stack = AsyncExitStack()
         
-        self.local_tools = [read_file, write_file, update_memory_registry, run_rtk]
-        self.gemini_tools = list(self.local_tools)
+        self.local_tools = [read_file, write_file_with_review, execute_bash, update_memory_registry, run_rtk]
+        self.gemini_tools = [self._create_async_wrapper(tool) for tool in self.local_tools]
+
+    def _create_async_wrapper(self, tool_func):
+        async def async_wrapper(*args, **kwargs):
+            return await asyncio.to_thread(tool_func, *args, **kwargs)
+        async_wrapper.__name__ = tool_func.__name__
+        async_wrapper.__doc__ = tool_func.__doc__
+        return async_wrapper
 
     async def _init_mcp(self, name: str, command: str, args: List[str]):
         console.print(f"[dim]Initializing MCP server: {name}...[/dim]")

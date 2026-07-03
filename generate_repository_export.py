@@ -14,12 +14,12 @@ ALLOWED_EXTENSIONS = {
 EXCLUDE_DIRS = {
     '.git', '.pytest_cache', '__pycache__', 'venv', 'env', 
     'openclaw_data/credentials', 'openclaw_data/sessions',
-    'openclaw_data/workspace/.openclaw', 'node_modules'
+    'openclaw_data/workspace/.openclaw', 'node_modules','.venv/'
 }
 EXCLUDE_EXTENSIONS = {
     '.pyc', '.log', '.sqlite', '.db', '.jpg', '.jpeg', '.png', '.gif', 
     '.bmp', '.webp', '.svg', '.pdf', '.zip', '.tar', '.gz', '.rar', 
-    '.mp3', '.wav', '.aac', '.ogg', '.flac', '.env'
+    '.mp3', '.wav', '.aac', '.ogg', '.flac', '.env', '.venv'
 }
 
 def is_ignored(path: Path) -> bool:
