@@ -49,15 +49,20 @@ def write_file_with_review(path: str, content: str) -> str:
             f.write(content)
             
         if os.path.exists(path):
-            subprocess.run(["code", "--wait", "--diff", path, tmp_path], check=True)
+            subprocess.run(["code", "--wait", "--new-window", "--diff", path, tmp_path], check=True)
         else:
-            subprocess.run(["code", "--wait", tmp_path], check=True)
+            subprocess.run(["code", "--wait", "--new-window", tmp_path], check=True)
             
         console.print(f"[yellow]Review proposed changes for {path} in VS Code.[/yellow]")
         approval = input("Approve changes? [Y/n]: ").strip().lower()
         if approval in ('', 'y', 'yes'):
+            target_dir = os.path.dirname(os.path.abspath(path))
+            if target_dir:
+                os.makedirs(target_dir, exist_ok=True)
             os.replace(tmp_path, path)
-            return f"Successfully wrote to {path} (Approved by user)"
+            with open(path, "r") as f:
+                final_content = f.read()
+            return f"Successfully wrote to {path} (Approved by user).\nFinal File Content:\n{final_content}"
         else:
             return f"Error: Changes to {path} were rejected by the user."
     except Exception as e:
@@ -69,7 +74,15 @@ def execute_bash(command: str) -> str:
     Use this to run tests, uv, and git commands autonomously.
     """
     try:
-        result = subprocess.run(command, shell=True, capture_output=True, text=True, check=True)
+        cwd = os.getcwd()
+        docker_cmd = [
+            "docker", "run", "--rm",
+            "-v", f"{cwd}:/workspace",
+            "-w", "/workspace",
+            "ubuntu:latest",
+            "bash", "-c", command
+        ]
+        result = subprocess.run(docker_cmd, capture_output=True, text=True, check=True)
         return result.stdout
     except subprocess.CalledProcessError as e:
         return f"Error ({e.returncode}):\nSTDOUT: {e.stdout}\nSTDERR: {e.stderr}"
@@ -89,8 +102,15 @@ def run_rtk(command: str) -> str:
     Use this for all system management and heavy optimization tasks.
     """
     try:
+        cwd = os.getcwd()
         args = ["rtk"] + shlex.split(command)
-        result = subprocess.run(args, capture_output=True, text=True, check=True)
+        docker_cmd = [
+            "docker", "run", "--rm",
+            "-v", f"{cwd}:/workspace",
+            "-w", "/workspace",
+            "ubuntu:latest"
+        ] + args
+        result = subprocess.run(docker_cmd, capture_output=True, text=True, check=True)
         return f"RTK Output: {result.stdout}"
     except subprocess.CalledProcessError as e:
         return f"RTK Error: {e.stderr}"
