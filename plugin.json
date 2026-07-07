@@ -1,5 +1,10 @@
 {
   "name": "dumbledoer-harness",
   "version": "1.0.0",
-  "description": "DumbleDoer Agent Engineering Harness for agy"
+  "description": "DumbleDoer Agent Engineering Harness. Enforces strict zero-blast-radius containerized execution.",
+  "skills": "./skills",
+  "commands": "./commands",
+  "agents": "./agents",
+  "hooks": "./hooks",
+  "mcpServers": "./mcpServers"
 }

@@ -1,26 +1,36 @@
 import os
 import math
 from pathlib import Path
+from datetime import datetime
 
 # Configuration
-OUTPUT_PREFIX = "repository_export"
 MAX_FILES = 10
 IDEAL_MAX_FILE_SIZE = 500 * 1024  # 500 KB target size before splitting
 
 ALLOWED_EXTENSIONS = {
     '.py', '.sh', '.md', '.yml', '.yaml', '.txt', '.ini', '.json', '.csv',
-    'Dockerfile', 'Makefile', 'requirements.txt', 'crontab.txt'
+    'Dockerfile', 'Makefile', 'requirements.txt', 'crontab.txt', '.js', '.ts', 
+    '.tsx', '.jsx', '.html', '.css', '.rs', '.go', '.java', '.cpp', '.h', '.c'
 }
+
 EXCLUDE_DIRS = {
-    '.git', '.pytest_cache', '__pycache__', 'venv', 'env', 
+    '.git', '.pytest_cache', '__pycache__', 'venv', 'env', '.venv',
     'openclaw_data/credentials', 'openclaw_data/sessions',
-    'openclaw_data/workspace/.openclaw', 'node_modules','.venv/'
+    'openclaw_data/workspace/.openclaw', 'node_modules', 'dist', 'build'
 }
+
 EXCLUDE_EXTENSIONS = {
     '.pyc', '.log', '.sqlite', '.db', '.jpg', '.jpeg', '.png', '.gif', 
     '.bmp', '.webp', '.svg', '.pdf', '.zip', '.tar', '.gz', '.rar', 
-    '.mp3', '.wav', '.aac', '.ogg', '.flac', '.env', '.venv'
+    '.mp3', '.wav', '.aac', '.ogg', '.flac', '.env'
 }
+
+def get_repo_name() -> str:
+    """Gets the sanitized name of the current directory."""
+    raw_name = Path('.').resolve().name
+    # Replace spaces and weird characters with underscores
+    safe_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in raw_name)
+    return safe_name
 
 def is_ignored(path: Path) -> bool:
     """Check if a path should be ignored based on EXCLUDE_DIRS and EXCLUDE_EXTENSIONS."""
@@ -54,7 +64,6 @@ def generate_tree(root_dir: Path, prefix: str = "") -> list[str]:
     """Recursively generate a tree structure representation of the repository."""
     tree = []
     
-    # Get all entries, sorted: directories first, then files
     entries = sorted(
         [e for e in root_dir.iterdir() if not is_ignored(e)],
         key=lambda x: (not x.is_dir(), x.name.lower())
@@ -73,7 +82,24 @@ def generate_tree(root_dir: Path, prefix: str = "") -> list[str]:
 
 def generate_repository_export():
     root = Path('.')
-    print("Scanning repository...")
+    repo_name = get_repo_name()
+    
+    # --- NEW: Cleanup previous exports ---
+    print("Checking for previous exports...")
+    cleanup_count = 0
+    # Look for files matching the output pattern in the root directory
+    for old_export in root.glob(f"{repo_name}_part_*.txt"):
+        try:
+            old_export.unlink()
+            cleanup_count += 1
+        except Exception as e:
+            print(f"Warning: Could not delete old export '{old_export.name}': {e}")
+            
+    if cleanup_count > 0:
+        print(f"-> Removed {cleanup_count} previous export file(s) to avoid duplication.")
+    # ------------------------------------
+
+    print(f"\nScanning repository: {repo_name}...")
     
     # 1. Gather all files and calculate total size
     all_files = []
@@ -88,11 +114,18 @@ def generate_repository_export():
         print("No eligible files found to export.")
         return
 
-    # 2. Determine target size per split file
-    # Ensure it's bounded by IDEAL_MAX_FILE_SIZE unless we are forced to exceed it by the 10-file cap
-    target_size_per_file = max(IDEAL_MAX_FILE_SIZE, math.ceil(total_size / MAX_FILES))
+    # 2. Determine target size and expected number of parts
+    if total_size <= IDEAL_MAX_FILE_SIZE:
+        expected_parts = 1
+        target_size_per_file = total_size + 1024 # No splitting required
+    else:
+        # Calculate how many parts we'd need given the ideal size
+        calculated_parts = math.ceil(total_size / IDEAL_MAX_FILE_SIZE)
+        expected_parts = min(calculated_parts, MAX_FILES)
+        # Recalculate target size to force it into the expected parts constraint
+        target_size_per_file = math.ceil(total_size / expected_parts)
     
-    # State variables for splitting
+    # State variables
     file_index = 1
     current_out_file = None
     current_out_size = 0
@@ -103,13 +136,30 @@ def generate_repository_export():
         if current_out_file:
             current_out_file.close()
             
-        # Determine naming (e.g. repository_export_part1.txt)
-        filename = f"{OUTPUT_PREFIX}_part{file_index}.txt"
+        filename = f"{repo_name}_part_{file_index}_of_{expected_parts}.txt"
         print(f"\n-> Opening {filename}...")
         
         current_out_file = open(filename, 'w', encoding='utf-8')
-        current_out_file.write(f"# Repository Export: {root.resolve().name} (Part {file_index} of {MAX_FILES})\n")
-        current_out_file.write(f"# Generated on: {os.popen('date').read().strip()}\n\n")
+        
+        # Inject LLM-specific System Instructions
+        current_out_file.write(f"--- REPOSITORY CONTEXT ---\n")
+        current_out_file.write(f"Repository Name: {repo_name}\n")
+        current_out_file.write(f"Export Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        current_out_file.write(f"Part: {file_index} of {expected_parts}\n")
+        current_out_file.write(f"--------------------------\n\n")
+        
+        current_out_file.write("### SYSTEM INSTRUCTIONS FOR LLM ###\n")
+        current_out_file.write(f"This document contains part {file_index} of {expected_parts} of the codebase for '{repo_name}'.\n")
+        
+        if expected_parts > 1:
+            if file_index < expected_parts:
+                current_out_file.write("ACTION REQUIRED: Acknowledge receipt of this part. DO NOT attempt to answer broad architectural questions yet. Wait until all parts are provided.\n")
+            else:
+                current_out_file.write("ACTION REQUIRED: This is the final part. You now have the complete codebase context. You may now answer user queries fully.\n")
+        else:
+            current_out_file.write("This document contains the entire codebase. You may answer user queries fully based on this context.\n")
+        current_out_file.write("###################################\n\n")
+        
         current_out_size = 0
         return current_out_file
 
@@ -128,24 +178,24 @@ def generate_repository_export():
     for path in all_files:
         try:
             rel_path = path.relative_to('.')
+            file_ext = path.suffix.lstrip('.') if path.suffix else 'text'
             
-            # Read content
-            with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+            # Read content (use replace to avoid failing on slight decoding issues)
+            with open(path, 'r', encoding='utf-8', errors='replace') as f:
                 content = f.read()
                 
             # Format block
-            file_header = f"### FILE: {rel_path}\n```{(path.suffix.lstrip('.') if path.suffix else '')}\n"
+            file_header = f"### FILE: {rel_path}\n```{file_ext}\n"
             file_footer = "\n```\n\n"
             full_block = file_header + content + ('' if content.endswith('\n') else '\n') + file_footer
             block_size = len(full_block)
             
-            # Check if adding this file exceeds our size threshold AND we have room for more parts
-            if (current_out_size + block_size > target_size_per_file) and (file_index < MAX_FILES) and (current_out_size > 0):
+            # Strict boundary check: only split if we have parts remaining
+            if (current_out_size + block_size > target_size_per_file) and (file_index < expected_parts) and (current_out_size > 0):
                 file_index += 1
                 out_f = open_next_file()
                 out_f.write("## File Contents (Continued)\n\n")
             
-            # Write to current file
             out_f.write(full_block)
             current_out_size += block_size
             file_count += 1
@@ -154,12 +204,11 @@ def generate_repository_export():
         except Exception as e:
             print(f"Error reading '{path}': {e}")
 
-    # Close the last open file
     if current_out_file:
         current_out_file.close()
 
     print(f"\nDone! Exported {file_count} files across {file_index} text file(s).")
+    print(f"Prefix used: {repo_name}")
 
 if __name__ == "__main__":
     generate_repository_export()
-    

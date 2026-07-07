@@ -1,0 +1,16 @@
+{
+  "name": "rollback",
+  "description": "Restores files from checkpoints to recover from failed executions or unapproved diffs.",
+  "options": [
+    {
+      "name": "task",
+      "type": "string",
+      "description": "The specific task ID to rollback (e.g., T-001).",
+      "required": true
+    }
+  ],
+  "execute": {
+    "command": "./.venv/bin/python",
+    "args": ["dumbledoer/dumbledoer_cli.py", "rollback", "{{task}}"]
+  }
+}

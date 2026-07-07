@@ -1,0 +1,8 @@
+{
+  "name": "start",
+  "description": "Ingests documentation, conducts a discovery phase, and maps out an atomic task plan in memory.md.",
+  "execute": {
+    "command": "./.venv/bin/python",
+    "args": ["dumbledoer/dumbledoer_cli.py", "start"]
+  }
+}
