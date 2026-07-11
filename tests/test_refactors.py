@@ -1,6 +1,7 @@
 import os
 import asyncio
 import time
+import difflib
 from unittest.mock import patch, mock_open, MagicMock
 from dumbledoer.dumbledoer_cli import write_file_with_review, execute_bash, run_rtk, DumbleDoerCLI
 import pytest
@@ -17,7 +18,7 @@ def test_execute_bash_sandbox():
         cmd_list = args[0]
         assert "docker" in cmd_list
         assert "run" in cmd_list
-        assert "ubuntu:latest" in cmd_list
+        assert "dumbledoer-base:latest" in cmd_list
         assert "bash" in cmd_list
         assert "-c" in cmd_list
         assert "echo 'hello'" in cmd_list
@@ -35,30 +36,52 @@ def test_run_rtk_sandbox():
         cmd_list = args[0]
         assert "docker" in cmd_list
         assert "run" in cmd_list
-        assert "ubuntu:latest" in cmd_list
+        assert "dumbledoer-base:latest" in cmd_list
         assert "rtk" in cmd_list
         assert "gain" in cmd_list
         assert "--history" in cmd_list
         assert kwargs.get("shell") is not True
 
-def test_write_file_with_review():
+@patch("dumbledoer.dumbledoer_cli.shutil.which", return_value="code")
+def test_write_file_with_review_vscode_success(mock_which):
     with patch("dumbledoer.dumbledoer_cli.subprocess.run") as mock_run, \
-         patch("dumbledoer.dumbledoer_cli.input", return_value="y"), \
-         patch("builtins.open", mock_open(read_data="new mocked content")), \
+         patch("dumbledoer.dumbledoer_cli.Confirm.ask", side_effect=[True, True]), \
+         patch("builtins.open", mock_open(read_data="mocked content")), \
          patch("os.makedirs"), \
+         patch("dumbledoer.dumbledoer_cli.json.dump"), \
          patch("os.replace") as mock_replace, \
          patch("os.path.exists", return_value=True):
          
-        result = write_file_with_review("test/dummy/file.txt", "mock content")
+        mock_run.return_value.returncode = 0
+        result = asyncio.run(write_file_with_review("test/dummy/file.txt", "new mock content", "T-001", "S-123"))
         
-        # Verify new-window is passed
         mock_run.assert_called_once()
         args, kwargs = mock_run.call_args
-        assert "--new-window" in args[0]
+        assert "--wait" in args[0]
+        assert "--new-window" not in args[0]
         assert "--diff" in args[0]
         
         mock_replace.assert_called_once()
-        assert "Final File Content:\nnew mocked content" in result
+        assert "Successfully wrote" in result
+
+@patch("dumbledoer.dumbledoer_cli.shutil.which", return_value="code")
+def test_write_file_with_review_vscode_declined_terminal_fallback(mock_which):
+    with patch("dumbledoer.dumbledoer_cli.Confirm.ask", side_effect=[False, True]) as mock_confirm, \
+         patch("builtins.open", mock_open(read_data="original content")), \
+         patch("os.makedirs"), \
+         patch("dumbledoer.dumbledoer_cli.json.dump"), \
+         patch("os.replace") as mock_replace, \
+         patch("os.path.exists", return_value=True), \
+         patch("dumbledoer.dumbledoer_cli.Console.print") as mock_print:
+         
+        result = asyncio.run(write_file_with_review("test/dummy/file.txt", "updated content", "T-001", "S-123"))
+        
+        assert mock_confirm.call_count == 2
+        mock_replace.assert_called_once()
+        assert "Successfully wrote" in result
+        
+        fallback_rendered = any("Review proposed changes for:" in str(call) for call in mock_print.call_args_list)
+        assert fallback_rendered
 
 def test_async_event_loop_protection():
     async def _test():
