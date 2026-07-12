@@ -1,7 +1,7 @@
 {
-  "name": "dumbledoer-harness",
+  "name": "dumbledoer",
   "version": "1.0.0",
-  "description": "DumbleDoer Agent Engineering Harness. Enforces strict zero-blast-radius containerized execution.",
+  "description": "DumbleDoer Agent Engineering Harness",
   "skills": "./skills",
   "commands": "./commands",
   "agents": "./agents",
