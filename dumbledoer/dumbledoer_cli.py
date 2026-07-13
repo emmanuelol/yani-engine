@@ -23,7 +23,7 @@ from contextlib import AsyncExitStack
 
 load_dotenv()
 console = Console()
-REGISTRY_LOCK = FileLock("memory.md.lock", timeout=10)
+REGISTRY_LOCK = FileLock("memory.md.lock", timeout=30)
 
 class CheckpointManager:
     @staticmethod
@@ -428,10 +428,13 @@ async def write_file_with_review(path: str, content: str, task_id: str = "T-000"
                     else:
                         cmd.append(tmp_path)
                         
+                    # Capture output to diagnose silent GUI failures
                     result = await asyncio.to_thread(subprocess.run, cmd, capture_output=True, text=True)
                     if result.returncode != 0:
-                        console.print(f"[dim yellow]VS Code CLI failed. STDERR: {result.stderr.strip()}[/dim yellow]")
+                        console.print(f"[bold red]⚠️ VS Code GUI failed to launch.[/bold red]")
+                        console.print(f"[dim]Diagnostic STDERR: {result.stderr.strip() if result.stderr else 'None'}[/dim]")
                         console.print("[dim yellow]Falling back to terminal diff...[/dim yellow]")
+                        vscode_launched = False
                     else:
                         vscode_launched = True
                         console.print(f"\n[bold yellow]⚠️ Review proposed changes for {path} in VS Code.[/bold yellow]")
@@ -523,6 +526,54 @@ def execute_bash(command: str, read_only: bool = False) -> str:
     except Exception as e:
         return f"Exception executing command: {e}"
 
+def update_task_status_tool(task_id: str, new_status: str, session_id: str = "—") -> str:
+    """Updates the status of a specific task in the memory.md Task Registry."""
+    with REGISTRY_LOCK:
+        try:
+            with open("memory.md", "r") as f:
+                content = f.read()
+            lines = content.splitlines()
+            updated = False
+            for i, line in enumerate(lines):
+                if line.strip().startswith(f"| {task_id} |"):
+                    parts = line.split("|")
+                    if len(parts) > 5:
+                        parts[4] = f" {new_status} "
+                        if new_status == "in_progress":
+                            parts[5] = f" {session_id} "
+                        lines[i] = "|".join(parts)
+                        updated = True
+                        break
+            if not updated:
+                return f"Task {task_id} not found."
+            with open("memory.md", "w") as f:
+                f.write("\n".join(lines))
+            return f"Successfully updated task {task_id} to {new_status}"
+        except Exception as e:
+            return f"Error updating task status: {e}"
+
+def add_change_log_entry(task_id: str, file_path: str, change_summary: str, status: str, rationale: str) -> str:
+    """Appends a new entry to the Change Log in memory.md."""
+    with REGISTRY_LOCK:
+        try:
+            with open("memory.md", "r") as f:
+                content = f.read()
+            timestamp = datetime.now(timezone.utc).isoformat() + "Z"
+            entry = f"| {timestamp} | {task_id} | {file_path} | {change_summary} | {status} | {rationale} |"
+            lines = content.splitlines()
+            for i, line in enumerate(lines):
+                if line.startswith("## Change Log"):
+                    for j in range(i+1, len(lines)):
+                        if lines[j].strip().startswith("|---"):
+                            lines.insert(j+1, entry)
+                            with open("memory.md", "w") as f:
+                                f.write("\n".join(lines))
+                            return f"Successfully added change log entry for {file_path}"
+                    break
+            return "Error: Change Log section not found in memory.md"
+        except Exception as e:
+            return f"Error adding change log entry: {e}"
+
 def update_memory_registry(content: str) -> str:
     """Updates the memory.md file with the provided content.
     CRITICAL CONSTRAINT: You MUST preserve the entire Config block exactly as it was, including 'budget_limit' and 'budget_threshold_pct'. Do not compress, omit, or truncate the Config section under any circumstances.
@@ -569,7 +620,7 @@ class DumbleDoerCLI:
         
         SandboxManager.ensure_image_built()
         CheckpointManager.run_orphan_scan()
-        self.local_tools = [read_file, write_file_with_review, execute_bash, update_memory_registry, run_rtk]
+        self.local_tools = [read_file, write_file_with_review, execute_bash, update_task_status_tool, add_change_log_entry, update_memory_registry, run_rtk]
         self.gemini_tools = [self._create_async_wrapper(tool) for tool in self.local_tools]
 
     def _create_async_wrapper(self, tool_func):
@@ -610,7 +661,22 @@ class DumbleDoerCLI:
 
     async def _spawn_sub_agent(self, task_id: str, task_title: str, task_type: str):
         console.print(f"[dim]Spawning isolated sub-agent for {task_id}...[/dim]")
-        sys_inst = self._get_system_instructions() + f"\n\nSUB-AGENT DIRECTIVE:\nYou are executing {task_id}: {task_title}.\n1. Run codegraph_impact first.\n2. Use write_file_with_review for modifications.\n3. Return a summary when finished."
+        
+        # Pre-flight: Detect local environment for the LLM
+        detected_env = []
+        if os.path.exists("docker-compose.yml"): detected_env.append("docker-compose.yml found")
+        if os.path.exists("Dockerfile"): detected_env.append("Dockerfile found")
+        env_report = f"WORKSPACE_ENVIRONMENT: {', '.join(detected_env) if detected_env else 'No native containers detected.'}"
+
+        sys_inst = self._get_system_instructions() + f"""
+
+SUB-AGENT DIRECTIVE:
+{env_report}
+You are executing {task_id}: {task_title}.
+1. MANDATORY: If {', '.join(detected_env)} exists, ALL bash commands MUST be executed within that repository-native container environment (e.g., 'docker-compose run --rm [service] bash -c').
+2. Run codegraph_impact first.
+3. Use write_file_with_review for modifications.
+4. Return a summary when finished."""
         
         # Dynamically enforce Zero-Trust Read-Only permissions for non-change tasks
         is_read_only = task_type != "change"
@@ -618,7 +684,7 @@ class DumbleDoerCLI:
             return execute_bash(command, read_only=is_read_only)
         task_execute_bash.__doc__ = execute_bash.__doc__
         
-        agent_tools = [read_file, write_file_with_review, task_execute_bash, update_memory_registry, run_rtk]
+        agent_tools = [read_file, write_file_with_review, task_execute_bash, update_task_status_tool, add_change_log_entry, run_rtk]
         async_tools = [self._create_async_wrapper(tool) for tool in agent_tools]
 
         chat = self.client.aio.chats.create(
