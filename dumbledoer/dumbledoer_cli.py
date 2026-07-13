@@ -338,6 +338,24 @@ class PlanValidator:
 
 class TaskOrchestrator:
     @staticmethod
+    def add_task(title: str, task_type: str, deps: str = "none") -> str:
+        """Adds a new task to the Task Registry. Use this to autonomously expand the plan."""
+        with REGISTRY_LOCK:
+            content = read_file("memory.md")
+            lines = content.splitlines()
+            max_id = 0
+            for line in lines:
+                if "| T-" in line:
+                    parts = line.split("|")
+                    if len(parts) > 1 and parts[1].strip().startswith("T-"):
+                        try: max_id = max(max_id, int(parts[1].strip().split("-")[1]))
+                        except: pass
+            new_id = f"T-{max_id + 1:03d}"
+            new_row = f"| {new_id} | {title} | {task_type} | pending | — | {deps} | — | — |"
+            new_content = content.replace("## Task Details", f"{new_row}\n\n## Task Details")
+            return _write_file("memory.md", new_content)
+
+    @staticmethod
     def calculate_waves(content: str):
         tasks = {}
         completed_or_in_progress = set()
@@ -684,7 +702,7 @@ You are executing {task_id}: {task_title}.
             return execute_bash(command, read_only=is_read_only)
         task_execute_bash.__doc__ = execute_bash.__doc__
         
-        agent_tools = [read_file, write_file_with_review, task_execute_bash, update_task_status_tool, add_change_log_entry, run_rtk]
+        agent_tools = [read_file, write_file_with_review, task_execute_bash, update_task_status_tool, add_change_log_entry, run_rtk, TaskOrchestrator.add_task]
         async_tools = [self._create_async_wrapper(tool) for tool in agent_tools]
 
         chat = self.client.aio.chats.create(
@@ -747,7 +765,7 @@ You are executing {task_id}: {task_title}.
         ]
         return "\n\n".join(instructions)
 
-    async def start_chat(self, action: str, docs_path: Optional[str] = None):
+    async def start_chat(self, action: str, docs_path: Optional[str] = None, user_prompt: str = ""):
         await self._init_mcp("context7", "npx", ["-y", "@upstash/context7-mcp"])
         await self._init_mcp("codegraph", "npx", ["-y", "--package=@colbymchenry/codegraph", "codegraph", "serve", "--mcp"])
         
@@ -760,21 +778,31 @@ You are executing {task_id}: {task_title}.
             config={"system_instruction": self._get_system_instructions(), "tools": self.gemini_tools}
         )
         
-        console.print(Panel(f"DumbleDoer Executing: [bold blue]/{action}[/bold blue]", title="DumbleDoer"))
-        response = await self.chat_session.send_message(f"Execute the /{action} command. Docs path: {docs_path}")
+        prompt_text = f"Execute the /{action} command."
+        if docs_path:
+            prompt_text += f" Docs path: {docs_path}"
+            
+        display_title = f"[bold blue]/{action}[/bold blue]"
+        if action == "iterate" and user_prompt:
+            prompt_text += f" User objective: '{user_prompt}'. Follow the workflow in skills/iterate/SKILL.md to map this to the task registry."
+            display_title += f"\n[dim]Prompt: {user_prompt}[/dim]"
+
+        console.print(Panel(f"DumbleDoer Executing: {display_title}", title="DumbleDoer"))
+        response = await self.chat_session.send_message(prompt_text)
         if response.text:
             console.print(Markdown(response.text))
 
 def main():
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=["start", "execute", "resume", "report", "rollback", "update-docs"])
+    parser.add_argument("command", choices=["start", "execute", "resume", "report", "rollback", "update-docs", "iterate"])
     parser.add_argument("--docs", type=str)
+    parser.add_argument("--prompt", type=str, default="")
     args = parser.parse_args()
     
     try:
         dumbledoer = DumbleDoerCLI()
-        asyncio.run(dumbledoer.start_chat(args.command, args.docs))
+        asyncio.run(dumbledoer.start_chat(args.command, args.docs, args.prompt))
     except KeyboardInterrupt:
         pass
 
