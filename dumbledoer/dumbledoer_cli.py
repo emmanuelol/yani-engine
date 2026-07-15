@@ -233,6 +233,19 @@ class SandboxManager:
         cwd = os.getcwd()
         return f"{cwd}:/workspace:ro" if read_only else f"{cwd}:/workspace"
 
+    @staticmethod
+    def ensure_codegraph_ready():
+        if not os.path.exists(".codegraph"):
+            console.print("[dim]CodeGraph index missing. Initializing...[/dim]")
+            try:
+                # Use subprocess to run the init. If global codegraph is missing,
+                # fallback to npx execution automatically.
+                cmd = ["codegraph", "init", "-i"] if shutil.which("codegraph") else ["npx", "-y", "@colbymchenry/codegraph", "init", "-i"]
+                subprocess.run(cmd, check=True, capture_output=True)
+                console.print("[green]✓ CodeGraph index initialized.[/green]")
+            except Exception as e:
+                console.print(f"[red]⚠️ CodeGraph auto-init failed: {e}[/red]")
+
 class KnowledgeManager:
     @staticmethod
     def get_next_k_id(entries_dir: str) -> str:
@@ -287,6 +300,11 @@ class BudgetManager:
         costs = {"spawn": 1000, "analysis": 15000, "change_small": 10000, "change_medium": 35000, "change_large": 70000}
         cost = costs.get(operation, 5000)
         self.estimated_tokens += cost
+        
+        # Traceable Budgeting
+        os.makedirs(".dumbledoer", exist_ok=True)
+        with open(".dumbledoer/budget.log", "a") as f:
+            f.write(f"{datetime.now(timezone.utc).isoformat()} | {operation} | +{cost} tokens | Total: {self.estimated_tokens}\n")
         
     def check_and_harvest(self):
         if self.estimated_tokens >= self.threshold:
@@ -644,16 +662,36 @@ class DumbleDoerCLI:
         self.mcp_sessions: Dict[str, ClientSession] = {}
         self.exit_stack = AsyncExitStack()
         
+        try:
+            with open("memory.md", "r") as f:
+                memory_content = f.read()
+        except FileNotFoundError:
+            memory_content = ""
+        self.budget_manager = BudgetManager(memory_content)
+        
         SandboxManager.ensure_image_built()
+        SandboxManager.ensure_codegraph_ready()
         CheckpointManager.run_orphan_scan()
         self.local_tools = [read_file, write_file_with_review, execute_bash, update_task_status_tool, add_change_log_entry, update_memory_registry, run_rtk]
         self.gemini_tools = [self._create_async_wrapper(tool) for tool in self.local_tools]
 
     def _create_async_wrapper(self, tool_func):
-        if asyncio.iscoroutinefunction(tool_func):
-            return tool_func
         async def async_wrapper(*args, **kwargs):
+            # Tracing Logic
+            os.makedirs(".dumbledoer", exist_ok=True)
+            timestamp = datetime.now(timezone.utc).isoformat()
+            log_entry = f"[{timestamp}] Tool: {tool_func.__name__} | Args: {args} | Kwargs: {kwargs}\n"
+            with open(".dumbledoer/trace.log", "a") as f:
+                f.write(log_entry)
+                
+            # Budget Check
+            if hasattr(self, 'budget_manager'):
+                self.budget_manager.add_cost(tool_func.__name__)
+            
+            if asyncio.iscoroutinefunction(tool_func):
+                return await tool_func(*args, **kwargs)
             return await asyncio.to_thread(tool_func, *args, **kwargs)
+            
         async_wrapper.__name__ = tool_func.__name__
         async_wrapper.__doc__ = tool_func.__doc__
         return async_wrapper
@@ -727,7 +765,7 @@ You are executing {task_id}: {task_title}.
             console.print("[bold green]✓ All tasks are already completed (or deferred).[/bold green]")
             return
 
-        budget = BudgetManager(memory_content)
+        budget = self.budget_manager
         session_id = datetime.now(timezone.utc).strftime("S-%Y%m%d-%H%M%S")
         console.print(f"[bold cyan]Executing {sum(len(w) for w in waves)} pending tasks across {len(waves)} waves.[/bold cyan]")
 
