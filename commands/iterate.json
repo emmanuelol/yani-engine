@@ -1,0 +1,21 @@
+{
+  "name": "iterate",
+  "description": "Refines the current task plan by adding or adjusting tasks based on a new prompt.",
+  "options": [
+    {
+      "name": "prompt",
+      "type": "string",
+      "description": "Your new objective, feature request, or task definition.",
+      "required": true
+    }
+  ],
+  "execute": {
+    "command": "./.venv/bin/python",
+    "args": [
+      "dumbledoer/dumbledoer_cli.py",
+      "iterate",
+      "--prompt",
+      "{{prompt}}"
+    ]
+  }
+}
