@@ -24,6 +24,13 @@ from contextlib import AsyncExitStack
 load_dotenv()
 console = Console()
 REGISTRY_LOCK = FileLock("memory.md.lock", timeout=30)
+UI_LOCK = None
+
+def get_ui_lock():
+    global UI_LOCK
+    if UI_LOCK is None:
+        UI_LOCK = asyncio.Lock()
+    return UI_LOCK
 
 class CheckpointManager:
     @staticmethod
@@ -431,57 +438,58 @@ async def write_file_with_review(path: str, content: str, task_id: str = "T-000"
             with open(path, "r") as f:
                 original_content = f.read()
 
-        vscode_cmd = shutil.which("code") or shutil.which("code-insiders")
-        vscode_launched = False
-        if vscode_cmd:
-            visualize = await asyncio.to_thread(
+        async with get_ui_lock():
+            vscode_cmd = shutil.which("code") or shutil.which("code-insiders")
+            vscode_launched = False
+            if vscode_cmd:
+                visualize = await asyncio.to_thread(
+                    Confirm.ask, 
+                    f"\n[bold cyan]Launch VS Code GUI to visualize diff for {path}?[/bold cyan]"
+                )
+                if visualize:
+                    try:
+                        cmd = [vscode_cmd, "--wait"]
+                        if os.path.exists(path):
+                            cmd.extend(["--diff", path, tmp_path])
+                        else:
+                            cmd.append(tmp_path)
+                            
+                        # Capture output to diagnose silent GUI failures
+                        result = await asyncio.to_thread(subprocess.run, cmd, capture_output=True, text=True)
+                        if result.returncode != 0:
+                            console.print(f"[bold red]⚠️ VS Code GUI failed to launch.[/bold red]")
+                            console.print(f"[dim]Diagnostic STDERR: {result.stderr.strip() if result.stderr else 'None'}[/dim]")
+                            console.print("[dim yellow]Falling back to terminal diff...[/dim yellow]")
+                            vscode_launched = False
+                        else:
+                            vscode_launched = True
+                            console.print(f"\n[bold yellow]⚠️ Review proposed changes for {path} in VS Code.[/bold yellow]")
+                    except Exception as e:
+                        console.print(f"[dim yellow]VS Code launch failed ({e}), falling back to terminal diff...[/dim yellow]")
+            else:
+                console.print(f"\n[dim yellow]VS Code CLI ('code'/'code-insiders') not found in PATH, falling back to terminal diff...[/dim yellow]")
+    
+            if not vscode_launched:
+                diff = list(difflib.unified_diff(
+                    original_content.splitlines(keepends=True),
+                    content.splitlines(keepends=True),
+                    fromfile=f"a/{path}",
+                    tofile=f"b/{path}",
+                    n=3
+                ))
+                diff_text = "".join(diff)
+                
+                if not diff_text:
+                    return f"No changes detected for {path}."
+    
+                console.print(f"\n[bold yellow]⚠️ Review proposed changes for:[/bold yellow] {path}")
+                syntax = Syntax(diff_text, "diff", theme="monokai", line_numbers=True)
+                console.print(syntax)
+    
+            approval = await asyncio.to_thread(
                 Confirm.ask, 
-                f"\n[bold cyan]Launch VS Code GUI to visualize diff for {path}?[/bold cyan]"
+                "\n[bold red]Approve and apply fix?[/bold red]"
             )
-            if visualize:
-                try:
-                    cmd = [vscode_cmd, "--wait"]
-                    if os.path.exists(path):
-                        cmd.extend(["--diff", path, tmp_path])
-                    else:
-                        cmd.append(tmp_path)
-                        
-                    # Capture output to diagnose silent GUI failures
-                    result = await asyncio.to_thread(subprocess.run, cmd, capture_output=True, text=True)
-                    if result.returncode != 0:
-                        console.print(f"[bold red]⚠️ VS Code GUI failed to launch.[/bold red]")
-                        console.print(f"[dim]Diagnostic STDERR: {result.stderr.strip() if result.stderr else 'None'}[/dim]")
-                        console.print("[dim yellow]Falling back to terminal diff...[/dim yellow]")
-                        vscode_launched = False
-                    else:
-                        vscode_launched = True
-                        console.print(f"\n[bold yellow]⚠️ Review proposed changes for {path} in VS Code.[/bold yellow]")
-                except Exception as e:
-                    console.print(f"[dim yellow]VS Code launch failed ({e}), falling back to terminal diff...[/dim yellow]")
-        else:
-            console.print(f"\n[dim yellow]VS Code CLI ('code'/'code-insiders') not found in PATH, falling back to terminal diff...[/dim yellow]")
-
-        if not vscode_launched:
-            diff = list(difflib.unified_diff(
-                original_content.splitlines(keepends=True),
-                content.splitlines(keepends=True),
-                fromfile=f"a/{path}",
-                tofile=f"b/{path}",
-                n=3
-            ))
-            diff_text = "".join(diff)
-            
-            if not diff_text:
-                return f"No changes detected for {path}."
-
-            console.print(f"\n[bold yellow]⚠️ Review proposed changes for:[/bold yellow] {path}")
-            syntax = Syntax(diff_text, "diff", theme="monokai", line_numbers=True)
-            console.print(syntax)
-
-        approval = await asyncio.to_thread(
-            Confirm.ask, 
-            "\n[bold red]Approve and apply fix?[/bold red]"
-        )
         
         if approval:
             # Step 1: Write Rollback Copy
@@ -723,36 +731,48 @@ You are executing {task_id}: {task_title}.
         session_id = datetime.now(timezone.utc).strftime("S-%Y%m%d-%H%M%S")
         console.print(f"[bold cyan]Executing {sum(len(w) for w in waves)} pending tasks across {len(waves)} waves.[/bold cyan]")
 
+        semaphore = asyncio.Semaphore(4)
+
+        async def bounded_spawn(tid, title, t_type):
+            async with semaphore:
+                async with get_ui_lock():
+                    await asyncio.to_thread(budget.check_and_harvest)
+                    
+                def pre_update():
+                    with REGISTRY_LOCK:
+                        mem = read_file("memory.md")
+                        mem = TaskOrchestrator.set_task_status(mem, tid, "pending", "in_progress", session_id)
+                        budget.add_cost("spawn")
+                        budget.add_cost("change_medium") # Defaulting to medium effort conservative estimate
+                        _write_file("memory.md", mem)
+                await asyncio.to_thread(pre_update)
+                
+                res = await self._spawn_sub_agent(tid, title, t_type)
+                
+                def post_update():
+                    with REGISTRY_LOCK:
+                        mem = read_file("memory.md")
+                        console.print(f"[green]✓ {tid} complete.[/green]")
+                        mem = TaskOrchestrator.set_task_status(mem, tid, "in_progress", "completed")
+                        KnowledgeManager.capture_success(tid, title, res[1], session_id)
+                        _write_file("memory.md", mem)
+                await asyncio.to_thread(post_update)
+                return res
+
         for wave_idx, wave in enumerate(waves):
-            budget.check_and_harvest()
             console.print(f"\n[bold blue]🌊 Wave {wave_idx + 1} (Parallel): {', '.join([t[0] for t in wave])}[/bold blue]")
             
-            with REGISTRY_LOCK:
-                mem = read_file("memory.md")
-                for tid, _, _ in wave: 
-                    mem = TaskOrchestrator.set_task_status(mem, tid, "pending", "in_progress", session_id)
-                    budget.add_cost("spawn")
-                    budget.add_cost("change_medium") # Defaulting to medium effort conservative estimate
-                _write_file("memory.md", mem)
-
-            agent_tasks = [self._spawn_sub_agent(tid, title, t_type) for tid, title, t_type in wave]
-            results = await asyncio.gather(*agent_tasks)
-
-            with REGISTRY_LOCK:
-                mem = read_file("memory.md")
-                for tid, res in results:
-                    console.print(f"[green]✓ {tid} complete.[/green]")
-                    mem = TaskOrchestrator.set_task_status(mem, tid, "in_progress", "completed")
-                    task_title = next((t[1] for t in wave if t[0] == tid), "Unknown Task")
-                    KnowledgeManager.capture_success(tid, task_title, res, session_id)
-                _write_file("memory.md", mem)
+            agent_tasks = [bounded_spawn(tid, title, t_type) for tid, title, t_type in wave]
+            await asyncio.gather(*agent_tasks)
                 
         # Post-Execution: Trim and Archive memory.md to prevent bloat
-        with REGISTRY_LOCK:
-            final_mem = read_file("memory.md")
-            archived_mem = ArchiveManager.trim_and_archive(final_mem)
-            if final_mem != archived_mem:
-                _write_file("memory.md", archived_mem)
+        def finalize_archive():
+            with REGISTRY_LOCK:
+                final_mem = read_file("memory.md")
+                archived_mem = ArchiveManager.trim_and_archive(final_mem)
+                if final_mem != archived_mem:
+                    _write_file("memory.md", archived_mem)
+        await asyncio.to_thread(finalize_archive)
 
     def _get_system_instructions(self) -> str:
         instructions = [
