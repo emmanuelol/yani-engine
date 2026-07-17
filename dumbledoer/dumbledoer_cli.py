@@ -649,6 +649,27 @@ def run_rtk(command: str) -> str:
     except FileNotFoundError:
         return "Error: RTK binary not found in system PATH."
 
+def forge_and_execute_tool(tool_name: str, python_code: str, args: str = "") -> str:
+    """
+    Dynamic Tool Smithing: Writes a custom Python script to the workspace and executes it in the sandbox.
+    Use this when you need complex logic (AST parsing, data transformation, etc.) that standard bash cannot handle.
+    """
+    try:
+        tool_dir = ".dumbledoer/forged_tools"
+        os.makedirs(tool_dir, exist_ok=True)
+        # Ensure the filename is safe and has a .py extension
+        safe_name = "".join(c for c in tool_name if c.isalnum() or c in "_-")
+        file_path = os.path.join(tool_dir, f"{safe_name}.py")
+        
+        with open(file_path, "w") as f:
+            f.write(python_code)
+            
+        # Execute the newly forged tool inside the secure Docker sandbox
+        console.print(f"[dim purple]🔨 Forging and executing custom tool: {safe_name}.py...[/dim purple]")
+        return execute_bash(f"python {file_path} {args}")
+    except Exception as e:
+        return f"Tool Smithing failed: {e}"
+
 class DumbleDoerCLI:
     def __init__(self, api_key: Optional[str] = None, model_id: str = "gemini-2.5-flash"):
         self.api_key = api_key or os.getenv("GOOGLE_API_KEY")
@@ -672,7 +693,7 @@ class DumbleDoerCLI:
         SandboxManager.ensure_image_built()
         SandboxManager.ensure_codegraph_ready()
         CheckpointManager.run_orphan_scan()
-        self.local_tools = [read_file, write_file_with_review, execute_bash, update_task_status_tool, add_change_log_entry, update_memory_registry, run_rtk]
+        self.local_tools = [read_file, write_file_with_review, execute_bash, update_task_status_tool, add_change_log_entry, update_memory_registry, run_rtk, forge_and_execute_tool]
         self.gemini_tools = [self._create_async_wrapper(tool) for tool in self.local_tools]
 
     def _create_async_wrapper(self, tool_func):
@@ -723,6 +744,26 @@ class DumbleDoerCLI:
             return result.content
         return mcp_wrapper
 
+    async def _auto_rollback(self, task_id: str):
+        """Self-Healing Daemon: Instantly reverts a task's changes if a critical failure is detected."""
+        console.print(f"\n[bold red]🚨 Critical Failure Detected! Triggering Predictive Rollback for {task_id}...[/bold red]")
+        rb_dir = f".dumbledoer/rollbacks/{task_id}"
+        if not os.path.exists(rb_dir):
+            return
+            
+        # Restore files from the atomic rollback copy
+        for filename in os.listdir(rb_dir):
+            decoded_path = filename.replace("__colon__", ":").replace("__", "/")
+            rb_file = os.path.join(rb_dir, filename)
+            os.replace(rb_file, decoded_path)
+            
+        # Reset task status to pending so it can be re-attempted safely
+        with REGISTRY_LOCK:
+            mem = read_file("memory.md")
+            mem = TaskOrchestrator.set_task_status(mem, task_id, "in_progress", "pending")
+            _write_file("memory.md", mem)
+        console.print(f"[bold green]✓ Timeline restored. {task_id} changes reverted.[/bold green]")
+
     async def _spawn_sub_agent(self, task_id: str, task_title: str, task_type: str):
         console.print(f"[dim]Spawning isolated sub-agent for {task_id}...[/dim]")
         
@@ -744,11 +785,18 @@ You are executing {task_id}: {task_title}.
         
         # Dynamically enforce Zero-Trust Read-Only permissions for non-change tasks
         is_read_only = task_type != "change"
-        def task_execute_bash(command: str) -> str:
-            return execute_bash(command, read_only=is_read_only)
-        task_execute_bash.__doc__ = execute_bash.__doc__
+        def monitored_execute_bash(command: str) -> str:
+            result = execute_bash(command, read_only=is_read_only)
+            # Daemon Watcher: If the command throws a massive stack trace or fatal error
+            if "Traceback (most recent call last):" in result or "FATAL ERROR" in result:
+                # Fire the rollback asynchronously without interrupting the event loop
+                asyncio.create_task(self._auto_rollback(task_id))
+                return f"CRITICAL FAILURE: {result}\n\nSYSTEM OVERRIDE: Predictive rollback triggered. Your changes have been reverted. Rethink your approach."
+            return result
+            
+        monitored_execute_bash.__doc__ = execute_bash.__doc__
         
-        agent_tools = [read_file, write_file_with_review, task_execute_bash, update_task_status_tool, add_change_log_entry, run_rtk, TaskOrchestrator.add_task]
+        agent_tools = [read_file, write_file_with_review, monitored_execute_bash, update_task_status_tool, add_change_log_entry, run_rtk, TaskOrchestrator.add_task]
         async_tools = [self._create_async_wrapper(tool) for tool in agent_tools]
 
         chat = self.client.aio.chats.create(
@@ -763,7 +811,7 @@ You are executing {task_id}: {task_title}.
         waves = TaskOrchestrator.calculate_waves(memory_content)
         if not waves:
             console.print("[bold green]✓ All tasks are already completed (or deferred).[/bold green]")
-            return
+            return False
 
         budget = self.budget_manager
         session_id = datetime.now(timezone.utc).strftime("S-%Y%m%d-%H%M%S")
@@ -812,6 +860,8 @@ You are executing {task_id}: {task_title}.
                     _write_file("memory.md", archived_mem)
         await asyncio.to_thread(finalize_archive)
 
+        return True
+
     def _get_system_instructions(self) -> str:
         instructions = [
             "# MISSION",
@@ -828,7 +878,19 @@ You are executing {task_id}: {task_title}.
         await self._init_mcp("codegraph", "npx", ["-y", "--package=@colbymchenry/codegraph", "codegraph", "serve", "--mcp"])
         
         if action == "execute":
-            await self.execute_task_plan()
+            while True:
+                executed = await self.execute_task_plan()
+                if not executed:
+                    break
+                    
+                console.print(Panel("DumbleDoer Auto-Supervisor: [bold purple]/audit[/bold purple]", title="QA Harness Loop"))
+                audit_chat = self.client.aio.chats.create(
+                    model=self.model_id,
+                    config={"system_instruction": self._get_system_instructions(), "tools": self.gemini_tools}
+                )
+                response = await audit_chat.send_message("Execute the /audit command. Evaluate the completed tasks. If you find bugs, use the add_task tool.")
+                if response.text:
+                    console.print(Markdown(response.text))
             return
             
         self.chat_session = self.client.aio.chats.create(
@@ -853,8 +915,8 @@ You are executing {task_id}: {task_title}.
 def main():
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=["start", "execute", "resume", "report", "rollback", "update-docs", "iterate"])
-    parser.add_argument("--docs", type=str)
+    parser.add_argument("command", choices=["start", "execute", "resume", "report", "rollback", "update-docs", "iterate", "audit"])
+    parser.add_argument("--docs", type=str)   
     parser.add_argument("--prompt", type=str, default="")
     args = parser.parse_args()
     
