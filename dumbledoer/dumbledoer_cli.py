@@ -3,6 +3,7 @@ import shutil
 import sys
 from filelock import FileLock
 import asyncio
+import inspect
 import subprocess
 import shlex
 from typing import List, Optional, Dict
@@ -20,7 +21,12 @@ from datetime import datetime, timezone
 from mcp.client.session import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
 from contextlib import AsyncExitStack
+from markdown_it import MarkdownIt
 
+class BudgetExhaustedException(Exception):
+    pass
+
+GUI_DIFF_ENABLED = True
 load_dotenv()
 console = Console()
 REGISTRY_LOCK = FileLock("memory.md.lock", timeout=30)
@@ -309,12 +315,7 @@ class BudgetManager:
     def check_and_harvest(self):
         if self.estimated_tokens >= self.threshold:
             console.print(f"\n[bold red]⚠️ Budget Threshold Reached ({self.estimated_tokens}/{self.limit} tokens).[/bold red]")
-            console.print("[bold purple]🪄 Invoking RTK (Rust Token Killer) for Active Context Harvesting...[/bold purple]")
-            # Fire RTK to forcefully prune prompt bloat and compress memory.md context history
-            output = run_rtk("cull --aggressive --preserve-system")
-            self.estimated_tokens = int(self.estimated_tokens * 0.3) # Simulate 70% bloat reduction
-            console.print(f"[dim]{output}[/dim]")
-            console.print(f"[bold green]✓ Context compressed. Tokens reset to ~{self.estimated_tokens}. Resuming execution.[/bold green]\n")
+            raise BudgetExhaustedException("Budget limit exceeded.")
 
 class PlanValidator:
     @staticmethod
@@ -361,6 +362,37 @@ class PlanValidator:
             
         return "OK"
 
+class ASTMemoryMapper:
+    """Read-only AST mapper to locate exact line coordinates in Markdown without destructive rendering."""
+    
+    @staticmethod
+    def locate_heading_block(content: str, heading_level: str, heading_title: str):
+        """Returns the (start_line, end_line) of a heading and its immediate content block."""
+        md = MarkdownIt()
+        tokens = md.parse(content)
+        
+        start_line = -1
+        end_line = -1
+        in_target = False
+        
+        for i, token in enumerate(tokens):
+            if token.type == "heading_open" and token.tag == heading_level:
+                # Check the inline content of the heading
+                if i + 1 < len(tokens) and heading_title in tokens[i+1].content:
+                    start_line = token.map[0]
+                    in_target = True
+                    continue
+            
+            if in_target and token.type == "heading_open" and token.tag <= heading_level:
+                # Reached the next heading of same or higher level
+                end_line = token.map[0]
+                break
+                
+        if in_target and end_line == -1:
+            end_line = len(content.splitlines())
+            
+        return start_line, end_line
+
 class TaskOrchestrator:
     @staticmethod
     def add_task(title: str, task_type: str, deps: str = "none") -> str:
@@ -377,8 +409,22 @@ class TaskOrchestrator:
                         except: pass
             new_id = f"T-{max_id + 1:03d}"
             new_row = f"| {new_id} | {title} | {task_type} | pending | — | {deps} | — | — |"
-            new_content = content.replace("## Task Details", f"{new_row}\n\n## Task Details")
-            return _write_file("memory.md", new_content)
+            new_details = f"### {new_id}\n- Type: {task_type}\n- Status: pending\n- Owner: \n- Depends On: {deps}\n- Description: {title}\n- Inputs: \n- Outputs: \n- Success Criteria: \n- Estimated Effort: \n- Parallelizable: \n- CodeGraph Impact: \n- Checkpoint: \n- Resume Instructions: \n- Notes: "
+            d_start, _ = ASTMemoryMapper.locate_heading_block(content, "h2", "Task Details")
+            if d_start != -1:
+                lines.insert(d_start + 1, f"\n{new_details}")
+                content = "\n".join(lines)
+                lines = content.splitlines()
+                
+            r_start, r_end = ASTMemoryMapper.locate_heading_block(content, "h2", "Task Registry")
+            if r_start != -1:
+                last_tbl_line = r_start
+                for i in range(r_start, r_end):
+                    if lines[i].strip().startswith("|"):
+                        last_tbl_line = i
+                lines.insert(last_tbl_line + 1, new_row)
+                
+            return _write_file("memory.md", "\n".join(lines))
 
     @staticmethod
     def calculate_waves(content: str):
@@ -459,31 +505,26 @@ async def write_file_with_review(path: str, content: str, task_id: str = "T-000"
         async with get_ui_lock():
             vscode_cmd = shutil.which("code") or shutil.which("code-insiders")
             vscode_launched = False
-            if vscode_cmd:
-                visualize = await asyncio.to_thread(
-                    Confirm.ask, 
-                    f"\n[bold cyan]Launch VS Code GUI to visualize diff for {path}?[/bold cyan]"
-                )
-                if visualize:
-                    try:
-                        cmd = [vscode_cmd, "--wait"]
-                        if os.path.exists(path):
-                            cmd.extend(["--diff", path, tmp_path])
-                        else:
-                            cmd.append(tmp_path)
-                            
-                        # Capture output to diagnose silent GUI failures
-                        result = await asyncio.to_thread(subprocess.run, cmd, capture_output=True, text=True)
-                        if result.returncode != 0:
-                            console.print(f"[bold red]⚠️ VS Code GUI failed to launch.[/bold red]")
-                            console.print(f"[dim]Diagnostic STDERR: {result.stderr.strip() if result.stderr else 'None'}[/dim]")
-                            console.print("[dim yellow]Falling back to terminal diff...[/dim yellow]")
-                            vscode_launched = False
-                        else:
-                            vscode_launched = True
-                            console.print(f"\n[bold yellow]⚠️ Review proposed changes for {path} in VS Code.[/bold yellow]")
-                    except Exception as e:
-                        console.print(f"[dim yellow]VS Code launch failed ({e}), falling back to terminal diff...[/dim yellow]")
+            if vscode_cmd and GUI_DIFF_ENABLED:
+                try:
+                    cmd = [vscode_cmd, "--wait"]
+                    if os.path.exists(path):
+                        cmd.extend(["--diff", path, tmp_path])
+                    else:
+                        cmd.append(tmp_path)
+                        
+                    # Capture output to diagnose silent GUI failures
+                    result = await asyncio.to_thread(subprocess.run, cmd, capture_output=True, text=True)
+                    if result.returncode != 0:
+                        console.print(f"[bold red]⚠️ VS Code GUI failed to launch.[/bold red]")
+                        console.print(f"[dim]Diagnostic STDERR: {result.stderr.strip() if result.stderr else 'None'}[/dim]")
+                        console.print("[dim yellow]Falling back to terminal diff...[/dim yellow]")
+                        vscode_launched = False
+                    else:
+                        vscode_launched = True
+                        console.print(f"\n[bold yellow]⚠️ Review proposed changes for {path} in VS Code.[/bold yellow]")
+                except Exception as e:
+                    console.print(f"[dim yellow]VS Code launch failed ({e}), falling back to terminal diff...[/dim yellow]")
             else:
                 console.print(f"\n[dim yellow]VS Code CLI ('code'/'code-insiders') not found in PATH, falling back to terminal diff...[/dim yellow]")
     
@@ -530,7 +571,9 @@ async def write_file_with_review(path: str, content: str, task_id: str = "T-000"
                 "stepIndex": 1,
                 "sessionId": session_id,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
-                "files": {path: original_content}
+                "files": {path: original_content},
+                "codeGraphSnapshot": {},
+                "nextStepDescription": "Review applied changes and proceed."
             }
             with open(chk_file, "w") as f:
                 json.dump(checkpoint_data, f, indent=2)
@@ -560,6 +603,7 @@ def execute_bash(command: str, read_only: bool = False) -> str:
             "docker", "run", "--rm",
             "-v", mount_flag,
             "-w", "/workspace",
+            "-v", "/var/run/docker.sock:/var/run/docker.sock",
             "dumbledoer-base:latest",
             "bash", "-c", command
         ]
@@ -578,15 +622,26 @@ def update_task_status_tool(task_id: str, new_status: str, session_id: str = "�
                 content = f.read()
             lines = content.splitlines()
             updated = False
-            for i, line in enumerate(lines):
-                if line.strip().startswith(f"| {task_id} |"):
-                    parts = line.split("|")
-                    if len(parts) > 5:
-                        parts[4] = f" {new_status} "
-                        if new_status == "in_progress":
-                            parts[5] = f" {session_id} "
-                        lines[i] = "|".join(parts)
+            
+            d_start, d_end = ASTMemoryMapper.locate_heading_block(content, "h3", task_id)
+            if d_start != -1:
+                for i in range(d_start, d_end):
+                    if lines[i].strip().startswith("- Status:"):
+                        lines[i] = f"- Status: {new_status}"
                         updated = True
+                        break
+                        
+            r_start, r_end = ASTMemoryMapper.locate_heading_block(content, "h2", "Task Registry")
+            if r_start != -1:
+                for i in range(r_start, r_end):
+                    if lines[i].strip().startswith(f"| {task_id} |"):
+                        parts = lines[i].split("|")
+                        if len(parts) > 5:
+                            parts[4] = f" {new_status} "
+                            if new_status == "in_progress":
+                                parts[5] = f" {session_id} "
+                            lines[i] = "|".join(parts)
+                            updated = True
                         break
             if not updated:
                 return f"Task {task_id} not found."
@@ -678,7 +733,7 @@ class DumbleDoerCLI:
             sys.exit(1)
             
         self.client = genai.Client(api_key=self.api_key)
-        self.model_id = model_id
+        self.model_id = model_id if model_id != "gemini-2.5-flash" else os.getenv("AGY_MODEL", "gemini-2.5-flash")
         self.chat_session = None
         self.mcp_sessions: Dict[str, ClientSession] = {}
         self.exit_stack = AsyncExitStack()
@@ -688,6 +743,14 @@ class DumbleDoerCLI:
                 memory_content = f.read()
         except FileNotFoundError:
             memory_content = ""
+            
+        global GUI_DIFF_ENABLED
+        if GUI_DIFF_ENABLED:
+            for line in memory_content.splitlines():
+                if line.startswith("- gui_diff_enabled:"):
+                    if line.split(":")[1].strip().lower() == "false":
+                        GUI_DIFF_ENABLED = False
+
         self.budget_manager = BudgetManager(memory_content)
         
         SandboxManager.ensure_image_built()
@@ -709,7 +772,7 @@ class DumbleDoerCLI:
             if hasattr(self, 'budget_manager'):
                 self.budget_manager.add_cost(tool_func.__name__)
             
-            if asyncio.iscoroutinefunction(tool_func):
+            if inspect.iscoroutinefunction(tool_func):
                 return await tool_func(*args, **kwargs)
             return await asyncio.to_thread(tool_func, *args, **kwargs)
             
@@ -799,8 +862,10 @@ You are executing {task_id}: {task_title}.
         agent_tools = [read_file, write_file_with_review, monitored_execute_bash, update_task_status_tool, add_change_log_entry, run_rtk, TaskOrchestrator.add_task]
         async_tools = [self._create_async_wrapper(tool) for tool in agent_tools]
 
+        agent_model = self.model_id if task_type == "change" else "gemini-2.5-flash"
+        
         chat = self.client.aio.chats.create(
-            model=self.model_id,
+            model=agent_model,
             config={"system_instruction": sys_inst, "tools": async_tools}
         )
         response = await chat.send_message(f"Execute {task_id}: {task_title}. Begin by searching the target symbols.")
@@ -848,8 +913,17 @@ You are executing {task_id}: {task_title}.
         for wave_idx, wave in enumerate(waves):
             console.print(f"\n[bold blue]🌊 Wave {wave_idx + 1} (Parallel): {', '.join([t[0] for t in wave])}[/bold blue]")
             
-            agent_tasks = [bounded_spawn(tid, title, t_type) for tid, title, t_type in wave]
-            await asyncio.gather(*agent_tasks)
+            try:
+                agent_tasks = [bounded_spawn(tid, title, t_type) for tid, title, t_type in wave]
+                await asyncio.gather(*agent_tasks)
+            except BudgetExhaustedException:
+                console.print("[bold purple]🪄 Budget exhausted. Invoking RTK for final cleanup...[/bold purple]")
+                try:
+                    output = run_rtk("cull --aggressive --preserve-system")
+                    console.print(f"[dim]{output}[/dim]")
+                except Exception as e:
+                    pass
+                break
                 
         # Post-Execution: Trim and Archive memory.md to prevent bloat
         def finalize_archive():
@@ -918,10 +992,16 @@ def main():
     parser.add_argument("command", choices=["start", "execute", "resume", "report", "rollback", "update-docs", "iterate", "audit"])
     parser.add_argument("--docs", type=str)   
     parser.add_argument("--prompt", type=str, default="")
+    parser.add_argument("--no-gui", action="store_true", help="Disable VS Code Diff-Gate")
+    parser.add_argument("--model", type=str, default="gemini-2.5-flash")
     args = parser.parse_args()
     
+    global GUI_DIFF_ENABLED
+    if args.no_gui:
+        GUI_DIFF_ENABLED = False
+    
     try:
-        dumbledoer = DumbleDoerCLI()
+        dumbledoer = DumbleDoerCLI(model_id=args.model)
         asyncio.run(dumbledoer.start_chat(args.command, args.docs, args.prompt))
     except KeyboardInterrupt:
         pass
