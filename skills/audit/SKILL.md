@@ -16,12 +16,15 @@ You are acting as the QA Supervisor. Your job is to evaluate the tasks recently 
 ## Section 1 — Context Retrieval
 1. Read `memory.md`. Identify all tasks with the status `completed` that were executed in the most recent session.
 2. Read the `Success Criteria` and `Outputs` (affected files) for each of these tasks.
+3. Use `codegraph_search` to map the exact locations of the modified files/symbols before testing begins.
 
 ## Section 2 — Execution Sandbox Validation
 For each completed task:
 1. Formulate a test strategy.
 2. Use the `execute_bash` tool to actively test the code within the Docker sandbox. Run syntax checkers (e.g., `python -m py_compile`, `uv run pytest`), type checkers, or execute the target scripts to verify they do not throw errors.
-3. Use `codegraph_affected` to check if downstream dependencies were broken by the changes.
+3. Use `codegraph_callers` on any modified functions to identify upstream dependencies. Verify through the AST or sandbox that these callers are not passing incompatible arguments to the new implementation.
+4. Use `codegraph_affected` to pull a definitive list of test files connected to the changed code. You MUST execute these specific tests using the `execute_bash` tool in the Docker sandbox.
+5. If the changes interact with an external library or framework, use the Context7 MCP `query-docs` tool to verify that the implemented methods and parameters match current official documentation.
 
 ## Section 3 — The Harness Loop (Task Generation)
 1. Evaluate the output from your bash tests against the `Success Criteria`.

@@ -861,8 +861,14 @@ You are executing {task_id}: {task_title}.
         
         agent_tools = [read_file, write_file_with_review, monitored_execute_bash, update_task_status_tool, add_change_log_entry, run_rtk, TaskOrchestrator.add_task]
         async_tools = [self._create_async_wrapper(tool) for tool in agent_tools]
+        
+        filtered_parent_tools = [tool for tool in self.gemini_tools if tool.__name__ != "execute_bash"]
+        existing_tool_names = {t.__name__ for t in async_tools}
+        for tool in filtered_parent_tools:
+            if tool.__name__ not in existing_tool_names:
+                async_tools.append(tool)
 
-        agent_model = self.model_id if task_type == "change" else "gemini-2.5-flash"
+        agent_model = self.model_id if task_type in ["change", "validation", "audit"] else "gemini-2.5-flash"
         
         chat = self.client.aio.chats.create(
             model=agent_model,

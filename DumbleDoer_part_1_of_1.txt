@@ -1,6 +1,6 @@
 --- REPOSITORY CONTEXT ---
 Repository Name: DumbleDoer
-Export Date: 2026-07-16 19:01:11
+Export Date: 2026-07-18 11:43:35
 Part: 1 of 1
 --------------------------
 
@@ -34,6 +34,7 @@ This document contains the entire codebase. You may answer user queries fully ba
 ├── agents
 │   └── agnes.json
 ├── commands
+│   ├── audit.json
 │   ├── execute.json
 │   ├── iterate.json
 │   ├── report.json
@@ -70,6 +71,8 @@ This document contains the entire codebase. You may answer user queries fully ba
 │   ├── codegraph.json
 │   └── context7.json
 ├── skills
+│   ├── audit
+│   │   └── SKILL.md
 │   ├── caveman
 │   │   └── SKILL.md
 │   ├── iterate
@@ -111,6 +114,7 @@ This document contains the entire codebase. You may answer user queries fully ba
 ├── README.md
 ├── requirements.txt
 ├── SYSTEM_INSTRUCTIONS.md
+├── test_debug.py
 └── uv.lock
 ```
 
@@ -1086,6 +1090,19 @@ You can interact with DumbleDoer using the following slash commands within `agy`
 
 ```
 
+### FILE: commands/audit.json
+```json
+{
+  "name": "audit",
+  "description": "QA Harness Loop: Evaluates completed tasks against their success criteria and autonomously generates fix tasks if bugs are found.",
+  "execute": {
+    "command": "./.venv/bin/python",
+    "args": ["dumbledoer/dumbledoer_cli.py", "audit"]
+  }
+}
+
+```
+
 ### FILE: commands/execute.json
 ```json
 {
@@ -1263,6 +1280,7 @@ import shutil
 import sys
 from filelock import FileLock
 import asyncio
+import inspect
 import subprocess
 import shlex
 from typing import List, Optional, Dict
@@ -1281,6 +1299,7 @@ from mcp.client.session import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
 from contextlib import AsyncExitStack
 
+GUI_DIFF_ENABLED = True
 load_dotenv()
 console = Console()
 REGISTRY_LOCK = FileLock("memory.md.lock", timeout=30)
@@ -1719,31 +1738,26 @@ async def write_file_with_review(path: str, content: str, task_id: str = "T-000"
         async with get_ui_lock():
             vscode_cmd = shutil.which("code") or shutil.which("code-insiders")
             vscode_launched = False
-            if vscode_cmd:
-                visualize = await asyncio.to_thread(
-                    Confirm.ask, 
-                    f"\n[bold cyan]Launch VS Code GUI to visualize diff for {path}?[/bold cyan]"
-                )
-                if visualize:
-                    try:
-                        cmd = [vscode_cmd, "--wait"]
-                        if os.path.exists(path):
-                            cmd.extend(["--diff", path, tmp_path])
-                        else:
-                            cmd.append(tmp_path)
-                            
-                        # Capture output to diagnose silent GUI failures
-                        result = await asyncio.to_thread(subprocess.run, cmd, capture_output=True, text=True)
-                        if result.returncode != 0:
-                            console.print(f"[bold red]⚠️ VS Code GUI failed to launch.[/bold red]")
-                            console.print(f"[dim]Diagnostic STDERR: {result.stderr.strip() if result.stderr else 'None'}[/dim]")
-                            console.print("[dim yellow]Falling back to terminal diff...[/dim yellow]")
-                            vscode_launched = False
-                        else:
-                            vscode_launched = True
-                            console.print(f"\n[bold yellow]⚠️ Review proposed changes for {path} in VS Code.[/bold yellow]")
-                    except Exception as e:
-                        console.print(f"[dim yellow]VS Code launch failed ({e}), falling back to terminal diff...[/dim yellow]")
+            if vscode_cmd and GUI_DIFF_ENABLED:
+                try:
+                    cmd = [vscode_cmd, "--wait"]
+                    if os.path.exists(path):
+                        cmd.extend(["--diff", path, tmp_path])
+                    else:
+                        cmd.append(tmp_path)
+                        
+                    # Capture output to diagnose silent GUI failures
+                    result = await asyncio.to_thread(subprocess.run, cmd, capture_output=True, text=True)
+                    if result.returncode != 0:
+                        console.print(f"[bold red]⚠️ VS Code GUI failed to launch.[/bold red]")
+                        console.print(f"[dim]Diagnostic STDERR: {result.stderr.strip() if result.stderr else 'None'}[/dim]")
+                        console.print("[dim yellow]Falling back to terminal diff...[/dim yellow]")
+                        vscode_launched = False
+                    else:
+                        vscode_launched = True
+                        console.print(f"\n[bold yellow]⚠️ Review proposed changes for {path} in VS Code.[/bold yellow]")
+                except Exception as e:
+                    console.print(f"[dim yellow]VS Code launch failed ({e}), falling back to terminal diff...[/dim yellow]")
             else:
                 console.print(f"\n[dim yellow]VS Code CLI ('code'/'code-insiders') not found in PATH, falling back to terminal diff...[/dim yellow]")
     
@@ -1909,6 +1923,27 @@ def run_rtk(command: str) -> str:
     except FileNotFoundError:
         return "Error: RTK binary not found in system PATH."
 
+def forge_and_execute_tool(tool_name: str, python_code: str, args: str = "") -> str:
+    """
+    Dynamic Tool Smithing: Writes a custom Python script to the workspace and executes it in the sandbox.
+    Use this when you need complex logic (AST parsing, data transformation, etc.) that standard bash cannot handle.
+    """
+    try:
+        tool_dir = ".dumbledoer/forged_tools"
+        os.makedirs(tool_dir, exist_ok=True)
+        # Ensure the filename is safe and has a .py extension
+        safe_name = "".join(c for c in tool_name if c.isalnum() or c in "_-")
+        file_path = os.path.join(tool_dir, f"{safe_name}.py")
+        
+        with open(file_path, "w") as f:
+            f.write(python_code)
+            
+        # Execute the newly forged tool inside the secure Docker sandbox
+        console.print(f"[dim purple]🔨 Forging and executing custom tool: {safe_name}.py...[/dim purple]")
+        return execute_bash(f"python {file_path} {args}")
+    except Exception as e:
+        return f"Tool Smithing failed: {e}"
+
 class DumbleDoerCLI:
     def __init__(self, api_key: Optional[str] = None, model_id: str = "gemini-2.5-flash"):
         self.api_key = api_key or os.getenv("GOOGLE_API_KEY")
@@ -1927,12 +1962,20 @@ class DumbleDoerCLI:
                 memory_content = f.read()
         except FileNotFoundError:
             memory_content = ""
+            
+        global GUI_DIFF_ENABLED
+        if GUI_DIFF_ENABLED:
+            for line in memory_content.splitlines():
+                if line.startswith("- gui_diff_enabled:"):
+                    if line.split(":")[1].strip().lower() == "false":
+                        GUI_DIFF_ENABLED = False
+
         self.budget_manager = BudgetManager(memory_content)
         
         SandboxManager.ensure_image_built()
         SandboxManager.ensure_codegraph_ready()
         CheckpointManager.run_orphan_scan()
-        self.local_tools = [read_file, write_file_with_review, execute_bash, update_task_status_tool, add_change_log_entry, update_memory_registry, run_rtk]
+        self.local_tools = [read_file, write_file_with_review, execute_bash, update_task_status_tool, add_change_log_entry, update_memory_registry, run_rtk, forge_and_execute_tool]
         self.gemini_tools = [self._create_async_wrapper(tool) for tool in self.local_tools]
 
     def _create_async_wrapper(self, tool_func):
@@ -1948,7 +1991,7 @@ class DumbleDoerCLI:
             if hasattr(self, 'budget_manager'):
                 self.budget_manager.add_cost(tool_func.__name__)
             
-            if asyncio.iscoroutinefunction(tool_func):
+            if inspect.iscoroutinefunction(tool_func):
                 return await tool_func(*args, **kwargs)
             return await asyncio.to_thread(tool_func, *args, **kwargs)
             
@@ -1983,6 +2026,26 @@ class DumbleDoerCLI:
             return result.content
         return mcp_wrapper
 
+    async def _auto_rollback(self, task_id: str):
+        """Self-Healing Daemon: Instantly reverts a task's changes if a critical failure is detected."""
+        console.print(f"\n[bold red]🚨 Critical Failure Detected! Triggering Predictive Rollback for {task_id}...[/bold red]")
+        rb_dir = f".dumbledoer/rollbacks/{task_id}"
+        if not os.path.exists(rb_dir):
+            return
+            
+        # Restore files from the atomic rollback copy
+        for filename in os.listdir(rb_dir):
+            decoded_path = filename.replace("__colon__", ":").replace("__", "/")
+            rb_file = os.path.join(rb_dir, filename)
+            os.replace(rb_file, decoded_path)
+            
+        # Reset task status to pending so it can be re-attempted safely
+        with REGISTRY_LOCK:
+            mem = read_file("memory.md")
+            mem = TaskOrchestrator.set_task_status(mem, task_id, "in_progress", "pending")
+            _write_file("memory.md", mem)
+        console.print(f"[bold green]✓ Timeline restored. {task_id} changes reverted.[/bold green]")
+
     async def _spawn_sub_agent(self, task_id: str, task_title: str, task_type: str):
         console.print(f"[dim]Spawning isolated sub-agent for {task_id}...[/dim]")
         
@@ -2004,11 +2067,18 @@ You are executing {task_id}: {task_title}.
         
         # Dynamically enforce Zero-Trust Read-Only permissions for non-change tasks
         is_read_only = task_type != "change"
-        def task_execute_bash(command: str) -> str:
-            return execute_bash(command, read_only=is_read_only)
-        task_execute_bash.__doc__ = execute_bash.__doc__
+        def monitored_execute_bash(command: str) -> str:
+            result = execute_bash(command, read_only=is_read_only)
+            # Daemon Watcher: If the command throws a massive stack trace or fatal error
+            if "Traceback (most recent call last):" in result or "FATAL ERROR" in result:
+                # Fire the rollback asynchronously without interrupting the event loop
+                asyncio.create_task(self._auto_rollback(task_id))
+                return f"CRITICAL FAILURE: {result}\n\nSYSTEM OVERRIDE: Predictive rollback triggered. Your changes have been reverted. Rethink your approach."
+            return result
+            
+        monitored_execute_bash.__doc__ = execute_bash.__doc__
         
-        agent_tools = [read_file, write_file_with_review, task_execute_bash, update_task_status_tool, add_change_log_entry, run_rtk, TaskOrchestrator.add_task]
+        agent_tools = [read_file, write_file_with_review, monitored_execute_bash, update_task_status_tool, add_change_log_entry, run_rtk, TaskOrchestrator.add_task]
         async_tools = [self._create_async_wrapper(tool) for tool in agent_tools]
 
         chat = self.client.aio.chats.create(
@@ -2023,7 +2093,7 @@ You are executing {task_id}: {task_title}.
         waves = TaskOrchestrator.calculate_waves(memory_content)
         if not waves:
             console.print("[bold green]✓ All tasks are already completed (or deferred).[/bold green]")
-            return
+            return False
 
         budget = self.budget_manager
         session_id = datetime.now(timezone.utc).strftime("S-%Y%m%d-%H%M%S")
@@ -2072,6 +2142,8 @@ You are executing {task_id}: {task_title}.
                     _write_file("memory.md", archived_mem)
         await asyncio.to_thread(finalize_archive)
 
+        return True
+
     def _get_system_instructions(self) -> str:
         instructions = [
             "# MISSION",
@@ -2088,7 +2160,19 @@ You are executing {task_id}: {task_title}.
         await self._init_mcp("codegraph", "npx", ["-y", "--package=@colbymchenry/codegraph", "codegraph", "serve", "--mcp"])
         
         if action == "execute":
-            await self.execute_task_plan()
+            while True:
+                executed = await self.execute_task_plan()
+                if not executed:
+                    break
+                    
+                console.print(Panel("DumbleDoer Auto-Supervisor: [bold purple]/audit[/bold purple]", title="QA Harness Loop"))
+                audit_chat = self.client.aio.chats.create(
+                    model=self.model_id,
+                    config={"system_instruction": self._get_system_instructions(), "tools": self.gemini_tools}
+                )
+                response = await audit_chat.send_message("Execute the /audit command. Evaluate the completed tasks. If you find bugs, use the add_task tool.")
+                if response.text:
+                    console.print(Markdown(response.text))
             return
             
         self.chat_session = self.client.aio.chats.create(
@@ -2113,10 +2197,15 @@ You are executing {task_id}: {task_title}.
 def main():
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=["start", "execute", "resume", "report", "rollback", "update-docs", "iterate"])
-    parser.add_argument("--docs", type=str)
+    parser.add_argument("command", choices=["start", "execute", "resume", "report", "rollback", "update-docs", "iterate", "audit"])
+    parser.add_argument("--docs", type=str)   
     parser.add_argument("--prompt", type=str, default="")
+    parser.add_argument("--no-gui", action="store_true", help="Disable VS Code Diff-Gate")
     args = parser.parse_args()
+    
+    global GUI_DIFF_ENABLED
+    if args.no_gui:
+        GUI_DIFF_ENABLED = False
     
     try:
         dumbledoer = DumbleDoerCLI()
@@ -4071,6 +4160,7 @@ appended at archive time and edited only when a rollback restores an archived ta
 - last_docs_update_session: null
 - knowledge_path: knowledge/
 - last_knowledge_docs_sync: never
+- gui_diff_enabled: true
 
 ## Project Goal
 Implement KISS Human-in-the-Loop & Execution Sandbox. Refactor the core Python orchestrator to make this harness a true SWE partner by injecting an execution sandbox and VS Code diff-gate for human-in-the-loop validation.
@@ -4096,6 +4186,12 @@ Implement KISS Human-in-the-Loop & Execution Sandbox. Refactor the core Python o
 | T-002 | Implement VS Code Diff-Gate | change | completed | S-20260702-205350 | T-001 | S-20260702-205350 | none |
 | T-003 | Fix RTK Subprocess Parsing | change | completed | S-20260702-205350 | none | S-20260702-205350 | none |
 | T-004 | Async Wrappers & Tool Registration | change | completed | S-20260702-205350 | T-001, T-002, T-003 | S-20260702-205350 | none |
+| T-005 | Wire Diff History into Audit QA Loop | change | completed | S-20260702-205350 | none | none | none |
+| T-006 | Fix pytest destructive behavior and DeprecationWarning | change | completed | unassigned | T-004 | none | none |
+| T-007 | Introduce gui_diff_enabled Config Option | change | completed | unassigned | none | none | none |
+| T-008 | Add --no-gui flag and global config | change | completed | unassigned | none | none | none |
+| T-009 | Refactor write_file_with_review logic | change | completed | unassigned | T-007, T-008 | none | none |
+| T-010 | Update test suite for new Diff-Gate logic | change | completed | unassigned | T-009 | none | none |
 
 ## Task Details
 
@@ -4167,13 +4263,122 @@ Implement KISS Human-in-the-Loop & Execution Sandbox. Refactor the core Python o
 - **Resume Instructions**: Update tool registration to avoid event loop freezing.
 - **Notes**: —
 
+### T-005
+- **Type**: change
+- **Status**: completed
+- **Owner**: S-20260702-205350
+- **Depends On**: none
+- **Assigned Session**: none
+- **Description**: Update `skills/audit/SKILL.md` to instruct the QA loop to read `.dumbledoer/checkpoints/` JSON files (or `rollbacks/` directory) to determine exactly which lines were modified by the execution wave. This ensures sandbox validation targets the exact changes.
+- **Inputs**: none
+- **Outputs**: skills/audit/SKILL.md
+- **Success Criteria**: The `/audit` skill explicitly contains instructions to read checkpoints/rollbacks and extract precise code diffs before formulating the test strategy.
+- **Estimated Effort**: small
+- **Parallelizable**: yes
+- **CodeGraph Impact**: Affects 1 file: [skills/audit/SKILL.md]
+- **Checkpoint**: none
+- **Resume Instructions**: Pick up editing `skills/audit/SKILL.md`.
+- **Notes**: —
+
+### T-006
+- **Type**: change
+- **Status**: completed
+- **Owner**: unassigned
+- **Depends On**: none
+- **Assigned Session**: none
+- **Description**: Fix `test_state_integrity.py` which destructively deletes the live `memory.md` file during testing. Ensure it uses a mocked file or temporary directory. Additionally, fix `asyncio.iscoroutinefunction` deprecation warning in `dumbledoer_cli.py`.
+- **Inputs**: none
+- **Outputs**: tests/test_state_integrity.py, dumbledoer/dumbledoer_cli.py
+- **Success Criteria**: Running `pytest` does not delete `memory.md` and produces 0 warnings regarding `iscoroutinefunction`.
+- **Estimated Effort**: small
+- **Parallelizable**: yes
+- **CodeGraph Impact**: Affects 2 files.
+- **Checkpoint**: none
+- **Resume Instructions**: Fix the destructive tests and deprecation warnings.
+- **Notes**: Discovered by /audit QA loop!
+
+### T-007
+- **Type**: change
+- **Status**: completed
+- **Owner**: unassigned
+- **Depends On**: none
+- **Assigned Session**: none
+- **Description**: Add `- gui_diff_enabled: true` to the Config block in `memory.md`.
+- **Inputs**: none
+- **Outputs**: memory.md
+- **Success Criteria**: `gui_diff_enabled: true` exists in the Config block of `memory.md`.
+- **Estimated Effort**: small
+- **Parallelizable**: yes
+- **CodeGraph Impact**: Affects 0 symbols across 1 file.
+- **Checkpoint**: none
+- **Resume Instructions**: Add the config key to memory.md.
+- **Notes**: —
+
+### T-008
+- **Type**: change
+- **Status**: completed
+- **Owner**: unassigned
+- **Depends On**: none
+- **Assigned Session**: none
+- **Description**: In `dumbledoer/dumbledoer_cli.py`, add `--no-gui` flag to `argparse` in `main()`. Introduce a global variable `GUI_DIFF_ENABLED = True`. Parse the `memory.md` Config block to read `gui_diff_enabled`. Set `GUI_DIFF_ENABLED = False` if the config is false OR if `--no-gui` flag is passed.
+- **Inputs**: dumbledoer/dumbledoer_cli.py
+- **Outputs**: dumbledoer/dumbledoer_cli.py
+- **Success Criteria**: Running `python dumbledoer/dumbledoer_cli.py execute --no-gui` parses without errors and correctly sets the override.
+- **Estimated Effort**: small
+- **Parallelizable**: yes
+- **CodeGraph Impact**: Affects 2 symbols across 1 file: [main, DumbleDoerCLI]
+- **Checkpoint**: none
+- **Resume Instructions**: Add argparse flag and global config variable.
+- **Notes**: —
+
+### T-009
+- **Type**: change
+- **Status**: completed
+- **Owner**: unassigned
+- **Depends On**: T-007, T-008
+- **Assigned Session**: none
+- **Description**: In `dumbledoer_cli.py`, update `write_file_with_review` to use `GUI_DIFF_ENABLED`. If True, remove the `Confirm.ask` prompt and automatically launch VS Code (`subprocess.run`), then `Confirm.ask` for atomic apply approval. If False, skip VS Code entirely and immediately display the terminal diff via `rich.syntax`.
+- **Inputs**: dumbledoer/dumbledoer_cli.py
+- **Outputs**: dumbledoer/dumbledoer_cli.py
+- **Success Criteria**: `write_file_with_review` logic clearly forks between automatic GUI diff and terminal fallback based on `GUI_DIFF_ENABLED`.
+- **Estimated Effort**: medium
+- **Parallelizable**: no
+- **CodeGraph Impact**: Affects 1 symbol across 1 file: [write_file_with_review]
+- **Checkpoint**: none
+- **Resume Instructions**: Refactor the diff-gate prompting logic.
+- **Notes**: —
+
+### T-010
+- **Type**: change
+- **Status**: completed
+- **Owner**: unassigned
+- **Depends On**: T-009
+- **Assigned Session**: none
+- **Description**: Update `tests/test_refactors.py` to fix the `Confirm.ask` side effects. Ensure there are tests verifying both `GUI_DIFF_ENABLED` paths (True and False).
+- **Inputs**: tests/test_refactors.py
+- **Outputs**: tests/test_refactors.py
+- **Success Criteria**: `pytest` passes with the updated diff-gate logic.
+- **Estimated Effort**: medium
+- **Parallelizable**: no
+- **CodeGraph Impact**: Affects 2 symbols across 1 file.
+- **Checkpoint**: none
+- **Resume Instructions**: Update test suite to reflect the new prompting logic.
+- **Notes**: —
+
 ## Change Log
 | Timestamp | Task ID | File | Change Summary | Status | Rationale |
 |-----------|---------|------|----------------|--------|-----------|
+| 2026-07-17T15:32:00Z | T-010 | tests/test_refactors.py | Update side_effects for Confirm.ask and test GUI_DIFF_ENABLED override | applied | Test suite compliance |
+| 2026-07-17T15:19:00Z | T-009 | dumbledoer/dumbledoer_cli.py | Remove Confim.ask prompt and read GUI_DIFF_ENABLED for VS Code gate | applied | Session-level optimization |
+| 2026-07-17T15:19:00Z | T-008 | dumbledoer/dumbledoer_cli.py | Parse --no-gui and gui_diff_enabled config | applied | CLI control |
+| 2026-07-17T15:18:00Z | T-007 | memory.md | Add gui_diff_enabled config option | applied | Persistent configuration |
+| 2026-07-17T15:11:00Z | T-006 | tests/test_state_integrity.py | Mocked read/write ops to avoid deleting memory.md | applied | Fix destructive test behavior |
+| 2026-07-17T15:07:00Z | T-006 | dumbledoer/dumbledoer_cli.py | Switched asyncio.iscoroutinefunction to inspect | applied | Fix DeprecationWarning in Python 3.14+ |
 | 2026-07-03T03:23:54.888810Z | T-004 | dumbledoer/dumbledoer_cli.py | Add asyncio.to_thread wrappers to tools | applied | Prevent MCP stdio client starvation |
 | 2026-07-03T03:18:54.198544Z | T-003 | dumbledoer/dumbledoer_cli.py | Fix run_rtk subprocess args with shlex.split | applied | Ensure flags are handled safely |
 | 2026-07-03T03:08:15.927639Z | T-002 | dumbledoer/dumbledoer_cli.py | Replace write_file with diff-gate | applied | Execution sandbox step |
 | 2026-07-02T20:54:30 | T-001 | dumbledoer/dumbledoer_cli.py | Inject execute_bash tool | applied | Add execution sandbox functionality |
+| 2026-07-17T09:00:55 | T-005 | skills/audit/SKILL.md | Added diff-reading instructions to /audit skill | applied | Hyper-target QA testing based on exactly what lines changed |
 
 ## Session Log
 | Session ID | Start Time | End Time | Tasks Claimed | Outcome |
@@ -4286,6 +4491,46 @@ distro>=1.9.0
 
 ```
 
+### FILE: skills/audit/SKILL.md
+```md
+---
+description: QA Harness Loop. Evaluates completed tasks against their success criteria and autonomously generates fix tasks if bugs are found.
+---
+
+Base directory for this skill: (project root where dumbledoer is installed)
+
+# /dumbledoer:audit — Autonomous Self-Evaluation Loop
+
+**References** (read before Section 1): `dumbledoer/lib/common-preamble.md`, `dumbledoer/lib/memory-schema.md`
+
+## Mission
+You are acting as the QA Supervisor. Your job is to evaluate the tasks recently marked as `completed` in the current session. You must aggressively attempt to break the newly implemented features, verify they meet their `Success Criteria`, and autonomously generate new tasks if you find regressions or missing logic.
+
+---
+
+## Section 1 — Context Retrieval
+1. Read `memory.md`. Identify all tasks with the status `completed` that were executed in the most recent session.
+2. Read the `Success Criteria` and `Outputs` (affected files) for each of these tasks.
+
+## Section 2 — Execution Sandbox Validation
+For each completed task:
+1. Formulate a test strategy.
+2. Use the `execute_bash` tool to actively test the code within the Docker sandbox. Run syntax checkers (e.g., `python -m py_compile`, `uv run pytest`), type checkers, or execute the target scripts to verify they do not throw errors.
+3. Use `codegraph_affected` to check if downstream dependencies were broken by the changes.
+
+## Section 3 — The Harness Loop (Task Generation)
+1. Evaluate the output from your bash tests against the `Success Criteria`.
+2. **If the test passes:** Do nothing for that task. 
+3. **If the test fails or criteria are unmet:** You MUST use the `add_task` tool to append a new fix task to the `memory.md` Task Registry. 
+   - Set the Task Type to `change`.
+   - Set the title to clearly state the bug found (e.g., "Fix Type Error in Reporting Pipeline").
+   - Set the `Depends On` field appropriately.
+
+## Section 4 — Audit Report
+Once all completed tasks are evaluated, output a concise audit report detailing what was tested, what passed, and what new tasks (if any) were autonomously added to the queue for the next Execution Wave.
+
+```
+
 ### FILE: skills/caveman/SKILL.md
 ```md
 ---
@@ -4376,34 +4621,44 @@ Code/commits/PRs: write normal. "stop caveman" or "normal mode": revert. Level p
 ### FILE: skills/iterate/SKILL.md
 ```md
 ---
-name: iterate
-description: Iterates on the current dumbledoer session by adding new tasks to the registry based on a user prompt.
+description: Iterates on the current dumbledoer session. Acts as a strict Systems Architect to evaluate, decompose, and register new tasks based on user prompts.
 ---
 
 Base directory for this skill: (project root where dumbledoer is installed)
 
-# /dumbledoer:iterate — Refine the Task Plan
+# /dumbledoer:iterate — Architectural Refinement & Task Decomposition
 
 **References** (read before Section 1): `dumbledoer/lib/common-preamble.md`, `dumbledoer/lib/memory-schema.md`, `dumbledoer/lib/codegraph-integration.md`
 
 ## Mission
-The user has provided a new objective to add to the current, active DumbleDoer session. You must analyze the request, identify necessary changes to the repository, and autonomously append the required tasks to the `memory.md` Task Registry.
+You are the Principal Systems Architect. The user has provided a new objective or proposed raw tasks. As the **Guardian** of the codebase and a **Sniper** in task creation, you must aggressively interrogate the prompt, evaluate its feasibility, and decompose it into highly atomic, achievable tasks with measurable success criteria. 
+
+**CRITICAL LATCH DIRECTIVE:** You are strictly forbidden from writing code, modifying files, or attempting to execute any tasks during this phase. Your sole responsibility is to evaluate the request, design the micro-tasks, present the architectural blueprint to the user, and securely register the plan. You must hand authorization back to the engineer, who will trigger execution via a separate command.
 
 ---
 
-## Section 1 — Pre-flight Validation
-1. Verify `memory.md` exists. If missing, abort and instruct the user to run `/dumbledoer:start`.
-2. Review the user's newly provided objective.
-3. Utilize `codegraph_search` and `codegraph_impact` to understand how the new objective fits into the existing codebase and currently planned tasks.
+## Section 1 — The Guardian Gate (Interrogation & Feasibility)
+1. Read the user's `--prompt` and cross-reference it with the existing `memory.md` state.
+2. Use `codegraph_search` and `codegraph_impact` to determine if the requested change is possible with the current repository structure.
+3. **Hard Stop Condition:** If the user's prompt is too vague (e.g., "fix the backend"), lacks necessary architectural context, or requires external API knowledge not currently in the repository, **DO NOT add any tasks**.
+4. If a Hard Stop is triggered, output a concise response explaining exactly what information, decisions, or documentation you need from the user before you can design the implementation. Stop here.
 
-## Section 2 — Task Formulation
-1. Decompose the user's objective into atomic tasks (`change`, `analysis`, `validation`).
-2. Identify dependencies. Does the new task depend on a `pending` task already in the registry?
-3. **Mandatory Execution:** Use the `add_task` tool to append each new task to the registry safely. Do not attempt to rewrite the entire `memory.md` file manually.
-4. If a task requires external library integration, follow the documentation lookup rules in `dumbledoer/lib/context7-protocol.md`.
+## Section 2 — Micro-Decomposition (The Sniper)
+If the prompt is actionable and feasible, you must decompose it into atomic tasks.
+1. **Rule of Atomicity:** No task should attempt to rewrite multiple unrelated systems. Break the work down (e.g., `T-X1: Parse Data`, `T-X2: Update Database Schema`, `T-X3: Build UI Component`).
+2. Identify strict dependencies between these new micro-tasks and any `pending` tasks already in the registry.
 
-## Section 3 — Confirmation
-Once the tasks are successfully added to the registry via the `add_task` tool, output a brief summary confirming the new tasks and instruct the user to run `/dumbledoer:execute` to begin the parallel execution waves.
+## Section 3 — Goal Setting for the Audit Loop
+For every micro-task you create, you must define explicit, testable **Success Criteria**. 
+*   *Bad Criteria:* "The script works."
+*   *Good Criteria:* "Running `python parser.py test.csv` returns a 0 exit code and outputs a structured JSON object."
+*   This criteria will be used by the `/dumbledoer:audit` QA loop to verify your work programmatically.
+
+## Section 4 — The Latch & Plan Registration
+1. Use the `add_task` tool to append each validated micro-task to the `memory.md` Task Registry safely. All tasks must be set to `pending`.
+2. **Present the Blueprint:** Output a clean, structured Markdown table summary of the exact tasks you just created, their success criteria, and their dependencies.
+3. **Engage the Latch:** End your response with exactly this strict, unalterable text constraint:
+   > *"The task plan has been proposed and safely registered as `pending`. Please review the tasks above. If you approve this architecture, run `/dumbledoer:execute` to authorize the work. If you require changes, run `/dumbledoer:iterate` with your adjustments."*
 
 ```
 
@@ -6049,6 +6304,27 @@ For each ChangeCandidate in the task's DocFile, execute the **10-step CodeGraph 
 
 ```
 
+### FILE: test_debug.py
+```py
+import concurrent.futures
+from filelock import FileLock
+lock = FileLock("test.lock")
+
+data = ""
+
+def worker(i):
+    global data
+    with lock:
+        data += f"Entry {i}\n"
+
+with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+    futures = [executor.submit(worker, i) for i in range(20)]
+    concurrent.futures.wait(futures)
+
+print(len(data.splitlines()))
+
+```
+
 ### FILE: tests/__init__.py
 ```py
 # empty init file
@@ -6104,7 +6380,7 @@ def test_run_rtk_sandbox():
 @patch("dumbledoer.dumbledoer_cli.shutil.which", return_value="code")
 def test_write_file_with_review_vscode_success(mock_which):
     with patch("dumbledoer.dumbledoer_cli.subprocess.run") as mock_run, \
-         patch("dumbledoer.dumbledoer_cli.Confirm.ask", side_effect=[True, True]), \
+         patch("dumbledoer.dumbledoer_cli.Confirm.ask", return_value=True), \
          patch("builtins.open", mock_open(read_data="mocked content")), \
          patch("os.makedirs"), \
          patch("dumbledoer.dumbledoer_cli.json.dump"), \
@@ -6124,8 +6400,9 @@ def test_write_file_with_review_vscode_success(mock_which):
         assert "Successfully wrote" in result
 
 @patch("dumbledoer.dumbledoer_cli.shutil.which", return_value="code")
-def test_write_file_with_review_vscode_declined_terminal_fallback(mock_which):
-    with patch("dumbledoer.dumbledoer_cli.Confirm.ask", side_effect=[False, True]) as mock_confirm, \
+def test_write_file_with_review_no_gui_terminal_fallback(mock_which):
+    with patch("dumbledoer.dumbledoer_cli.GUI_DIFF_ENABLED", False), \
+         patch("dumbledoer.dumbledoer_cli.Confirm.ask", return_value=True) as mock_confirm, \
          patch("builtins.open", mock_open(read_data="original content")), \
          patch("os.makedirs"), \
          patch("dumbledoer.dumbledoer_cli.json.dump"), \
@@ -6135,7 +6412,7 @@ def test_write_file_with_review_vscode_declined_terminal_fallback(mock_which):
          
         result = asyncio.run(write_file_with_review("test/dummy/file.txt", "updated content", "T-001", "S-123"))
         
-        assert mock_confirm.call_count == 2
+        assert mock_confirm.call_count == 1
         mock_replace.assert_called_once()
         assert "Successfully wrote" in result
         
@@ -6177,35 +6454,48 @@ def test_async_event_loop_protection():
 ```py
 import os
 import concurrent.futures
+import pytest
+import dumbledoer.dumbledoer_cli as cli
 from filelock import FileLock
-from dumbledoer.dumbledoer_cli import update_memory_registry, read_file, REGISTRY_LOCK
 
-def append_to_registry(i):
-    # Read-modify-write cycle using the same lock instance
-    with REGISTRY_LOCK:
-        current = read_file("memory.md")
-        if current.startswith("Error"):
-            current = ""
-        new_content = current + f"Entry {i}\n"
-        update_memory_registry(new_content)
-
-def test_concurrent_state_writes():
-    if os.path.exists("memory.md"):
-        os.remove("memory.md")
+@pytest.fixture
+def mock_file_ops(tmp_path, monkeypatch):
+    test_memory = tmp_path / "memory.md"
     
+    def mock_read(path):
+        if path == "memory.md":
+            return test_memory.read_text() if test_memory.exists() else "Error"
+        return "Error"
+        
+    def mock_write(path, content):
+        if path == "memory.md":
+            test_memory.write_text(content)
+            return "Success"
+        return "Error"
+        
+    monkeypatch.setattr(cli, "read_file", mock_read)
+    monkeypatch.setattr(cli, "_write_file", mock_write)
+    monkeypatch.setattr(cli.PlanValidator, "validate", lambda x: "OK")
+    return test_memory
+
+def test_concurrent_state_writes(mock_file_ops):
+    
+    def append_to_registry(i):
+        with cli.REGISTRY_LOCK:
+            current = cli.read_file("memory.md")
+            if current.startswith("Error"):
+                current = ""
+            new_content = current + f"Entry {i}\n"
+            cli.update_memory_registry(new_content)
+
     with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
         futures = [executor.submit(append_to_registry, i) for i in range(20)]
         concurrent.futures.wait(futures)
 
-    final_content = read_file("memory.md")
+    final_content = mock_file_ops.read_text()
     
     for i in range(20):
         assert f"Entry {i}\n" in final_content, f"Entry {i} missing from final content!"
-
-    if os.path.exists("memory.md"):
-        os.remove("memory.md")
-    if os.path.exists("memory.md.lock"):
-        os.remove("memory.md.lock")
 
 ```
 

@@ -45,7 +45,7 @@ def test_run_rtk_sandbox():
 @patch("dumbledoer.dumbledoer_cli.shutil.which", return_value="code")
 def test_write_file_with_review_vscode_success(mock_which):
     with patch("dumbledoer.dumbledoer_cli.subprocess.run") as mock_run, \
-         patch("dumbledoer.dumbledoer_cli.Confirm.ask", side_effect=[True, True]), \
+         patch("dumbledoer.dumbledoer_cli.Confirm.ask", return_value=True), \
          patch("builtins.open", mock_open(read_data="mocked content")), \
          patch("os.makedirs"), \
          patch("dumbledoer.dumbledoer_cli.json.dump"), \
@@ -65,8 +65,9 @@ def test_write_file_with_review_vscode_success(mock_which):
         assert "Successfully wrote" in result
 
 @patch("dumbledoer.dumbledoer_cli.shutil.which", return_value="code")
-def test_write_file_with_review_vscode_declined_terminal_fallback(mock_which):
-    with patch("dumbledoer.dumbledoer_cli.Confirm.ask", side_effect=[False, True]) as mock_confirm, \
+def test_write_file_with_review_no_gui_terminal_fallback(mock_which):
+    with patch("dumbledoer.dumbledoer_cli.GUI_DIFF_ENABLED", False), \
+         patch("dumbledoer.dumbledoer_cli.Confirm.ask", return_value=True) as mock_confirm, \
          patch("builtins.open", mock_open(read_data="original content")), \
          patch("os.makedirs"), \
          patch("dumbledoer.dumbledoer_cli.json.dump"), \
@@ -76,7 +77,7 @@ def test_write_file_with_review_vscode_declined_terminal_fallback(mock_which):
          
         result = asyncio.run(write_file_with_review("test/dummy/file.txt", "updated content", "T-001", "S-123"))
         
-        assert mock_confirm.call_count == 2
+        assert mock_confirm.call_count == 1
         mock_replace.assert_called_once()
         assert "Successfully wrote" in result
         
