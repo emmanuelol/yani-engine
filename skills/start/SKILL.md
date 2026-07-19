@@ -1,4 +1,5 @@
 ---
+name: dumbledoer-start
 description: Start a new agent improvement session with discovery Q&A, CodeGraph analysis, and task execution. Use when beginning a new dumbledoer improvement project.
 ---
 

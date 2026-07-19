@@ -22,6 +22,12 @@ from mcp.client.session import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
 from contextlib import AsyncExitStack
 from markdown_it import MarkdownIt
+import fnmatch
+
+PRE_APPROVED_COMMANDS = ["pytest*", "git status", "git diff*", "grep*", "python -m py_compile*", "uv run pytest*"]
+
+class PermissionDeniedException(Exception):
+    pass
 
 class BudgetExhaustedException(Exception):
     pass
@@ -287,17 +293,93 @@ class KnowledgeManager:
                 f.write("---\ntitle: Knowledge Registry Index\ntags: [knowledge-registry, index]\n---\n# Knowledge Registry Index\n\n## Successes\n| Entry | Status | Session | Created |\n|---|---|---|---|\n" + index_entry)
         console.print(f"[dim]Knowledge Vault updated: {k_id} captured.[/dim]")
 
+    @staticmethod
+    def consult_historical_failures(workspace_path: str, task_title: str):
+        entries_dir = os.path.join(workspace_path, "knowledge", "entries")
+        if not os.path.exists(entries_dir):
+            return None
+        
+        task_keywords = set(w.strip(".,!?\"'") for w in task_title.lower().split() if len(w) > 3)
+        if not task_keywords:
+            task_keywords = set(task_title.lower().split())
+            
+        for filename in os.listdir(entries_dir):
+            if not filename.endswith(".md"):
+                continue
+            
+            filepath = os.path.join(entries_dir, filename)
+            try:
+                with open(filepath, "r") as f:
+                    content = f.read()
+                    
+                if not content.startswith("---"):
+                    continue
+                    
+                parts = content.split("---")
+                if len(parts) < 3:
+                    continue
+                    
+                frontmatter = parts[1]
+                body = parts[2]
+                
+                is_active = False
+                is_failure = False
+                note_id = None
+                tags = []
+                note_title = ""
+                
+                for line in frontmatter.splitlines():
+                    line = line.strip()
+                    if line.startswith("type:"):
+                        if "failure" in line.lower():
+                            is_failure = True
+                    elif line.startswith("status:"):
+                        if "active" in line.lower():
+                            is_active = True
+                    elif line.startswith("id:"):
+                        note_id = line.split(":", 1)[1].strip()
+                    elif line.startswith("title:"):
+                        note_title = line.split(":", 1)[1].strip().strip('"')
+                    elif line.startswith("tags:"):
+                        tags_str = line.split(":", 1)[1].strip().strip("[]")
+                        tags = [t.strip().lower() for t in tags_str.split(",")]
+                        
+                if is_active and is_failure:
+                    title_keywords = set(w.strip(".,!?\"'") for w in note_title.lower().split())
+                    tag_keywords = set(tags)
+                    if task_keywords.intersection(title_keywords) or task_keywords.intersection(tag_keywords):
+                        rationale = "No rationale provided."
+                        if "## Rationale" in body:
+                            rationale = body.split("## Rationale")[1].strip().split("##")[0].strip()
+                        return note_id, filename, rationale
+                        
+            except Exception:
+                pass
+                
+        return None
+
 class BudgetManager:
     def __init__(self, memory_content: str):
         self.limit = 100000
         self.threshold_pct = 80
         self.estimated_tokens = 0
         
-        for line in memory_content.splitlines():
-            if line.startswith("- budget_limit:"):
-                self.limit = int(line.split(":")[1].strip())
-            elif line.startswith("- budget_threshold_pct:"):
-                self.threshold_pct = int(line.split(":")[1].strip())
+        start_cfg, end_cfg = ASTMemoryMapper.locate_heading_block(memory_content, "h2", "Config")
+        if start_cfg != -1:
+            for line in memory_content.splitlines()[start_cfg:end_cfg]:
+                if line.startswith("- budget_limit:"):
+                    self.limit = int(line.split(":")[1].strip())
+                elif line.startswith("- budget_threshold_pct:"):
+                    self.threshold_pct = int(line.split(":")[1].strip())
+                    
+        start_bud, end_bud = ASTMemoryMapper.locate_heading_block(memory_content, "h2", "Budget & Quota Tracking")
+        if start_bud != -1:
+            for line in memory_content.splitlines()[start_bud:end_bud]:
+                if "| Tokens Consumed |" in line:
+                    try:
+                        self.estimated_tokens = int(line.split("|")[2].strip())
+                    except (IndexError, ValueError):
+                        pass
                 
         self.threshold = int(self.limit * (self.threshold_pct / 100.0))
 
@@ -311,6 +393,23 @@ class BudgetManager:
         os.makedirs(".dumbledoer", exist_ok=True)
         with open(".dumbledoer/budget.log", "a") as f:
             f.write(f"{datetime.now(timezone.utc).isoformat()} | {operation} | +{cost} tokens | Total: {self.estimated_tokens}\n")
+            
+        try:
+            with open("memory.md", "r") as f:
+                content = f.read()
+            start, end = ASTMemoryMapper.locate_heading_block(content, "h2", "Budget & Quota Tracking")
+            if start != -1:
+                lines = content.splitlines()
+                for i in range(start, end):
+                    if i < len(lines) and "| Tokens Consumed |" in lines[i]:
+                        lines[i] = f"| Tokens Consumed | {self.estimated_tokens} |"
+                        break
+                temp_file = "memory.md.tmp"
+                with open(temp_file, "w") as f:
+                    f.write("\n".join(lines) + "\n")
+                os.replace(temp_file, "memory.md")
+        except Exception:
+            pass
         
     def check_and_harvest(self):
         if self.estimated_tokens >= self.threshold:
@@ -507,14 +606,16 @@ async def write_file_with_review(path: str, content: str, task_id: str = "T-000"
             vscode_launched = False
             if vscode_cmd and GUI_DIFF_ENABLED:
                 try:
+                    abs_target_path = os.path.abspath(path)
+                    abs_tmp_path = os.path.abspath(tmp_path)
                     cmd = [vscode_cmd, "--wait"]
                     if os.path.exists(path):
-                        cmd.extend(["--diff", path, tmp_path])
+                        cmd.extend(["--diff", abs_target_path, abs_tmp_path])
                     else:
-                        cmd.append(tmp_path)
+                        cmd.append(abs_tmp_path)
                         
                     # Capture output to diagnose silent GUI failures
-                    result = await asyncio.to_thread(subprocess.run, cmd, capture_output=True, text=True)
+                    result = await asyncio.to_thread(subprocess.run, cmd, capture_output=True, text=True, env=os.environ)
                     if result.returncode != 0:
                         console.print(f"[bold red]⚠️ VS Code GUI failed to launch.[/bold red]")
                         console.print(f"[dim]Diagnostic STDERR: {result.stderr.strip() if result.stderr else 'None'}[/dim]")
@@ -597,6 +698,9 @@ def execute_bash(command: str, read_only: bool = False) -> str:
     Executes a bash command in the execution sandbox.
     Use this to run tests, uv, and git commands autonomously.
     """
+    if not any(fnmatch.fnmatch(command, pattern) for pattern in PRE_APPROVED_COMMANDS):
+        return "SECURITY ERROR: Execution blocked. Command pattern is not whitelisted in DumbleDoer security policies."
+
     try:
         mount_flag = SandboxManager.get_mount_flag(read_only)
         docker_cmd = [
@@ -695,6 +799,7 @@ def run_rtk(command: str) -> str:
             "docker", "run", "--rm",
             "-v", mount_flag,
             "-w", "/workspace",
+            "-v", "/var/run/docker.sock:/var/run/docker.sock",
             "dumbledoer-base:latest"
         ] + args
         result = subprocess.run(docker_cmd, capture_output=True, text=True, check=True)
@@ -719,9 +824,15 @@ def forge_and_execute_tool(tool_name: str, python_code: str, args: str = "") -> 
         with open(file_path, "w") as f:
             f.write(python_code)
             
-        # Execute the newly forged tool inside the secure Docker sandbox
-        console.print(f"[dim purple]🔨 Forging and executing custom tool: {safe_name}.py...[/dim purple]")
-        return execute_bash(f"python {file_path} {args}")
+        try:
+            # Execute the newly forged tool inside the secure Docker sandbox
+            console.print(f"[dim purple]🔨 Forging and executing custom tool: {safe_name}.py...[/dim purple]")
+            return execute_bash(f"python {file_path} {args}")
+        finally:
+            try:
+                os.remove(file_path)
+            except OSError:
+                pass
     except Exception as e:
         return f"Tool Smithing failed: {e}"
 
@@ -758,6 +869,25 @@ class DumbleDoerCLI:
         CheckpointManager.run_orphan_scan()
         self.local_tools = [read_file, write_file_with_review, execute_bash, update_task_status_tool, add_change_log_entry, update_memory_registry, run_rtk, forge_and_execute_tool]
         self.gemini_tools = [self._create_async_wrapper(tool) for tool in self.local_tools]
+        self._ensure_git_ignored()
+
+    def _ensure_git_ignored(self):
+        gitignore_path = ".gitignore"
+        targets = [".dumbledoer/", "memory.md", "memory.md.lock", "memory.md.bak"]
+        content = ""
+        if os.path.exists(gitignore_path):
+            with open(gitignore_path, "r") as f:
+                content = f.read()
+                
+        lines = [line.strip() for line in content.splitlines()]
+        missing = [t for t in targets if t not in lines]
+        
+        if missing:
+            with open(gitignore_path, "a") as f:
+                if content and not content.endswith("\n"):
+                    f.write("\n")
+                for m in missing:
+                    f.write(f"{m}\n")
 
     def _create_async_wrapper(self, tool_func):
         async def async_wrapper(*args, **kwargs):
@@ -771,6 +901,9 @@ class DumbleDoerCLI:
             # Budget Check
             if hasattr(self, 'budget_manager'):
                 self.budget_manager.add_cost(tool_func.__name__)
+                if self.budget_manager.estimated_tokens >= self.budget_manager.threshold:
+                    run_rtk("cull --aggressive --preserve-system")
+                    self.budget_manager.estimated_tokens = 0
             
             if inspect.iscoroutinefunction(tool_func):
                 return await tool_func(*args, **kwargs)
@@ -830,6 +963,18 @@ class DumbleDoerCLI:
     async def _spawn_sub_agent(self, task_id: str, task_title: str, task_type: str):
         console.print(f"[dim]Spawning isolated sub-agent for {task_id}...[/dim]")
         
+        failure_interception = KnowledgeManager.consult_historical_failures(".", task_title)
+        override_block = ""
+        if failure_interception:
+            failed_id, failed_file, failed_rationale = failure_interception
+            console.print(f"[bold red]⚠️ Kandalf OP-3: Intercepted potential failure path based on {failed_id}[/bold red]")
+            override_block = f"""
+[SYSTEM OVERRIDE - PRIOR FAILURE INJECTED]: 
+Warning! A prior failure was recorded for a similar approach in this repository. 
+Reference Note: [[{failed_id}]]. Reason for failure: {failed_rationale}. 
+You are strictly forbidden from choosing this exact strategy. Adapt your architecture or ask the user for guidance.
+"""
+
         # Pre-flight: Detect local environment for the LLM
         detected_env = []
         if os.path.exists("docker-compose.yml"): detected_env.append("docker-compose.yml found")
@@ -844,7 +989,8 @@ You are executing {task_id}: {task_title}.
 1. MANDATORY: If {', '.join(detected_env)} exists, ALL bash commands MUST be executed within that repository-native container environment (e.g., 'docker-compose run --rm [service] bash -c').
 2. Run codegraph_impact first.
 3. Use write_file_with_review for modifications.
-4. Return a summary when finished."""
+4. Return a summary when finished.
+{override_block}"""
         
         # Dynamically enforce Zero-Trust Read-Only permissions for non-change tasks
         is_read_only = task_type != "change"
@@ -868,7 +1014,7 @@ You are executing {task_id}: {task_title}.
             if tool.__name__ not in existing_tool_names:
                 async_tools.append(tool)
 
-        agent_model = self.model_id if task_type in ["change", "validation", "audit"] else "gemini-2.5-flash"
+        agent_model = "gemini-3.1-pro-preview" if task_type in ["iterate", "audit"] else "gemini-2.5-flash"
         
         chat = self.client.aio.chats.create(
             model=agent_model,
@@ -939,6 +1085,54 @@ You are executing {task_id}: {task_title}.
                 if final_mem != archived_mem:
                     _write_file("memory.md", archived_mem)
         await asyncio.to_thread(finalize_archive)
+        
+        # CAP-001 Full-Reset Memory Archiving
+        reset_choice = await asyncio.to_thread(
+            Prompt.ask, 
+            "Would you like to archive memory.md to start fresh for the next session?",
+            choices=["archive", "skip"],
+            default="skip"
+        )
+        
+        if reset_choice == "archive":
+            def cap_reset():
+                with REGISTRY_LOCK:
+                    mem_content = read_file("memory.md")
+                    tmp_archive = ".dumbledoer/tmp/memory-archive.tmp"
+                    os.makedirs(".dumbledoer/tmp", exist_ok=True)
+                    _write_file(tmp_archive, mem_content)
+                    
+                    if "## Config" in mem_content:
+                        archive_dir = ".dumbledoer/archive"
+                        os.makedirs(archive_dir, exist_ok=True)
+                        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+                        archive_path = os.path.join(archive_dir, f"memory-{session_id}-{timestamp}.md")
+                        os.replace(tmp_archive, archive_path)
+                        
+                        template_path = "dumbledoer/templates/memory-template.md"
+                        if os.path.exists(template_path):
+                            template_content = read_file(template_path)
+                            _write_file("memory.md", template_content)
+                            console.print(f"[bold green]✓ CAP-001 executed. Fresh memory.md instantiated from template. Old memory archived to {archive_path}[/bold green]")
+                        else:
+                            console.print(f"[bold yellow]⚠️ CAP-001 warning: Template {template_path} not found. memory.md was not reset.[/bold yellow]")
+                    else:
+                        console.print(f"[bold red]⚠️ CAP-001 error: memory.md lacks a valid ## Config header block. Aborting reset.[/bold red]")
+            await asyncio.to_thread(cap_reset)
+
+        def final_cleanup():
+            console.print("[dim]Sweeping temporary artifacts...[/dim]")
+            shutil.rmtree(".dumbledoer/forged_tools", ignore_errors=True)
+            tmp_dir = ".dumbledoer/tmp"
+            if os.path.exists(tmp_dir):
+                for f in os.listdir(tmp_dir):
+                    try:
+                        filepath = os.path.join(tmp_dir, f)
+                        if os.path.isfile(filepath):
+                            os.remove(filepath)
+                    except OSError:
+                        pass
+        await asyncio.to_thread(final_cleanup)
 
         return True
 
@@ -999,15 +1193,17 @@ def main():
     parser.add_argument("--docs", type=str)   
     parser.add_argument("--prompt", type=str, default="")
     parser.add_argument("--no-gui", action="store_true", help="Disable VS Code Diff-Gate")
-    parser.add_argument("--model", type=str, default="gemini-2.5-flash")
+    parser.add_argument("--model", type=str, help="Override the default Gemini model")
     args = parser.parse_args()
     
     global GUI_DIFF_ENABLED
     if args.no_gui:
         GUI_DIFF_ENABLED = False
+        
+    resolved_model = args.model or os.environ.get("AGY_MODEL") or "gemini-2.5-flash"
     
     try:
-        dumbledoer = DumbleDoerCLI(model_id=args.model)
+        dumbledoer = DumbleDoerCLI(model_id=resolved_model)
         asyncio.run(dumbledoer.start_chat(args.command, args.docs, args.prompt))
     except KeyboardInterrupt:
         pass

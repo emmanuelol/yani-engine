@@ -2,27 +2,43 @@
 
 ## Colleague Installation Workflow
 
-DumbleDoer has transitioned from centralized wrappers and bash aliases into a natively distributable extension for the `agy` client.
+DumbleDoer is a natively distributable extension for the `agy` client. It runs in a "Zero-Copy" manner without polluting your target repositories.
 
-### 1. Install the CLI Tool Globally
+### 1. Clone the Repository
 
-Installing via `uv tool` automatically isolates all dependencies while exposing the `dumbledoer` executable globally across your entire system.
-
-```bash
-uv tool install git+https://github.com/your-org/DumbleDoer.git
-```
-
-### 2. Load the Plugin into the agy Client
-
-DumbleDoer includes a native `plugin.json` manifest. You load the plugin in your `agy` client to natively discover its tools and MCP servers (without shell hacks):
+First, clone the DumbleDoer repository to a dedicated location on your machine:
 
 ```bash
-agy --plugin-dir ~/.local/share/uv/tools/dumbledoer
+git clone <repository-url>
+cd DumbleDoer
 ```
 
-### 3. Quick Start
+### 2. Install the Plugin into the agy Client
 
-Once loaded, you can natively trigger DumbleDoer directly from your `agy` prompt:
+DumbleDoer includes a native `plugin.json` manifest. You can install the plugin natively into your `agy` client by running the following command from within the cloned directory:
+
+```bash
+agy plugin install ./
+```
+
+This registers DumbleDoer globally in your `agy` client, seamlessly integrating its skills, slash commands, and sub-agents.
+
+### 3. Model Configuration & BYOK
+
+DumbleDoer requires a Gemini API key. Ensure `GOOGLE_API_KEY` is exported in your environment. 
+By default, DumbleDoer uses a lightweight model. You can override this to use advanced reasoning models by setting the `AGY_MODEL` environment variable or passing the `--model` flag:
+
+```bash
+export AGY_MODEL="gemini-2.5-pro"
+```
+
+### 4. Zero-Trust Sandbox Requirement
+
+DumbleDoer utilizes a **Zero-Trust Docker Sandbox** for bash execution and testing. **You must have the Docker daemon running on your host machine** for tasks that require isolated execution.
+
+### 5. Quick Start
+
+Once loaded, you can natively trigger DumbleDoer directly from your `agy` prompt in any target repository:
 
 ```text
 /dumbledoer start
@@ -32,5 +48,6 @@ Or from any standard terminal window in your target directory:
 
 ```bash
 cd ~/projects/my-target-repo
-dumbledoer start --docs ./docs
+agy --model gemini-2.5-pro
+# Then trigger /dumbledoer start inside agy
 ```

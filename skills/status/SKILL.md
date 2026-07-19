@@ -1,4 +1,5 @@
 ---
+name: dumbledoer-status
 description: Show the dumbledoer Task Registry, session summary, budget usage, and CodeGraph health for the current improvement session.
 ---
 

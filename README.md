@@ -48,6 +48,8 @@ Don't forget to reload your profile or restart your terminal:
 source ~/.bashrc # or source ~/.zshrc
 ```
 
+3. **Model Tiering:** DumbleDoer uses a default model for basic orchestration, but you can override this to utilize advanced reasoning models. You can do this by setting the `AGY_MODEL` environment variable (e.g., `export AGY_MODEL="gemini-2.5-pro"`) or by passing the `--model` flag (e.g., `--model gemini-2.5-pro`) when running commands.
+
 ---
 
 ## 🛠️ Installation
@@ -66,6 +68,14 @@ agy plugin install ./
 ```
 
 That's it! DumbleDoer is now hooked into your `agy` environment. 🎉
+
+---
+
+## 🛡️ VS Code Diff-Gate & Zero-Trust Sandbox
+
+DumbleDoer prioritizes safety during execution:
+* **VS Code Diff-Gate**: A Human-in-the-Loop review system intercepts any file modifications. DumbleDoer will automatically open a diff in your active VS Code instance, allowing you to explicitly approve or reject the agent's proposed changes. If VS Code is unavailable (e.g. running in an SSH session without GUI), you can pass the `--no-gui` flag to fall back to a terminal-native `rich` diff.
+* **Zero-Trust Docker Sandbox**: Sub-agents execute testing and validation within an isolated Docker sandbox. Note: **this requires the host Docker daemon to be running** for DumbleDoer to execute bash commands, run test suites, or interact with external dependencies securely.
 
 ---
 

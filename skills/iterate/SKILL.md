@@ -1,4 +1,5 @@
 ---
+name: dumbledoer-iterate
 description: Iterates on the current dumbledoer session. Acts as a strict Systems Architect to evaluate, decompose, and register new tasks based on user prompts.
 ---
 

@@ -41,3 +41,5 @@ repository_export*
 konfio_opentelemetry_full_code_part_*
 *.bak
 *.venv
+memory.md.lock
+memory.md.bak

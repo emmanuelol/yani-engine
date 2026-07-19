@@ -1,4 +1,5 @@
 ---
+name: dumbledoer-update-docs
 description: Update existing project documentation using CodeGraph structural analysis. Detects outdated sections, rewrites them to match current code, and optionally enriches sparse sections. Use when documentation has drifted from the codebase or when you want to fill in missing content.
 ---
 

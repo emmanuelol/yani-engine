@@ -1,5 +1,5 @@
 {
-  "name": "iterate",
+  "name": "dumbledoer iterate",
   "description": "Refines the current task plan by adding or adjusting tasks based on a new prompt.",
   "options": [
     {

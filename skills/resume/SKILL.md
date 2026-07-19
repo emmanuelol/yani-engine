@@ -1,4 +1,5 @@
 ---
+name: dumbledoer-resume
 description: Resume an interrupted dumbledoer session from the last checkpoint. Use when a previous session was stopped by budget exhaustion, user interruption, or Gemini Code restart.
 ---
 

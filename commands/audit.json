@@ -1,5 +1,5 @@
 {
-  "name": "audit",
+  "name": "dumbledoer audit",
   "description": "QA Harness Loop: Evaluates completed tasks against their success criteria and autonomously generates fix tasks if bugs are found.",
   "execute": {
     "command": "./.venv/bin/python",

@@ -1,5 +1,5 @@
 {
-  "name": "report",
+  "name": "dumbledoer report",
   "description": "Generates a quantitative Markdown report detailing structural impact and token optimization.",
   "execute": {
     "command": "./.venv/bin/python",

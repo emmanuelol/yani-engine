@@ -1,4 +1,5 @@
 ---
+name: dumbledoer-report
 description: Generate the dumbledoer improvement report showing before/after changes, CodeGraph impact radius, and delta summary for all completed tasks.
 ---
 

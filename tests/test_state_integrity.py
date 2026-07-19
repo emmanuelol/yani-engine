@@ -1,6 +1,7 @@
 import os
 import concurrent.futures
 import pytest
+import threading
 import dumbledoer.dumbledoer_cli as cli
 from filelock import FileLock
 
@@ -22,6 +23,7 @@ def mock_file_ops(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "read_file", mock_read)
     monkeypatch.setattr(cli, "_write_file", mock_write)
     monkeypatch.setattr(cli.PlanValidator, "validate", lambda x: "OK")
+    monkeypatch.setattr(cli, "REGISTRY_LOCK", threading.RLock())
     return test_memory
 
 def test_concurrent_state_writes(mock_file_ops):
@@ -42,3 +44,16 @@ def test_concurrent_state_writes(mock_file_ops):
     
     for i in range(20):
         assert f"Entry {i}\n" in final_content, f"Entry {i} missing from final content!"
+
+def test_budget_manager_exhaustion():
+    bm = cli.BudgetManager("## Config\n- budget_limit: 1000\n- budget_threshold_pct: 80")
+    bm.estimated_tokens = 800
+    with pytest.raises(cli.BudgetExhaustedException):
+        bm.check_and_harvest()
+
+def test_ast_memory_mapper():
+    content = "## Config\n- budget_limit: 1000\n## Budget & Quota Tracking\n| Tokens Consumed | 500 |\n"
+    start, end = cli.ASTMemoryMapper.locate_heading_block(content, "h2", "Budget & Quota Tracking")
+    assert start != -1
+    lines = content.splitlines()[start:end]
+    assert any("| Tokens Consumed | 500 |" in line for line in lines)

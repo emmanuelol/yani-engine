@@ -1,4 +1,5 @@
 ---
+name: dumbledoer-rollback
 description: Roll back dumbledoer task changes to restore files to their pre-task state. Supports per-task, full, or session-boundary rollback.
 ---
 

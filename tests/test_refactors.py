@@ -7,9 +7,10 @@ from dumbledoer.dumbledoer_cli import write_file_with_review, execute_bash, run_
 import pytest
 
 def test_execute_bash_sandbox():
-    with patch("dumbledoer.dumbledoer_cli.subprocess.run") as mock_run:
+    with patch("dumbledoer.dumbledoer_cli.subprocess.run") as mock_run, \
+         patch("dumbledoer.dumbledoer_cli.SandboxManager.get_mount_flag", return_value="/host/path:/workspace"):
         mock_run.return_value = MagicMock(stdout="mocked output", returncode=0)
-        output = execute_bash("echo 'hello'")
+        output = execute_bash("pytest")
         assert output == "mocked output"
         
         # Verify docker invocation
@@ -19,13 +20,16 @@ def test_execute_bash_sandbox():
         assert "docker" in cmd_list
         assert "run" in cmd_list
         assert "dumbledoer-base:latest" in cmd_list
+        assert "-v" in cmd_list
+        assert "/var/run/docker.sock:/var/run/docker.sock" in cmd_list
         assert "bash" in cmd_list
         assert "-c" in cmd_list
-        assert "echo 'hello'" in cmd_list
+        assert "pytest" in cmd_list
         assert kwargs.get("shell") is not True
 
 def test_run_rtk_sandbox():
-    with patch("dumbledoer.dumbledoer_cli.subprocess.run") as mock_run:
+    with patch("dumbledoer.dumbledoer_cli.subprocess.run") as mock_run, \
+         patch("dumbledoer.dumbledoer_cli.SandboxManager.get_mount_flag", return_value="/host/path:/workspace"):
         mock_run.return_value = MagicMock(stdout="mocked rtk output", returncode=0)
         output = run_rtk("gain --history")
         assert output == "RTK Output: mocked rtk output"
@@ -37,6 +41,8 @@ def test_run_rtk_sandbox():
         assert "docker" in cmd_list
         assert "run" in cmd_list
         assert "dumbledoer-base:latest" in cmd_list
+        assert "-v" in cmd_list
+        assert "/var/run/docker.sock:/var/run/docker.sock" in cmd_list
         assert "rtk" in cmd_list
         assert "gain" in cmd_list
         assert "--history" in cmd_list
@@ -60,6 +66,7 @@ def test_write_file_with_review_vscode_success(mock_which):
         assert "--wait" in args[0]
         assert "--new-window" not in args[0]
         assert "--diff" in args[0]
+        assert kwargs.get("env") == os.environ
         
         mock_replace.assert_called_once()
         assert "Successfully wrote" in result

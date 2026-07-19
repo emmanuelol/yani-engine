@@ -1,5 +1,5 @@
 {
-  "name": "execute",
+  "name": "dumbledoer execute",
   "description": "Dispatches the task plan in strict dependency order through the secure Docker execution sandbox.",
   "execute": {
     "command": "./.venv/bin/python",
