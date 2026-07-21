@@ -101,6 +101,7 @@ Read all provided input files as plain text (any format accepted, no schema requ
 2. If `--project` provided: read the file.
 3. If `--examples` provided: read all files in the directory recursively.
 4. If `--requirements` provided: read the file.
+5. Explicitly detect if `Dockerfile` or `docker-compose.yml` exists in the project root.
 
 Summarize the ingested content internally to understand the agent's purpose, existing
 behavior, and any stated improvement goals.
@@ -129,6 +130,7 @@ Ask the user about:
 2. Which components are in scope: system prompts, tool call definitions, few-shot examples, conversation flow, code files.
 3. Success criteria: how will we know improvements worked.
 4. Constraints: what must not change.
+5. If containers are detected, ask the user if DumbleDoer should use the project's native containers for the execution sandbox, and if the user wants DumbleDoer to audit and optimize their Docker configurations.
 
 Based on the Q&A results, compose:
 - **Project Goal**: one paragraph summarizing the improvement objective.

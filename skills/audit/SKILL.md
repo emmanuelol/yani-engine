@@ -32,6 +32,10 @@ For each completed task:
 6. **Declarative Regression Eval Suites**: Execute an automated behavioral evaluation runner via the bash sandbox (e.g., running a script that tests edge cases or measures tone compliance profiles).
 7. **Strict Statistical Check Guardrail**: If the evaluation runner returns a degradation metric or fails to meet the success criteria guardrails, you MUST invoke `add_task` to append a targeted refactoring issue to `memory.md` and lock the current wave progress.
 
+### Container Infrastructure Audit
+- If `sandbox_mode` is `native` or `compose`, actively read the `Dockerfile` and `docker-compose.yml`. Evaluate them for: Layer caching optimizations, multi-stage builds to reduce image size, running as a non-root user, and outdated base images.
+- If optimizations are found, use `add_task` to append a change task to optimize the container configuration.
+
 ## Section 3 — The Harness Loop (Task Generation)
 1. Evaluate the output from your bash tests against the `Success Criteria`.
 2. **If the test passes:** Do nothing for that task. 

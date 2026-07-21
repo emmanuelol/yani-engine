@@ -58,9 +58,26 @@ class ASTMemoryMapper:
                     break
         return start_idx, end_idx
 
-def execute_bash(command: str) -> str:
+def execute_bash(command: str, sandbox_mode: str = None) -> str:
+    if sandbox_mode is None:
+        sandbox_mode = "dumbledoer-base"
+        try:
+            with open("memory.md", "r", encoding="utf-8") as f:
+                for line in f:
+                    if line.strip().startswith("- sandbox_mode:"):
+                        sandbox_mode = line.split(":", 1)[1].strip()
+                        break
+        except Exception:
+            pass
+
     try:
-        args = ["docker", "run", "--rm", "-v", f"{os.getcwd()}:/workspace", "-w", "/workspace", "dumbledoer-base:latest", "bash", "-c", command]
+        if sandbox_mode == "docker-compose":
+            args = ["docker", "compose", "exec", "-T", "app", "bash", "-c", command]
+        elif sandbox_mode == "native":
+            args = ["docker", "run", "--rm", "-v", f"{os.getcwd()}:/workspace", "-w", "/workspace", "target-repo-img", "bash", "-c", command]
+        else:
+            args = ["docker", "run", "--rm", "-v", f"{os.getcwd()}:/workspace", "-w", "/workspace", "dumbledoer-base:latest", "bash", "-c", command]
+            
         result = subprocess.run(args, capture_output=True, text=True, check=True)
         return result.stdout
     except subprocess.CalledProcessError as e:
@@ -85,6 +102,8 @@ def _write_file(path: str, content: str) -> str:
         return f"Error writing file {path}: {e}"
 
 def update_memory_registry(content: str) -> str:
+    if "- sandbox_mode:" not in content:
+        return "Error updating memory registry: Constraint failed, missing '- sandbox_mode:' in Config block."
     try:
         with REGISTRY_LOCK:
             return _write_file("memory.md", content)
