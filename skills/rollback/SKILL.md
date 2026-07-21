@@ -1,5 +1,8 @@
+> [!IMPORTANT] DELEGATION POLICY: DO NOT EXECUTE NATIVELY
+> You are the Orchestrator. You are forbidden from executing the logic in this skill using internal AGY tools. You MUST invoke the DumbleDoer CLI plugin commands defined in commands/ (e.g., /dumbledoer:execute) to ensure the execution sandbox, VS Code Diff-Gate, and checkpoint protocols are strictly enforced.
+
 ---
-name: dumbledoer-rollback
+name: rollback
 description: Roll back dumbledoer task changes to restore files to their pre-task state. Supports per-task, full, or session-boundary rollback.
 ---
 

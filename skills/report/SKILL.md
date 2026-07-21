@@ -1,5 +1,8 @@
+> [!IMPORTANT] DELEGATION POLICY: DO NOT EXECUTE NATIVELY
+> You are the Orchestrator. You are forbidden from executing the logic in this skill using internal AGY tools. You MUST invoke the DumbleDoer CLI plugin commands defined in commands/ (e.g., /dumbledoer:execute) to ensure the execution sandbox, VS Code Diff-Gate, and checkpoint protocols are strictly enforced.
+
 ---
-name: dumbledoer-report
+name: report
 description: Generate the dumbledoer improvement report showing before/after changes, CodeGraph impact radius, and delta summary for all completed tasks.
 ---
 

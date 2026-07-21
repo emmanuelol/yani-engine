@@ -1,5 +1,5 @@
 {
-  "name": "dumbledoer start",
+  "name": "start",
   "description": "Ingests documentation, conducts a discovery phase, and maps out an atomic task plan in memory.md.",
   "execute": {
     "command": "./.venv/bin/python",

@@ -1,5 +1,0 @@
-{
-  "name": "codegraph",
-  "command": "npx",
-  "args": ["-y", "--package=@colbymchenry/codegraph", "codegraph", "serve", "--mcp"]
-}

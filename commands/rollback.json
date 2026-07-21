@@ -1,5 +1,5 @@
 {
-  "name": "dumbledoer rollback",
+  "name": "rollback",
   "description": "Restores files from checkpoints to recover from failed executions or unapproved diffs.",
   "options": [
     {

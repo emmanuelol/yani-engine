@@ -61,7 +61,7 @@ Two plugin-wide protocols apply to every command:
 
 - **Output compression** (`lib/compression-policy.md`): governs the style of ALL
   conversational output — category→level mapping, session state, toggles, and
-  exclusions. Read it before producing any user-facing response.
+  exclusions. Read it before producing any user-facing response. All conversational output must use Caveman 'full' for simple tasks and 'lite' for complex tasks, but persisted artifacts (memory.md, code, reports) must ALWAYS be written in normal, uncompressed prose.
 - **Documentation lookup** (`lib/context7-protocol.md`): governs when a task that
   depends on an external library/framework/SDK API must consult current
   documentation before proposing or executing changes. Load it when claiming any

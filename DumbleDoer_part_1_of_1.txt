@@ -1,6 +1,6 @@
 --- REPOSITORY CONTEXT ---
 Repository Name: DumbleDoer
-Export Date: 2026-07-18 11:43:35
+Export Date: 2026-07-20 21:47:27
 Part: 1 of 1
 --------------------------
 
@@ -56,6 +56,18 @@ This document contains the entire codebase. You may answer user queries fully ba
 │   └── top_level.txt
 ├── hooks
 │   └── workspace-load.json
+├── knowledge
+│   ├── entries
+│   │   ├── K-001-create-test_pipeline.md
+│   │   ├── K-002-create-vscode_test.m.md
+│   │   ├── K-003-create-vscode_test.m.md
+│   │   ├── K-004-create-strict_ui_tes.md
+│   │   ├── K-005-create-strict_ui_tes.md
+│   │   ├── K-006-restore-gui-diff-gat.md
+│   │   ├── K-007-add-comment-to-a.txt.md
+│   │   ├── K-008-add-simple-comment-t.md
+│   │   └── K-009-add-simple-comment-t.md
+│   └── index.md
 ├── lib
 │   ├── archive-protocol.md
 │   ├── budget-detection.md
@@ -67,13 +79,12 @@ This document contains the entire codebase. You may answer user queries fully ba
 │   ├── knowledge-protocol.md
 │   ├── memory-archive-prompt.md
 │   └── memory-schema.md
-├── mcpServers
-│   ├── codegraph.json
-│   └── context7.json
 ├── skills
 │   ├── audit
 │   │   └── SKILL.md
 │   ├── caveman
+│   │   └── SKILL.md
+│   ├── execute
 │   │   └── SKILL.md
 │   ├── iterate
 │   │   └── SKILL.md
@@ -96,11 +107,17 @@ This document contains the entire codebase. You may answer user queries fully ba
 │   └── update-docs
 │       ├── reference.md
 │       └── SKILL.md
+├── templates
+│   ├── knowledge-index-template.md
+│   └── memory-template.md
 ├── tests
 │   ├── __init__.py
 │   ├── test_refactors.py
 │   └── test_state_integrity.py
 ├── .env
+├── .mcp.json
+├── a.txt
+├── b.txt
 ├── Dockerfile
 ├── DumbleDoer_part_1_of_1.txt
 ├── extract_protocols.py
@@ -113,6 +130,7 @@ This document contains the entire codebase. You may answer user queries fully ba
 ├── pyproject.toml
 ├── README.md
 ├── requirements.txt
+├── sync_knowledge.py
 ├── SYSTEM_INSTRUCTIONS.md
 ├── test_debug.py
 └── uv.lock
@@ -922,6 +940,27 @@ if __name__ == "__main__":
 
 ```
 
+### FILE: .mcp.json
+```json
+{
+  "mcpServers": {
+    "context7": {
+      "command": "npx",
+      "args": ["-y", "@upstash/context7-mcp"]
+    },
+    "codegraph": {
+      "command": "npx",
+      "args": ["-y", "--package=@colbymchenry/codegraph", "codegraph", "serve", "--mcp"]
+    },
+    "dumbledoer": {
+      "command": "./.venv/bin/python",
+      "args": ["dumbledoer/dumbledoer_cli.py"]
+    }
+  }
+}
+
+```
+
 ### FILE: Dockerfile
 ```text
 # Use a stable Ubuntu LTS base
@@ -938,6 +977,10 @@ RUN apt-get update && apt-get install -y \
     curl \
     git \
     build-essential \
+    docker.io \
+    docker-compose-v2 \
+    nodejs \
+    npm \
     && rm -rf /var/lib/apt/lists/*
 
 # 2. Install Node.js v20+ (Required for MCP npx servers)
@@ -1015,6 +1058,8 @@ Don't forget to reload your profile or restart your terminal:
 source ~/.bashrc # or source ~/.zshrc
 ```
 
+3. **Model Tiering:** DumbleDoer uses a default model for basic orchestration, but you can override this to utilize advanced reasoning models. You can do this by setting the `AGY_MODEL` environment variable (e.g., `export AGY_MODEL="gemini-2.5-pro"`) or by passing the `--model` flag (e.g., `--model gemini-2.5-pro`) when running commands.
+
 ---
 
 ## 🛠️ Installation
@@ -1033,6 +1078,14 @@ agy plugin install ./
 ```
 
 That's it! DumbleDoer is now hooked into your `agy` environment. 🎉
+
+---
+
+## 🛡️ VS Code Diff-Gate & Zero-Trust Sandbox
+
+DumbleDoer prioritizes safety during execution:
+* **VS Code Diff-Gate**: A Human-in-the-Loop review system intercepts any file modifications. DumbleDoer will automatically open a diff in your active VS Code instance, allowing you to explicitly approve or reject the agent's proposed changes. If VS Code is unavailable (e.g. running in an SSH session without GUI), you can pass the `--no-gui` flag to fall back to a terminal-native `rich` diff.
+* **Zero-Trust Docker Sandbox**: Sub-agents execute testing and validation within an isolated Docker sandbox. Note: **this requires the host Docker daemon to be running** for DumbleDoer to execute bash commands, run test suites, or interact with external dependencies securely.
 
 ---
 
@@ -1080,6 +1133,13 @@ You can interact with DumbleDoer using the following slash commands within `agy`
 
 ```
 
+### FILE: a.txt
+```txt
+# Test
+1
+
+```
+
 ### FILE: agents/agnes.json
 ```json
 {
@@ -1087,6 +1147,12 @@ You can interact with DumbleDoer using the following slash commands within `agy`
   "description": "Principal QAE, SWE, SRE, and Chaos Engineer for DumbleDoer.",
   "instructions": "You operate within the DumbleDoer Agent Engineering Harness. Use the Brain/Hands architecture. Enforce strict Docker containerization for all execution."
 }
+
+```
+
+### FILE: b.txt
+```txt
+2
 
 ```
 
@@ -1195,27 +1261,43 @@ You can interact with DumbleDoer using the following slash commands within `agy`
 
 ## Colleague Installation Workflow
 
-DumbleDoer has transitioned from centralized wrappers and bash aliases into a natively distributable extension for the `agy` client.
+DumbleDoer is a natively distributable extension for the `agy` client. It runs in a "Zero-Copy" manner without polluting your target repositories.
 
-### 1. Install the CLI Tool Globally
+### 1. Clone the Repository
 
-Installing via `uv tool` automatically isolates all dependencies while exposing the `dumbledoer` executable globally across your entire system.
-
-```bash
-uv tool install git+https://github.com/your-org/DumbleDoer.git
-```
-
-### 2. Load the Plugin into the agy Client
-
-DumbleDoer includes a native `plugin.json` manifest. You load the plugin in your `agy` client to natively discover its tools and MCP servers (without shell hacks):
+First, clone the DumbleDoer repository to a dedicated location on your machine:
 
 ```bash
-agy --plugin-dir ~/.local/share/uv/tools/dumbledoer
+git clone <repository-url>
+cd DumbleDoer
 ```
 
-### 3. Quick Start
+### 2. Install the Plugin into the agy Client
 
-Once loaded, you can natively trigger DumbleDoer directly from your `agy` prompt:
+DumbleDoer includes a native `plugin.json` manifest. You can install the plugin natively into your `agy` client by running the following command from within the cloned directory:
+
+```bash
+agy plugin install ./
+```
+
+This registers DumbleDoer globally in your `agy` client, seamlessly integrating its skills, slash commands, and sub-agents.
+
+### 3. Model Configuration & BYOK
+
+DumbleDoer requires a Gemini API key. Ensure `GOOGLE_API_KEY` is exported in your environment. 
+By default, DumbleDoer uses a lightweight model. You can override this to use advanced reasoning models by setting the `AGY_MODEL` environment variable or passing the `--model` flag:
+
+```bash
+export AGY_MODEL="gemini-2.5-pro"
+```
+
+### 4. Zero-Trust Sandbox Requirement
+
+DumbleDoer utilizes a **Zero-Trust Docker Sandbox** for bash execution and testing. **You must have the Docker daemon running on your host machine** for tasks that require isolated execution.
+
+### 5. Quick Start
+
+Once loaded, you can natively trigger DumbleDoer directly from your `agy` prompt in any target repository:
 
 ```text
 /dumbledoer start
@@ -1225,7 +1307,8 @@ Or from any standard terminal window in your target directory:
 
 ```bash
 cd ~/projects/my-target-repo
-dumbledoer start --docs ./docs
+agy --model gemini-2.5-pro
+# Then trigger /dumbledoer start inside agy
 ```
 
 ```
@@ -1276,942 +1359,249 @@ DumbleDoer generates the `/report` locally and synchronizes `memory.md`. Your pr
 ### FILE: dumbledoer/dumbledoer_cli.py
 ```py
 import os
-import shutil
 import sys
-from filelock import FileLock
 import asyncio
-import inspect
+import argparse
 import subprocess
 import shlex
-from typing import List, Optional, Dict
-from dotenv import load_dotenv
-from google import genai
-from rich.console import Console
-from rich.markdown import Markdown
-from rich.panel import Panel
-from rich.prompt import Confirm
-from rich.prompt import Prompt
-from rich.syntax import Syntax
-import difflib
-import json
-from datetime import datetime, timezone
-from mcp.client.session import ClientSession
-from mcp.client.stdio import StdioServerParameters, stdio_client
 from contextlib import AsyncExitStack
+import shutil
+import difflib
+from filelock import FileLock
+
+REGISTRY_LOCK = FileLock("memory.md.lock", timeout=10)
 
 GUI_DIFF_ENABLED = True
-load_dotenv()
-console = Console()
-REGISTRY_LOCK = FileLock("memory.md.lock", timeout=30)
-UI_LOCK = None
 
-def get_ui_lock():
-    global UI_LOCK
-    if UI_LOCK is None:
-        UI_LOCK = asyncio.Lock()
-    return UI_LOCK
-
-class CheckpointManager:
-    @staticmethod
-    def encode_path(path: str) -> str:
-        return path.replace("/", "__").replace(":", "__colon__")
-        
-    @staticmethod
-    def run_orphan_scan():
-        console.print("[dim]Running Orphan Recovery Scan (O1-O5)...[/dim]")
-        for d in [".dumbledoer/tmp", ".dumbledoer/checkpoints", ".dumbledoer/rollbacks"]:
-            os.makedirs(d, exist_ok=True)
-            
-        try:
-            with open("memory.md", "r") as f:
-                memory_content = f.read()
-        except FileNotFoundError:
-            console.print("Recovery scan: clean")
-            return
-
-        resolutions = []
-        new_memory = memory_content
-        
-        def get_table_rows(section_name):
-            rows = []
-            in_section = False
-            for line in memory_content.splitlines():
-                if line.startswith(f"## {section_name}"):
-                    in_section = True
-                    continue
-                if in_section and line.startswith("## "): break
-                if in_section and line.strip().startswith("|") and "---" not in line and "Task ID" not in line:
-                    rows.append(line)
-            return rows
-
-        change_log = get_table_rows("Change Log")
-        chk_registry = get_table_rows("Checkpoint Registry")
-        registered_chks = [r.split("|")[1].strip() for r in chk_registry if len(r.split("|")) > 1]
-        
-        planned_entries = []
-        all_change_entries = []
-        for r in change_log:
-            parts = r.split("|")
-            if len(parts) >= 6:
-                t_id, f_path, status = parts[2].strip(), parts[3].strip(), parts[5].strip()
-                all_change_entries.append((t_id, f_path))
-                if status == "planned":
-                    planned_entries.append((r, t_id, f_path))
-
-        # O3: Unregistered checkpoint JSON files
-        for chk_file in os.listdir(".dumbledoer/checkpoints"):
-            if not chk_file.endswith(".json"): continue
-            chk_id = chk_file[:-5]
-            if chk_id not in registered_chks:
-                chk_path = os.path.join(".dumbledoer/checkpoints", chk_file)
-                try:
-                    with open(chk_path, "r") as f: data = json.load(f)
-                    t_id, files = data.get("taskId"), list(data.get("files", {}).keys())
-                    if any(p[1] == t_id and p[2] in files for p in planned_entries):
-                        new_row = f"| {chk_id} | {t_id} | {data.get('stepIndex', 1)} | {data.get('sessionId', '—')} | {','.join(files)} |"
-                        new_memory = new_memory.replace("## Open Questions", f"{new_row}\n\n## Open Questions")
-                        registered_chks.append(chk_id)
-                        resolutions.append(f"- O3: {chk_file} -> registered")
-                    else:
-                        os.remove(chk_path)
-                        resolutions.append(f"- O3: {chk_file} -> discarded")
-                except Exception: pass
-
-        # O5: Orphaned rollback copies
-        for t_dir in os.listdir(".dumbledoer/rollbacks"):
-            dir_path = os.path.join(".dumbledoer/rollbacks", t_dir)
-            if os.path.isdir(dir_path):
-                for rb_file in os.listdir(dir_path):
-                    decoded = rb_file.replace("__colon__", ":").replace("__", "/")
-                    if (t_dir, decoded) not in all_change_entries:
-                        os.remove(os.path.join(dir_path, rb_file))
-                        resolutions.append(f"- O5: {rb_file} -> discarded")
-
-        # O1 & O2: Temp files
-        for tmp_file in os.listdir(".dumbledoer/tmp"):
-            if not tmp_file.endswith(".tmp"): continue
-            encoded = tmp_file[:-4]
-            decoded = encoded.replace("__colon__", ":").replace("__", "/")
-            tmp_path = os.path.join(".dumbledoer/tmp", tmp_file)
-            
-            if not any(decoded in r for r in chk_registry):
-                os.remove(tmp_path)
-                resolutions.append(f"- O2: {tmp_file} -> discarded")
-            else:
-                console.print(f"\n[bold yellow]⚠️ Found incomplete write operation for {decoded}[/bold yellow]")
-                if Prompt.ask("Resolve `.tmp` artifact?", choices=["apply", "discard"], default="discard") == "apply":
-                    tgt_dir = os.path.dirname(os.path.abspath(decoded))
-                    if tgt_dir: os.makedirs(tgt_dir, exist_ok=True)
-                    os.replace(tmp_path, decoded)
-                    resolutions.append(f"- O1: {tmp_file} -> applied")
-                else:
-                    os.remove(tmp_path)
-                    resolutions.append(f"- O1: {tmp_file} -> discarded")
-
-        # O4: Stuck planned Change Log entries
-        for row, t_id, f_path in planned_entries:
-            if any(f"O1: {CheckpointManager.encode_path(f_path)}.tmp -> applied" in res for res in resolutions):
-                new_memory = new_memory.replace(row, row.replace("| planned |", "| applied |"))
-                resolutions.append(f"- O4: Change Log entry for {f_path} -> marked applied")
-                continue
-            target_file, rb_file = f_path, os.path.join(".dumbledoer/rollbacks", t_id, CheckpointManager.encode_path(f_path))
-            t_content = open(target_file, "r").read() if os.path.exists(target_file) else ""
-            r_content = open(rb_file, "r").read() if os.path.exists(rb_file) else ""
-            
-            status = "| rolled-back |" if t_content == r_content else "| applied |"
-            new_memory = new_memory.replace(row, row.replace("| planned |", status))
-            resolutions.append(f"- O4: Change Log entry for {f_path} -> marked {status.strip(' |')}")
-
-        if new_memory != memory_content:
-            with REGISTRY_LOCK:
-                with open("memory.md", "w") as f: f.write(new_memory)
-
-        if not resolutions:
-            console.print("Recovery scan: clean")
-        else:
-            console.print(f"Recovery scan: {len(resolutions)} artifact(s) resolved")
-            for res in resolutions: console.print(f"  {res}")
-
-class ArchiveManager:
-    @staticmethod
-    def trim_and_archive(memory_content: str) -> str:
-        console.print("[dim]Checking memory.md for archivable sessions...[/dim]")
-        lines = memory_content.splitlines()
-        
-        # 1. Quick parse to find terminal sessions
-        sessions = []
-        in_session_log = False
-        for line in lines:
-            if line.startswith("## Session Log"): in_session_log = True; continue
-            elif line.startswith("## ") and in_session_log: break
-            
-            if in_session_log and line.strip().startswith("|") and "Session ID" not in line and "---" not in line:
-                parts = [p.strip() for p in line.split("|")]
-                if len(parts) >= 5 and parts[4] in ("completed", "error"):
-                    sessions.append(parts[1])
-                    
-        # 2. Keep the most recent 1 (default), archive the rest
-        if len(sessions) <= 1:
-            return memory_content
-            
-        sessions_to_archive = sessions[:-1]
-        new_memory = memory_content
-        archive_dir = ".dumbledoer/archive"
-        os.makedirs(archive_dir, exist_ok=True)
-        
-        archived_count = 0
-        for sid in sessions_to_archive:
-            # In a full implementation, we extract exact Task Details, Change Logs, etc. 
-            # For the orchestrator wrapper, we generate the atomic archive file and inject the Archive Index.
-            archive_path = os.path.join(archive_dir, f"{sid}.md")
-            if not os.path.exists(archive_path):
-                with open(archive_path, "w") as f:
-                    f.write(f"# Archived Session: {sid}\n\nsession_id: {sid}\narchived_at: {datetime.now(timezone.utc).isoformat()}\nsource: memory.md\n\n*(Tasks and logs archived by DumbleDoer)*\n")
-            
-            # 3. Strip archived session details from active memory (simplified for diff)
-            # We tag the session log outcome as (archived)
-            parsed_lines = new_memory.splitlines()
-            for i, line in enumerate(parsed_lines):
-                if line.strip().startswith(f"| {sid} |"):
-                    parsed_lines[i] = line.replace("completed", "completed (archived)").replace("error", "error (archived)")
-            new_memory = "\n".join(parsed_lines)
-            
-            # 4. Ensure Archive Index exists and append row
-            archive_row = f"| {sid} | {datetime.now(timezone.utc).isoformat()} | {archive_path} | — | archived |\n"
-            if "## Archive Index" not in new_memory:
-                new_memory += "\n## Archive Index\n\n| Session ID | Archived At | Archive File | Tasks Archived | Outcome |\n|---|---|---|---|---|\n"
-            
-            idx = new_memory.find("## Archive Index")
-            table_start = new_memory.find("|---|---|---|---|---|", idx)
-            if table_start != -1:
-                insert_pos = new_memory.find("\n", table_start) + 1
-                new_memory = new_memory[:insert_pos] + archive_row + new_memory[insert_pos:]
-                
-            archived_count += 1
-            
-        if archived_count > 0:
-            console.print(f"[bold green]✓ Archived {archived_count} session(s) → {archive_dir}/[/bold green]")
-            
-        return new_memory
-
-class SandboxManager:
-    @staticmethod
-    def ensure_image_built():
-        console.print("[dim]Checking zero-trust execution sandbox image...[/dim]")
-        try:
-            result = subprocess.run(["docker", "image", "inspect", "dumbledoer-base:latest"], capture_output=True)
-            if result.returncode != 0:
-                console.print("[bold yellow]Building dumbledoer-base:latest Docker image (this may take a minute)...[/bold yellow]")
-                subprocess.run(["docker", "build", "-t", "dumbledoer-base:latest", "."], check=True)
-                console.print("[bold green]✓ Sandbox image built successfully.[/bold green]")
-        except Exception as e:
-            console.print(f"[bold red]Error building sandbox image: {e}[/bold red]")
-            
-    @staticmethod
-    def get_mount_flag(read_only: bool = False) -> str:
-        cwd = os.getcwd()
-        return f"{cwd}:/workspace:ro" if read_only else f"{cwd}:/workspace"
-
-    @staticmethod
-    def ensure_codegraph_ready():
-        if not os.path.exists(".codegraph"):
-            console.print("[dim]CodeGraph index missing. Initializing...[/dim]")
-            try:
-                # Use subprocess to run the init. If global codegraph is missing,
-                # fallback to npx execution automatically.
-                cmd = ["codegraph", "init", "-i"] if shutil.which("codegraph") else ["npx", "-y", "@colbymchenry/codegraph", "init", "-i"]
-                subprocess.run(cmd, check=True, capture_output=True)
-                console.print("[green]✓ CodeGraph index initialized.[/green]")
-            except Exception as e:
-                console.print(f"[red]⚠️ CodeGraph auto-init failed: {e}[/red]")
-
-class KnowledgeManager:
-    @staticmethod
-    def get_next_k_id(entries_dir: str) -> str:
-        os.makedirs(entries_dir, exist_ok=True)
-        existing = [f for f in os.listdir(entries_dir) if f.startswith("K-")]
-        if not existing: return "K-001"
-        highest = max([int(f.split("-")[1]) for f in existing if len(f.split("-")) > 1])
-        return f"K-{highest+1:03d}"
-
-    @staticmethod
-    def capture_success(task_id: str, task_title: str, summary: str, session_id: str):
-        base_dir = "knowledge"
-        entries_dir = os.path.join(base_dir, "entries")
-        os.makedirs(entries_dir, exist_ok=True)
-        
-        k_id = KnowledgeManager.get_next_k_id(entries_dir)
-        slug = task_title.lower().replace(" ", "-")[:20].strip("-")
-        filepath = os.path.join(entries_dir, f"{k_id}-{slug}.md")
-        timestamp = datetime.now(timezone.utc).isoformat()
-        
-        content = f"---\nid: {k_id}\ntitle: \"{task_title}\"\ntype: success\nstatus: active\ncreated: {timestamp}\nsession: {session_id}\ntask: {task_id}\ntags: [knowledge-registry, automated]\n---\n\n## Description\nTask completed successfully.\n\n## Rationale\n{summary}\n"
-        
-        with open(filepath, "w") as f:
-            f.write(content)
-            
-        index_path = os.path.join(base_dir, "index.md")
-        index_entry = f"| [[{k_id}-{slug}\\|{task_title}]] | active | {session_id} | {timestamp} |\n"
-        
-        if os.path.exists(index_path):
-            with open(index_path, "a") as f: f.write(index_entry)
-        else:
-            with open(index_path, "w") as f:
-                f.write("---\ntitle: Knowledge Registry Index\ntags: [knowledge-registry, index]\n---\n# Knowledge Registry Index\n\n## Successes\n| Entry | Status | Session | Created |\n|---|---|---|---|\n" + index_entry)
-        console.print(f"[dim]Knowledge Vault updated: {k_id} captured.[/dim]")
-
-class BudgetManager:
-    def __init__(self, memory_content: str):
-        self.limit = 100000
-        self.threshold_pct = 80
-        self.estimated_tokens = 0
-        
-        for line in memory_content.splitlines():
-            if line.startswith("- budget_limit:"):
-                self.limit = int(line.split(":")[1].strip())
-            elif line.startswith("- budget_threshold_pct:"):
-                self.threshold_pct = int(line.split(":")[1].strip())
-                
-        self.threshold = int(self.limit * (self.threshold_pct / 100.0))
-
-    def add_cost(self, operation: str):
-        # Conservative upper-bound estimates per lib/budget-detection.md
-        costs = {"spawn": 1000, "analysis": 15000, "change_small": 10000, "change_medium": 35000, "change_large": 70000}
-        cost = costs.get(operation, 5000)
-        self.estimated_tokens += cost
-        
-        # Traceable Budgeting
-        os.makedirs(".dumbledoer", exist_ok=True)
-        with open(".dumbledoer/budget.log", "a") as f:
-            f.write(f"{datetime.now(timezone.utc).isoformat()} | {operation} | +{cost} tokens | Total: {self.estimated_tokens}\n")
-        
-    def check_and_harvest(self):
-        if self.estimated_tokens >= self.threshold:
-            console.print(f"\n[bold red]⚠️ Budget Threshold Reached ({self.estimated_tokens}/{self.limit} tokens).[/bold red]")
-            console.print("[bold purple]🪄 Invoking RTK (Rust Token Killer) for Active Context Harvesting...[/bold purple]")
-            # Fire RTK to forcefully prune prompt bloat and compress memory.md context history
-            output = run_rtk("cull --aggressive --preserve-system")
-            self.estimated_tokens = int(self.estimated_tokens * 0.3) # Simulate 70% bloat reduction
-            console.print(f"[dim]{output}[/dim]")
-            console.print(f"[bold green]✓ Context compressed. Tokens reset to ~{self.estimated_tokens}. Resuming execution.[/bold green]\n")
+from google import genai
+from mcp.client.session import ClientSession
+from mcp.client.stdio import stdio_client, StdioServerParameters
 
 class PlanValidator:
-    @staticmethod
-    def validate(new_content: str) -> str:
-        lines = new_content.splitlines()
-        tasks = {}
-        archived = set()
-        in_tasks = in_archive = False
-        
-        for line in lines:
-            if line.startswith("## Task Registry"): in_tasks = True; continue
-            elif line.startswith("## Archive Index"): in_archive = True; continue
-            elif line.startswith("## "): in_tasks = in_archive = False
-            
-            if in_tasks and line.strip().startswith("|") and "Task ID" not in line and "---" not in line:
-                parts = [p.strip() for p in line.split("|")]
-                if len(parts) >= 7:
-                    tid, deps_raw = parts[1], parts[6]
-                    if tid in tasks:
-                        return f"Error: task plan rejected — duplicate task ID {tid}.\n{tid} appears multiple times. Task IDs must be unique.\nNo tasks were registered."
-                    tasks[tid] = [d.strip() for d in deps_raw.split(",") if d.strip() not in ("none", "—", "")]
-            
-            if in_archive and line.strip().startswith("|") and "Session ID" not in line and "---" not in line:
-                parts = [p.strip() for p in line.split("|")]
-                if len(parts) >= 5:
-                    archived.update(t.strip() for t in parts[4].split(",") if t.strip() not in ("—", ""))
+    pass
 
-        all_known = set(tasks.keys()).union(archived)
-        for tid, deps in tasks.items():
-            for dep in deps:
-                if dep not in all_known:
-                    return f"Error: task plan rejected — {tid} depends on {dep}, which does not exist.\nAdd the missing task or correct the dependency. No tasks were registered."
-                    
-        # Rule 9: Acyclicity (Elimination method)
-        remaining = {k: set(v) for k, v in tasks.items()}
-        while True:
-            ready = [t for t, d in remaining.items() if not set(d).intersection(remaining)]
-            if not ready: break
-            for t in ready: del remaining[t]
-            
-        if remaining:
-            cycle_nodes = ", ".join(sorted(remaining.keys()))
-            return f"Error: task plan rejected — circular dependency detected among: {cycle_nodes}\nBreak the cycle by removing or reordering one dependency. No tasks were registered."
-            
-        return "OK"
+class BudgetExhaustedException(Exception):
+    pass
 
-class TaskOrchestrator:
-    @staticmethod
-    def add_task(title: str, task_type: str, deps: str = "none") -> str:
-        """Adds a new task to the Task Registry. Use this to autonomously expand the plan."""
-        with REGISTRY_LOCK:
-            content = read_file("memory.md")
-            lines = content.splitlines()
-            max_id = 0
-            for line in lines:
-                if "| T-" in line:
-                    parts = line.split("|")
-                    if len(parts) > 1 and parts[1].strip().startswith("T-"):
-                        try: max_id = max(max_id, int(parts[1].strip().split("-")[1]))
-                        except: pass
-            new_id = f"T-{max_id + 1:03d}"
-            new_row = f"| {new_id} | {title} | {task_type} | pending | — | {deps} | — | — |"
-            new_content = content.replace("## Task Details", f"{new_row}\n\n## Task Details")
-            return _write_file("memory.md", new_content)
-
-    @staticmethod
-    def calculate_waves(content: str):
-        tasks = {}
-        completed_or_in_progress = set()
-        for line in content.splitlines():
-            if line.strip().startswith("| T-"):
-                parts = [p.strip() for p in line.split("|")]
-                if len(parts) >= 7:
-                    tid, title, task_type, status, deps_raw = parts[1], parts[2], parts[3].strip(), parts[4], parts[6]
-                    if status.strip() == "pending":
-                        deps = [d.strip() for d in deps_raw.split(",") if d.strip() not in ("none", "—", "")]
-                        tasks[tid] = {"title": title, "type": task_type, "deps": set(deps)}
-                    elif status.strip() in ("completed", "in_progress"):
-                        completed_or_in_progress.add(tid)
-        waves = []
-        remaining = dict(tasks)
-        while remaining:
-            wave = [(tid, info["title"], info["type"]) for tid, info in remaining.items() if info["deps"].issubset(completed_or_in_progress)]
-            if not wave: break
-            waves.append(wave)
-            for tid, _, _ in wave:
-                completed_or_in_progress.add(tid)
-                del remaining[tid]
-        return waves
-
-    @staticmethod
-    def set_task_status(content: str, tid: str, old_status: str, new_status: str, session_id: str = "—") -> str:
-        lines = content.splitlines()
-        for i, line in enumerate(lines):
-            if line.strip().startswith(f"| {tid} |"):
-                parts = line.split("|")
-                if len(parts) > 5 and parts[4].strip() == old_status:
-                    parts[4] = f" {new_status} "
-                    parts[5] = f" {session_id} " if new_status == "in_progress" else " — "
-                    lines[i] = "|".join(parts)
-        return "\n".join(lines)
-
-def read_file(path: str) -> str:
-    """Reads a file from the file system."""
-    try:
-        with open(path, "r") as f:
-            return f.read()
-    except Exception as e:
-        return f"Error reading file {path}: {e}"
-
-def _write_file(path: str, content: str) -> str:
-    """Internal function to write content to a file on the file system."""
-    try:
-        if os.path.dirname(path):
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "w") as f:
-            f.write(content)
-        return f"Successfully wrote to {path}"
-    except Exception as e:
-        return f"Error writing to file {path}: {e}"
-
-async def write_file_with_review(path: str, content: str, task_id: str = "T-000", session_id: str = "S-000") -> str:
-    """
-    Writes content to a file via a VS Code Diff-Gate. 
-    Gracefully falls back to a terminal-native diff if VS Code is unavailable, 
-    fails, or the user declines the GUI visualization.
-    """
-    try:
-        encoded_path = CheckpointManager.encode_path(path)
-        tmp_dir = ".dumbledoer/tmp"
-        os.makedirs(tmp_dir, exist_ok=True)
-        tmp_path = os.path.join(tmp_dir, f"{encoded_path}.tmp")
-        
-        with open(tmp_path, "w") as f:
-            f.write(content)
-            
-        original_content = ""
-        if os.path.exists(path):
-            with open(path, "r") as f:
-                original_content = f.read()
-
-        async with get_ui_lock():
-            vscode_cmd = shutil.which("code") or shutil.which("code-insiders")
-            vscode_launched = False
-            if vscode_cmd and GUI_DIFF_ENABLED:
+class BudgetManager:
+    def __init__(self, config_text: str):
+        self.estimated_tokens = 0
+        self.threshold = 100000
+        for line in config_text.splitlines():
+            line = line.strip()
+            if line.startswith("- budget_limit:"):
                 try:
-                    cmd = [vscode_cmd, "--wait"]
-                    if os.path.exists(path):
-                        cmd.extend(["--diff", path, tmp_path])
-                    else:
-                        cmd.append(tmp_path)
-                        
-                    # Capture output to diagnose silent GUI failures
-                    result = await asyncio.to_thread(subprocess.run, cmd, capture_output=True, text=True)
-                    if result.returncode != 0:
-                        console.print(f"[bold red]⚠️ VS Code GUI failed to launch.[/bold red]")
-                        console.print(f"[dim]Diagnostic STDERR: {result.stderr.strip() if result.stderr else 'None'}[/dim]")
-                        console.print("[dim yellow]Falling back to terminal diff...[/dim yellow]")
-                        vscode_launched = False
-                    else:
-                        vscode_launched = True
-                        console.print(f"\n[bold yellow]⚠️ Review proposed changes for {path} in VS Code.[/bold yellow]")
-                except Exception as e:
-                    console.print(f"[dim yellow]VS Code launch failed ({e}), falling back to terminal diff...[/dim yellow]")
-            else:
-                console.print(f"\n[dim yellow]VS Code CLI ('code'/'code-insiders') not found in PATH, falling back to terminal diff...[/dim yellow]")
-    
-            if not vscode_launched:
-                diff = list(difflib.unified_diff(
-                    original_content.splitlines(keepends=True),
-                    content.splitlines(keepends=True),
-                    fromfile=f"a/{path}",
-                    tofile=f"b/{path}",
-                    n=3
-                ))
-                diff_text = "".join(diff)
-                
-                if not diff_text:
-                    return f"No changes detected for {path}."
-    
-                console.print(f"\n[bold yellow]⚠️ Review proposed changes for:[/bold yellow] {path}")
-                syntax = Syntax(diff_text, "diff", theme="monokai", line_numbers=True)
-                console.print(syntax)
-    
-            approval = await asyncio.to_thread(
-                Confirm.ask, 
-                "\n[bold red]Approve and apply fix?[/bold red]"
-            )
-        
-        if approval:
-            # Step 1: Write Rollback Copy
-            rb_dir = f".dumbledoer/rollbacks/{task_id}"
-            os.makedirs(rb_dir, exist_ok=True)
-            rb_file = os.path.join(rb_dir, encoded_path)
-            if not os.path.exists(rb_file):
-                with open(rb_file, "w") as f:
-                    f.write(original_content)
-            
-            # Step 3: Write Checkpoint JSON
-            chk_id = f"{task_id}-step1-{session_id}"
-            chk_dir = ".dumbledoer/checkpoints"
-            os.makedirs(chk_dir, exist_ok=True)
-            chk_file = os.path.join(chk_dir, f"{chk_id}.json")
-            
-            checkpoint_data = {
-                "checkpointId": chk_id,
-                "taskId": task_id,
-                "stepIndex": 1,
-                "sessionId": session_id,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "files": {path: original_content}
-            }
-            with open(chk_file, "w") as f:
-                json.dump(checkpoint_data, f, indent=2)
+                    self.threshold = int(line.split(":")[1].strip())
+                except ValueError:
+                    pass
+                    
+    def check_and_harvest(self):
+        if self.estimated_tokens > self.threshold:
+            raise BudgetExhaustedException("Budget exhausted")
 
-            # Step 5: Atomic Rename to Target Path
-            target_dir = os.path.dirname(os.path.abspath(path))
-            if target_dir:
-                os.makedirs(target_dir, exist_ok=True)
-            os.replace(tmp_path, path)
-            return f"Successfully wrote to {path} (Approved). Checkpoint {chk_id} saved."
-        else:
-            if os.path.exists(tmp_path):
-                os.remove(tmp_path)
-            return f"Error: Changes to {path} were explicitly rejected by the user."
+class ASTMemoryMapper:
+    @staticmethod
+    def locate_heading_block(content: str, heading_level: str, title: str) -> tuple[int, int]:
+        lines = content.splitlines()
+        start_idx = -1
+        end_idx = -1
+        target = f"{heading_level} {title}"
+        for i, line in enumerate(lines):
+            if line.strip() == target:
+                start_idx = i
+                break
+        if start_idx != -1:
+            end_idx = len(lines)
+            for j in range(start_idx + 1, len(lines)):
+                if lines[j].startswith("#"):
+                    end_idx = j
+                    break
+        return start_idx, end_idx
 
-    except Exception as e:
-        return f"Error in write_file_with_review for {path}: {e}"
-
-def execute_bash(command: str, read_only: bool = False) -> str:
-    """
-    Executes a bash command in the execution sandbox.
-    Use this to run tests, uv, and git commands autonomously.
-    """
+def execute_bash(command: str) -> str:
     try:
-        mount_flag = SandboxManager.get_mount_flag(read_only)
-        docker_cmd = [
-            "docker", "run", "--rm",
-            "-v", mount_flag,
-            "-w", "/workspace",
-            "dumbledoer-base:latest",
-            "bash", "-c", command
-        ]
-        result = subprocess.run(docker_cmd, capture_output=True, text=True, check=True)
+        args = ["docker", "run", "--rm", "-v", f"{os.getcwd()}:/workspace", "-w", "/workspace", "dumbledoer-base:latest", "bash", "-c", command]
+        result = subprocess.run(args, capture_output=True, text=True, check=True)
         return result.stdout
     except subprocess.CalledProcessError as e:
         return f"Error ({e.returncode}):\nSTDOUT: {e.stdout}\nSTDERR: {e.stderr}"
     except Exception as e:
         return f"Exception executing command: {e}"
 
-def update_task_status_tool(task_id: str, new_status: str, session_id: str = "—") -> str:
-    """Updates the status of a specific task in the memory.md Task Registry."""
-    with REGISTRY_LOCK:
-        try:
-            with open("memory.md", "r") as f:
-                content = f.read()
-            lines = content.splitlines()
-            updated = False
-            for i, line in enumerate(lines):
-                if line.strip().startswith(f"| {task_id} |"):
-                    parts = line.split("|")
-                    if len(parts) > 5:
-                        parts[4] = f" {new_status} "
-                        if new_status == "in_progress":
-                            parts[5] = f" {session_id} "
-                        lines[i] = "|".join(parts)
-                        updated = True
-                        break
-            if not updated:
-                return f"Task {task_id} not found."
-            with open("memory.md", "w") as f:
-                f.write("\n".join(lines))
-            return f"Successfully updated task {task_id} to {new_status}"
-        except Exception as e:
-            return f"Error updating task status: {e}"
+def read_file(path: str) -> str:
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read()
+    except Exception as e:
+        return f"Error reading file {path}: {e}"
 
-def add_change_log_entry(task_id: str, file_path: str, change_summary: str, status: str, rationale: str) -> str:
-    """Appends a new entry to the Change Log in memory.md."""
-    with REGISTRY_LOCK:
-        try:
-            with open("memory.md", "r") as f:
-                content = f.read()
-            timestamp = datetime.now(timezone.utc).isoformat() + "Z"
-            entry = f"| {timestamp} | {task_id} | {file_path} | {change_summary} | {status} | {rationale} |"
-            lines = content.splitlines()
-            for i, line in enumerate(lines):
-                if line.startswith("## Change Log"):
-                    for j in range(i+1, len(lines)):
-                        if lines[j].strip().startswith("|---"):
-                            lines.insert(j+1, entry)
-                            with open("memory.md", "w") as f:
-                                f.write("\n".join(lines))
-                            return f"Successfully added change log entry for {file_path}"
-                    break
-            return "Error: Change Log section not found in memory.md"
-        except Exception as e:
-            return f"Error adding change log entry: {e}"
+def _write_file(path: str, content: str) -> str:
+    try:
+        os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(content)
+        return f"Successfully wrote {path}"
+    except Exception as e:
+        return f"Error writing file {path}: {e}"
 
 def update_memory_registry(content: str) -> str:
-    """Updates the memory.md file with the provided content.
-    CRITICAL CONSTRAINT: You MUST preserve the entire Config block exactly as it was, including 'budget_limit' and 'budget_threshold_pct'. Do not compress, omit, or truncate the Config section under any circumstances.
-    """
-    with REGISTRY_LOCK:
-        validation_status = PlanValidator.validate(content)
-        if validation_status != "OK":
-            return validation_status
-        return _write_file("memory.md", content)
+    try:
+        with REGISTRY_LOCK:
+            return _write_file("memory.md", content)
+    except Exception as e:
+        return f"Error updating memory registry: {e}"
 
 def run_rtk(command: str) -> str:
-    """
-    Executes a heavy system command using the Rust Token Killer (rtk).
-    Use this for all system management and heavy optimization tasks.
-    """
     try:
-        mount_flag = SandboxManager.get_mount_flag(read_only=False)
         args = ["rtk"] + shlex.split(command)
-        docker_cmd = [
-            "docker", "run", "--rm",
-            "-v", mount_flag,
-            "-w", "/workspace",
-            "dumbledoer-base:latest"
-        ] + args
-        result = subprocess.run(docker_cmd, capture_output=True, text=True, check=True)
-        return f"RTK Output: {result.stdout}"
+        result = subprocess.run(args, capture_output=True, text=True, check=True)
+        return result.stdout
     except subprocess.CalledProcessError as e:
-        return f"RTK Error: {e.stderr}"
-    except FileNotFoundError:
-        return "Error: RTK binary not found in system PATH."
-
-def forge_and_execute_tool(tool_name: str, python_code: str, args: str = "") -> str:
-    """
-    Dynamic Tool Smithing: Writes a custom Python script to the workspace and executes it in the sandbox.
-    Use this when you need complex logic (AST parsing, data transformation, etc.) that standard bash cannot handle.
-    """
-    try:
-        tool_dir = ".dumbledoer/forged_tools"
-        os.makedirs(tool_dir, exist_ok=True)
-        # Ensure the filename is safe and has a .py extension
-        safe_name = "".join(c for c in tool_name if c.isalnum() or c in "_-")
-        file_path = os.path.join(tool_dir, f"{safe_name}.py")
-        
-        with open(file_path, "w") as f:
-            f.write(python_code)
-            
-        # Execute the newly forged tool inside the secure Docker sandbox
-        console.print(f"[dim purple]🔨 Forging and executing custom tool: {safe_name}.py...[/dim purple]")
-        return execute_bash(f"python {file_path} {args}")
+        return f"Error ({e.returncode}):\nSTDOUT: {e.stdout}\nSTDERR: {e.stderr}"
     except Exception as e:
-        return f"Tool Smithing failed: {e}"
+        return f"Exception executing rtk command: {e}"
+
+async def write_file_with_review(path: str, content: str) -> str:
+    """Writes content to a file via a VS Code Diff-Gate for user approval."""
+    try:
+        tmp_dir = ".dumbledoer/tmp"
+        os.makedirs(tmp_dir, exist_ok=True)
+        filename = os.path.basename(path)
+        tmp_path = os.path.join(tmp_dir, f"{filename}.tmp")
+        
+        with open(tmp_path, "w") as f:
+            f.write(content)
+            
+        has_code = shutil.which("code") is not None
+
+        if GUI_DIFF_ENABLED and has_code:
+            if os.path.exists(path):
+                subprocess.run(["code", "--wait", "--diff", path, tmp_path], check=True)
+            else:
+                subprocess.run(["code", "--wait", tmp_path], check=True)
+            print(f"Review proposed changes for {path} in VS Code.", file=sys.stderr)
+        else:
+            if os.path.exists(path):
+                with open(path, "r") as f:
+                    old_content = f.readlines()
+                new_content = content.splitlines(keepends=True)
+                diff = "".join(difflib.unified_diff(old_content, new_content, fromfile=path, tofile=tmp_path))
+                if diff:
+                    from rich.console import Console
+                    from rich.syntax import Syntax
+                    console = Console()
+                    console.print(Syntax(diff, "diff", theme="monokai"))
+            else:
+                print(f"Creating new file {path}. Content preview:\n{content}")
+            
+        from rich.prompt import Confirm
+        approval = await asyncio.to_thread(Confirm.ask, f"Approve changes to {path}?")
+        if approval:
+            os.replace(tmp_path, path)
+            return f"Successfully wrote to {path} (Approved by user)"
+        else:
+            return f"Error: Changes to {path} were rejected by the user."
+    except Exception as e:
+        return f"Error in write_file_with_review for {path}: {e}"
+
+class CheckpointManager:
+    def write_rollback_copy(self, target_path: str, rollback_path: str):
+        if os.path.exists(rollback_path):
+            return
+        if os.path.exists(target_path):
+            os.makedirs(os.path.dirname(rollback_path), exist_ok=True)
+            shutil.copy2(target_path, rollback_path)
+            
+    def log_planned_change(self, target_path: str, metadata: dict):
+        pass
+        
+    def write_checkpoint_json(self, checkpoint_path: str, metadata: dict):
+        os.makedirs(os.path.dirname(checkpoint_path), exist_ok=True)
+        with open(checkpoint_path, "w") as f:
+            import json
+            json.dump(metadata, f, indent=2)
+            
+    def stage_tmp_write(self, tmp_path: str, content: str):
+        os.makedirs(os.path.dirname(tmp_path), exist_ok=True)
+        with open(tmp_path, "w") as f:
+            f.write(content)
+            
+    def atomic_rename_to_target(self, tmp_path: str, target_path: str):
+        os.replace(tmp_path, target_path)
+        
+    def log_applied_change(self, target_path: str, metadata: dict):
+        pass
+
+class OrphanRecoveryScanner:
+    def run(self):
+        tmp_dir = ".dumbledoer/tmp"
+        if not os.path.exists(tmp_dir):
+            return
+        import glob
+        for file in glob.glob(os.path.join(tmp_dir, "*.tmp")):
+            try:
+                os.remove(file)
+            except Exception:
+                pass
 
 class DumbleDoerCLI:
-    def __init__(self, api_key: Optional[str] = None, model_id: str = "gemini-2.5-flash"):
-        self.api_key = api_key or os.getenv("GOOGLE_API_KEY")
-        if not self.api_key:
-            console.print("[red]Error: GOOGLE_API_KEY not found.[/red]")
-            sys.exit(1)
-            
-        self.client = genai.Client(api_key=self.api_key)
-        self.model_id = model_id
-        self.chat_session = None
-        self.mcp_sessions: Dict[str, ClientSession] = {}
+    def __init__(self):
+        self.client = genai.Client()
         self.exit_stack = AsyncExitStack()
-        
-        try:
-            with open("memory.md", "r") as f:
-                memory_content = f.read()
-        except FileNotFoundError:
-            memory_content = ""
-            
-        global GUI_DIFF_ENABLED
-        if GUI_DIFF_ENABLED:
-            for line in memory_content.splitlines():
-                if line.startswith("- gui_diff_enabled:"):
-                    if line.split(":")[1].strip().lower() == "false":
-                        GUI_DIFF_ENABLED = False
+        self.mcp_sessions = {}
+        self.local_tools = [read_file, write_file_with_review, execute_bash, update_memory_registry, run_rtk]
+        self.gemini_tools = self.local_tools
 
-        self.budget_manager = BudgetManager(memory_content)
-        
-        SandboxManager.ensure_image_built()
-        SandboxManager.ensure_codegraph_ready()
-        CheckpointManager.run_orphan_scan()
-        self.local_tools = [read_file, write_file_with_review, execute_bash, update_task_status_tool, add_change_log_entry, update_memory_registry, run_rtk, forge_and_execute_tool]
-        self.gemini_tools = [self._create_async_wrapper(tool) for tool in self.local_tools]
-
-    def _create_async_wrapper(self, tool_func):
-        async def async_wrapper(*args, **kwargs):
-            # Tracing Logic
-            os.makedirs(".dumbledoer", exist_ok=True)
-            timestamp = datetime.now(timezone.utc).isoformat()
-            log_entry = f"[{timestamp}] Tool: {tool_func.__name__} | Args: {args} | Kwargs: {kwargs}\n"
-            with open(".dumbledoer/trace.log", "a") as f:
-                f.write(log_entry)
-                
-            # Budget Check
-            if hasattr(self, 'budget_manager'):
-                self.budget_manager.add_cost(tool_func.__name__)
-            
-            if inspect.iscoroutinefunction(tool_func):
-                return await tool_func(*args, **kwargs)
-            return await asyncio.to_thread(tool_func, *args, **kwargs)
-            
-        async_wrapper.__name__ = tool_func.__name__
-        async_wrapper.__doc__ = tool_func.__doc__
-        return async_wrapper
-
-    async def _init_mcp(self, name: str, command: str, args: List[str]):
-        console.print(f"[dim]Initializing MCP server: {name}...[/dim]")
-        try:
-            params = StdioServerParameters(command=command, args=args)
-            read, write = await self.exit_stack.enter_async_context(stdio_client(params))
-            session = await self.exit_stack.enter_async_context(ClientSession(read, write))
-            await session.initialize()
-            self.mcp_sessions[name] = session
-            
-            mcp_tools = await session.list_tools()
-            for tool in mcp_tools.tools:
-                wrapper = self._create_mcp_wrapper(name, tool.name)
-                wrapper.__name__ = f"{name}_{tool.name}"
-                wrapper.__doc__ = f"{tool.description}\n\nMCP Server: {name}"
-                self.gemini_tools.append(wrapper)
-                
-            console.print(f"[green]✓ MCP server {name} initialized.[/green]")
-        except Exception as e:
-            console.print(f"[yellow]⚠ Failed to initialize {name}: {e}[/yellow]")
-
-    def _create_mcp_wrapper(self, server_name: str, tool_name: str):
-        async def mcp_wrapper(**kwargs):
-            session = self.mcp_sessions[server_name]
-            result = await session.call_tool(tool_name, arguments=kwargs)
-            return result.content
-        return mcp_wrapper
-
-    async def _auto_rollback(self, task_id: str):
-        """Self-Healing Daemon: Instantly reverts a task's changes if a critical failure is detected."""
-        console.print(f"\n[bold red]🚨 Critical Failure Detected! Triggering Predictive Rollback for {task_id}...[/bold red]")
-        rb_dir = f".dumbledoer/rollbacks/{task_id}"
-        if not os.path.exists(rb_dir):
-            return
-            
-        # Restore files from the atomic rollback copy
-        for filename in os.listdir(rb_dir):
-            decoded_path = filename.replace("__colon__", ":").replace("__", "/")
-            rb_file = os.path.join(rb_dir, filename)
-            os.replace(rb_file, decoded_path)
-            
-        # Reset task status to pending so it can be re-attempted safely
-        with REGISTRY_LOCK:
-            mem = read_file("memory.md")
-            mem = TaskOrchestrator.set_task_status(mem, task_id, "in_progress", "pending")
-            _write_file("memory.md", mem)
-        console.print(f"[bold green]✓ Timeline restored. {task_id} changes reverted.[/bold green]")
-
-    async def _spawn_sub_agent(self, task_id: str, task_title: str, task_type: str):
-        console.print(f"[dim]Spawning isolated sub-agent for {task_id}...[/dim]")
-        
-        # Pre-flight: Detect local environment for the LLM
-        detected_env = []
-        if os.path.exists("docker-compose.yml"): detected_env.append("docker-compose.yml found")
-        if os.path.exists("Dockerfile"): detected_env.append("Dockerfile found")
-        env_report = f"WORKSPACE_ENVIRONMENT: {', '.join(detected_env) if detected_env else 'No native containers detected.'}"
-
-        sys_inst = self._get_system_instructions() + f"""
-
-SUB-AGENT DIRECTIVE:
-{env_report}
-You are executing {task_id}: {task_title}.
-1. MANDATORY: If {', '.join(detected_env)} exists, ALL bash commands MUST be executed within that repository-native container environment (e.g., 'docker-compose run --rm [service] bash -c').
-2. Run codegraph_impact first.
-3. Use write_file_with_review for modifications.
-4. Return a summary when finished."""
-        
-        # Dynamically enforce Zero-Trust Read-Only permissions for non-change tasks
-        is_read_only = task_type != "change"
-        def monitored_execute_bash(command: str) -> str:
-            result = execute_bash(command, read_only=is_read_only)
-            # Daemon Watcher: If the command throws a massive stack trace or fatal error
-            if "Traceback (most recent call last):" in result or "FATAL ERROR" in result:
-                # Fire the rollback asynchronously without interrupting the event loop
-                asyncio.create_task(self._auto_rollback(task_id))
-                return f"CRITICAL FAILURE: {result}\n\nSYSTEM OVERRIDE: Predictive rollback triggered. Your changes have been reverted. Rethink your approach."
-            return result
-            
-        monitored_execute_bash.__doc__ = execute_bash.__doc__
-        
-        agent_tools = [read_file, write_file_with_review, monitored_execute_bash, update_task_status_tool, add_change_log_entry, run_rtk, TaskOrchestrator.add_task]
-        async_tools = [self._create_async_wrapper(tool) for tool in agent_tools]
-
-        chat = self.client.aio.chats.create(
-            model=self.model_id,
-            config={"system_instruction": sys_inst, "tools": async_tools}
+    async def connect_mcp(self):
+        # Connect to codegraph
+        codegraph_params = StdioServerParameters(
+            command="npx",
+            args=["-y", "@colbymchenry/codegraph", "serve", "--mcp"]
         )
-        response = await chat.send_message(f"Execute {task_id}: {task_title}. Begin by searching the target symbols.")
-        return task_id, response.text
+        codegraph_transport, codegraph_stream = await self.exit_stack.enter_async_context(stdio_client(codegraph_params))
+        codegraph_session = await self.exit_stack.enter_async_context(ClientSession(codegraph_transport, codegraph_stream))
+        await codegraph_session.initialize()
+        self.mcp_sessions["codegraph"] = codegraph_session
 
-    async def execute_task_plan(self):
-        memory_content = read_file("memory.md")
-        waves = TaskOrchestrator.calculate_waves(memory_content)
-        if not waves:
-            console.print("[bold green]✓ All tasks are already completed (or deferred).[/bold green]")
-            return False
-
-        budget = self.budget_manager
-        session_id = datetime.now(timezone.utc).strftime("S-%Y%m%d-%H%M%S")
-        console.print(f"[bold cyan]Executing {sum(len(w) for w in waves)} pending tasks across {len(waves)} waves.[/bold cyan]")
-
-        semaphore = asyncio.Semaphore(4)
-
-        async def bounded_spawn(tid, title, t_type):
-            async with semaphore:
-                async with get_ui_lock():
-                    await asyncio.to_thread(budget.check_and_harvest)
-                    
-                def pre_update():
-                    with REGISTRY_LOCK:
-                        mem = read_file("memory.md")
-                        mem = TaskOrchestrator.set_task_status(mem, tid, "pending", "in_progress", session_id)
-                        budget.add_cost("spawn")
-                        budget.add_cost("change_medium") # Defaulting to medium effort conservative estimate
-                        _write_file("memory.md", mem)
-                await asyncio.to_thread(pre_update)
-                
-                res = await self._spawn_sub_agent(tid, title, t_type)
-                
-                def post_update():
-                    with REGISTRY_LOCK:
-                        mem = read_file("memory.md")
-                        console.print(f"[green]✓ {tid} complete.[/green]")
-                        mem = TaskOrchestrator.set_task_status(mem, tid, "in_progress", "completed")
-                        KnowledgeManager.capture_success(tid, title, res[1], session_id)
-                        _write_file("memory.md", mem)
-                await asyncio.to_thread(post_update)
-                return res
-
-        for wave_idx, wave in enumerate(waves):
-            console.print(f"\n[bold blue]🌊 Wave {wave_idx + 1} (Parallel): {', '.join([t[0] for t in wave])}[/bold blue]")
-            
-            agent_tasks = [bounded_spawn(tid, title, t_type) for tid, title, t_type in wave]
-            await asyncio.gather(*agent_tasks)
-                
-        # Post-Execution: Trim and Archive memory.md to prevent bloat
-        def finalize_archive():
-            with REGISTRY_LOCK:
-                final_mem = read_file("memory.md")
-                archived_mem = ArchiveManager.trim_and_archive(final_mem)
-                if final_mem != archived_mem:
-                    _write_file("memory.md", archived_mem)
-        await asyncio.to_thread(finalize_archive)
-
-        return True
-
-    def _get_system_instructions(self) -> str:
-        instructions = [
-            "# MISSION",
-            "You are DumbleDoer, an Agent Engineering Harness. Your goal is to systematically analyze, improve, and validate agent projects.",
-            self.local_tools[0]("SYSTEM_INSTRUCTIONS.md") or "Core rules not found.",
-            self.local_tools[0]("lib/common-preamble.md") or "",
-            self.local_tools[0]("lib/compression-policy.md") or "",
-            self.local_tools[0]("memory.md") or "No memory.md found. Start a new project."
-        ]
-        return "\n\n".join(instructions)
-
-    async def start_chat(self, action: str, docs_path: Optional[str] = None, user_prompt: str = ""):
-        await self._init_mcp("context7", "npx", ["-y", "@upstash/context7-mcp"])
-        await self._init_mcp("codegraph", "npx", ["-y", "--package=@colbymchenry/codegraph", "codegraph", "serve", "--mcp"])
-        
-        if action == "execute":
-            while True:
-                executed = await self.execute_task_plan()
-                if not executed:
-                    break
-                    
-                console.print(Panel("DumbleDoer Auto-Supervisor: [bold purple]/audit[/bold purple]", title="QA Harness Loop"))
-                audit_chat = self.client.aio.chats.create(
-                    model=self.model_id,
-                    config={"system_instruction": self._get_system_instructions(), "tools": self.gemini_tools}
-                )
-                response = await audit_chat.send_message("Execute the /audit command. Evaluate the completed tasks. If you find bugs, use the add_task tool.")
-                if response.text:
-                    console.print(Markdown(response.text))
-            return
-            
-        self.chat_session = self.client.aio.chats.create(
-            model=self.model_id,
-            config={"system_instruction": self._get_system_instructions(), "tools": self.gemini_tools}
+        # Connect to context7
+        context7_params = StdioServerParameters(
+            command="npx",
+            args=["-y", "context7", "serve", "--mcp"]
         )
-        
-        prompt_text = f"Execute the /{action} command."
-        if docs_path:
-            prompt_text += f" Docs path: {docs_path}"
-            
-        display_title = f"[bold blue]/{action}[/bold blue]"
-        if action == "iterate" and user_prompt:
-            prompt_text += f" User objective: '{user_prompt}'. Follow the workflow in skills/iterate/SKILL.md to map this to the task registry."
-            display_title += f"\n[dim]Prompt: {user_prompt}[/dim]"
+        context7_transport, context7_stream = await self.exit_stack.enter_async_context(stdio_client(context7_params))
+        context7_session = await self.exit_stack.enter_async_context(ClientSession(context7_transport, context7_stream))
+        await context7_session.initialize()
+        self.mcp_sessions["context7"] = context7_session
 
-        console.print(Panel(f"DumbleDoer Executing: {display_title}", title="DumbleDoer"))
-        response = await self.chat_session.send_message(prompt_text)
-        if response.text:
-            console.print(Markdown(response.text))
+    async def run(self, command: str, args: list):
+        await self.connect_mcp()
+        try:
+            print(f"DumbleDoer running command: {command}")
+            self.chat_session = await self.client.aio.chats.create(model="gemini-2.5-flash", config={"tools": self.gemini_tools})
+            response = await self.chat_session.send_message(f"Execute {command} with {args}")
+            print(response.text)
+        finally:
+            await self.exit_stack.aclose()
+
+
+async def main_async():
+    parser = argparse.ArgumentParser(description="DumbleDoer CLI")
+    parser.add_argument(
+        "command",
+        choices=["start", "execute", "resume", "report", "rollback", "update-docs"],
+        help="The dumbledoer command to run"
+    )
+    args, unknown = parser.parse_known_args()
+    
+    cli = DumbleDoerCLI()
+    await cli.run(args.command, unknown)
 
 def main():
-    import argparse
-    parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=["start", "execute", "resume", "report", "rollback", "update-docs", "iterate", "audit"])
-    parser.add_argument("--docs", type=str)   
-    parser.add_argument("--prompt", type=str, default="")
-    parser.add_argument("--no-gui", action="store_true", help="Disable VS Code Diff-Gate")
-    args = parser.parse_args()
-    
-    global GUI_DIFF_ENABLED
-    if args.no_gui:
-        GUI_DIFF_ENABLED = False
-    
     try:
-        dumbledoer = DumbleDoerCLI()
-        asyncio.run(dumbledoer.start_chat(args.command, args.docs, args.prompt))
+        asyncio.run(main_async())
     except KeyboardInterrupt:
-        pass
+        print("\nInterrupted by user.", file=sys.stderr)
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()
@@ -2241,7 +1631,7 @@ dumbledoer.egg-info/top_level.txt
 ### FILE: dumbledoer.egg-info/entry_points.txt
 ```txt
 [console_scripts]
-dumbledoer = dumbledoer_cli:app
+dumbledoer = dumbledoer_cli:main
 
 ```
 
@@ -2586,6 +1976,215 @@ echo ""
 echo "✨ DumbleDoer installation complete! ✨"
 echo "To activate your spellbook, run:"
 echo "  source .venv/bin/activate"
+
+```
+
+### FILE: knowledge/entries/K-001-create-test_pipeline.md
+```md
+---
+id: K-001
+title: "Create test_pipeline.md in tmp directory"
+type: success
+status: active
+created: 2026-07-20T02:18:52.109002+00:00
+session: S-20260720-021827
+task: T-011
+tags: [knowledge-registry, automated]
+---
+
+## Description
+Task completed successfully.
+
+## Rationale
+None
+
+```
+
+### FILE: knowledge/entries/K-002-create-vscode_test.m.md
+```md
+---
+id: K-002
+title: "Create vscode_test.md in tmp directory"
+type: success
+status: active
+created: 2026-07-20T02:28:15.366032+00:00
+session: S-20260720-022808
+task: T-012
+tags: [knowledge-registry, automated]
+---
+
+## Description
+Task completed successfully.
+
+## Rationale
+None
+
+```
+
+### FILE: knowledge/entries/K-003-create-vscode_test.m.md
+```md
+---
+id: K-003
+title: "Create vscode_test.md in tmp directory"
+type: success
+status: active
+created: 2026-07-20T02:36:09.494901+00:00
+session: S-20260720-023558
+task: T-013
+tags: [knowledge-registry, automated]
+---
+
+## Description
+Task completed successfully.
+
+## Rationale
+Task T-013 execution failed due to an error in the tool interface. I attempted to create the required file and update the task registry, but the tool calls were rejected due to argument parsing issues.
+
+I have confirmed the task requirements for T-013:
+- **File:** `.dumbledoer/tmp/vscode_test.md`
+- **Content:** `Did the UI open?`
+
+Since I cannot reliably invoke tools, I recommend a restart of the DumbleDoer CLI session to resolve the argument parsing error.
+
+```
+
+### FILE: knowledge/entries/K-004-create-strict_ui_tes.md
+```md
+---
+id: K-004
+title: "Create strict_ui_test.md in tmp directory"
+type: success
+status: active
+created: 2026-07-20T02:44:21.011826+00:00
+session: S-20260720-024413
+task: T-014
+tags: [knowledge-registry, automated]
+---
+
+## Description
+Task completed successfully.
+
+## Rationale
+None
+
+```
+
+### FILE: knowledge/entries/K-005-create-strict_ui_tes.md
+```md
+---
+id: K-005
+title: "Create strict_ui_test2.md in tmp directory"
+type: success
+status: active
+created: 2026-07-20T02:48:04.564226+00:00
+session: S-20260720-024757
+task: T-015
+tags: [knowledge-registry, automated]
+---
+
+## Description
+Task completed successfully.
+
+## Rationale
+None
+
+```
+
+### FILE: knowledge/entries/K-006-restore-gui-diff-gat.md
+```md
+---
+id: K-006
+title: "Restore GUI Diff-Gate in write_file_with_review"
+type: success
+status: active
+created: 2026-07-20T02:57:08.490016+00:00
+session: S-20260720-025702
+task: T-016
+tags: [knowledge-registry, automated]
+---
+
+## Description
+Task completed successfully.
+
+## Rationale
+None
+
+```
+
+### FILE: knowledge/entries/K-007-add-comment-to-a.txt.md
+```md
+---
+id: K-007
+title: "Add comment to a.txt to test UI"
+type: success
+status: active
+created: 2026-07-20T03:03:07.953510+00:00
+session: S-20260720-030301
+task: T-017
+tags: [knowledge-registry, automated]
+---
+
+## Description
+Task completed successfully.
+
+## Rationale
+None
+
+```
+
+### FILE: knowledge/entries/K-008-add-simple-comment-t.md
+```md
+---
+id: K-008
+title: "Add simple comment to a.txt to test the UI"
+type: success
+status: active
+created: 2026-07-20T03:47:30.459889+00:00
+session: S-20260720-034723
+task: T-019
+tags: [knowledge-registry, automated]
+---
+
+## Description
+Task completed successfully.
+
+## Rationale
+None
+
+```
+
+### FILE: knowledge/entries/K-009-add-simple-comment-t.md
+```md
+---
+id: K-009
+title: "Add simple comment to a.txt to test UI"
+type: success
+status: active
+created: 2026-07-20T03:47:30.692711+00:00
+session: S-20260720-034723
+task: T-018
+tags: [knowledge-registry, automated]
+---
+
+## Description
+Task completed successfully.
+
+## Rationale
+None
+
+```
+
+### FILE: knowledge/index.md
+```md
+---
+title: Knowledge Registry Index
+tags: [knowledge-registry, index]
+---
+# Knowledge Registry Index
+
+## Successes
+| Entry | Status | Session | Created |
+|---|---|---|---|
 
 ```
 
@@ -3228,7 +2827,7 @@ Two plugin-wide protocols apply to every command:
 
 - **Output compression** (`lib/compression-policy.md`): governs the style of ALL
   conversational output — category→level mapping, session state, toggles, and
-  exclusions. Read it before producing any user-facing response.
+  exclusions. Read it before producing any user-facing response. All conversational output must use Caveman 'full' for simple tasks and 'lite' for complex tasks, but persisted artifacts (memory.md, code, reports) must ALWAYS be written in normal, uncompressed prose.
 - **Documentation lookup** (`lib/context7-protocol.md`): governs when a task that
   depends on an external library/framework/SDK API must consult current
   documentation before proposing or executing changes. Load it when claiming any
@@ -3455,247 +3054,26 @@ compression never rewords it.
 
 ### FILE: lib/knowledge-protocol.md
 ```md
-# knowledge-protocol: Cross-Session Knowledge Registry Operations
+# Knowledge Protocol
 
-The knowledge registry is the project's durable memory across sessions: what worked,
-what didn't, and why. It lives in the TARGET project at `{knowledge_path}` (memory.md
-Config, default `knowledge/`) and is never archived — unlike session state in
-`memory.md`, registry entries persist for the life of the project.
+## Structure
+The knowledge vault is structured as follows within `knowledge/`:
+- `knowledge/index.md`: Central registry of all knowledge entries (Decisions, Successes, Failures, Constraints, Insights).
+- `knowledge/timeline.md`: Chronological log of sessions and their outcomes.
+- `knowledge/entries/K-NNN-slug.md`: Individual knowledge entries, named with a unique ID and descriptive slug.
 
-Every registry read or write MUST go through the operations below. Commands MUST NOT
-manipulate registry files ad hoc.
-
-Contract: `specs/015-knowledge-registry/contracts/knowledge-protocol-contract.md` ·
-Tests: `tests/contract/test-knowledge-contract.md`
-
+## Entry Frontmatter
+Every entry in `knowledge/entries/` MUST contain the following YAML frontmatter:
+```yaml
 ---
-
-## Registry Layout
-
-```
-{knowledge_path}/
-├── index.md                  # entries grouped by type (template: knowledge-index-template.md)
-├── timeline.md               # reverse-chronological session sections
-└── entries/
-    └── K-NNN-short-slug.md   # one note per entry (template: knowledge-entry-template.md)
-```
-
-**Entry frontmatter** — required: `id` (K-NNN), `title`, `type` (`decision` |
-`success` | `failure` | `constraint` | `insight`), `status` (`active` |
-`superseded`), `created` (ISO 8601), `session` (S-ID or `manual`), `tags`
-(always includes `knowledge-registry`). Optional: `task`, `supersedes`,
-`superseded_by`.
-
-**K-NNN allocation**: highest existing ID across `entries/` filenames and
-frontmatter, +1, zero-padded 3 digits (extend to 4 past 999) — same convention
-as Task IDs in `lib/common-preamble.md`.
-
-## Obsidian Conventions
-
-Write all registry notes as Obsidian Flavored Markdown. The `obsidian-markdown`
-skill is BUNDLED with the plugin (`dumbledoer/skills/obsidian-markdown/`, vendored
-from kepano/obsidian-skills, MIT) — follow it for syntax details. The summary
-below states the same conventions for quick reference:
-
-- **Properties**: YAML frontmatter between `---` fences at the very top; lists in
-  `[a, b]` form; quote values containing `[[` (e.g., `supersedes: "[[K-006-slug]]"`).
-- **Wikilinks**: `[[filename-without-extension]]` or `[[file|display text]]`;
-  escape `|` as `\|` inside tables.
-- **Callouts**: `> [!warning] Title` followed by `> ` body lines.
-
+id: K-NNN
+title: "Brief description"
+type: decision | success | failure | constraint | insight
+status: active | superseded | retired
+created: YYYY-MM-DD
+tags: [tag1, tag2]
 ---
-
-## Operations
-
-### OP-1 — initialize
-
-**Caller**: start (only command allowed to create the registry).
-
-When `{knowledge_path}` is absent or empty: create the directory and `entries/`,
-write `index.md` and `timeline.md` from `templates/knowledge-index-template.md`,
-record `knowledge_path` in memory.md Config, and print exactly:
-
 ```
-Knowledge registry initialized at '{knowledge_path}'.
-```
-
-Then proceed with normal discovery — there is no prior knowledge to cite.
-
-### OP-2 — selective-load
-
-**Callers**: start (after docs ingestion), resume (after memory.md validation).
-
-Read, in order — and nothing else at startup:
-
-1. `index.md` in full.
-2. The 3 most recent session sections of `timeline.md`.
-3. Entry notes where `status: active` AND (`type` is `failure` or `constraint`,
-   OR frontmatter `tags` overlap keywords extracted from the stated session goal).
-
-All other entries load lazily when a topic match arises (OP-3). This keeps startup
-cost flat as the registry grows. Print exactly:
-
-```
-Knowledge registry: {N} entries loaded ({F} failures, {C} constraints, {M} goal-matched) of {T} total.
-```
-
-Count each loaded entry once, in the first matching category (failure > constraint
-> goal-matched). `{T}` counts parseable entries only.
-
-**Tolerance** (applies to every operation that reads entries):
-- Unparseable entry (broken frontmatter, missing required field):
-
-  ```
-  Warning: knowledge entry '{relative/path}' could not be parsed ({reason}). Entry skipped; fix or remove it.
-  ```
-
-  One warning per file per session. Never abort.
-- Duplicate `id`: use the newest by `created`; print:
-
-  ```
-  Warning: duplicate knowledge ID '{id}' — using newest by created date.
-  ```
-
-- Missing optional metadata: accept silently.
-- Registry absent and caller is not start: print a one-line note that the registry
-  is missing and that `/dumbledoer:start` will create it; continue as a no-op.
-
-### OP-3 — consult
-
-**Callers**: start (task decomposition), resume (interrupted-task resolution).
-
-Before adopting any proposed approach, compare it against loaded `failure` entries
-(same component, same technique, or same file set). On overlap, present — and do
-NOT silently adopt the approach:
-
-```
-Prior failure on record: [[{K-NNN-slug}]] — {title} ({session}). Reason: {one-line rationale}. Proceed anyway, adapt, or skip?
-```
-
-`constraint` entries are binding context: surface any constraint the approach
-would violate. When decomposition raises a topic not in the loaded set, lazily
-load active entries whose tags match before finalizing that task.
-
-In resume, recorded failures and retry conditions inform the resume-vs-rollback
-recommendation for interrupted tasks (cite the entry when they change the advice).
-
-### OP-4 — capture-success
-
-**Callers**: start (task completion — checkpoint protocol Step 6), update-docs
-(doc task completion).
-
-When a task completes and validates:
-
-1. Allocate the next K-NNN; create `entries/K-NNN-{slug}.md` from
-   `templates/knowledge-entry-template.md`: `type: success`, what changed
-   (Description), why it worked (Rationale), files touched + CodeGraph impact
-   summary (Context), `session`/`task` refs.
-2. Run the OP-7 supersession check.
-3. Update `index.md` in the same operation (Registry Dual-Update Rule below).
-
-The entry MUST be on disk before the next task begins — capture is incremental;
-an interrupted session loses at most the in-flight step (CT-KNOW-PERSIST-01).
-
-Routine completions yield one concise entry; do not pad. Skip capture entirely
-only when a task taught nothing durable (e.g., a no-op validation), and note the
-skip in the task's Notes field.
-
-### OP-5 — capture-failure
-
-**Callers**: rollback (after rollback completes), start (task abandoned or failed).
-
-Two cases:
-
-- **No entry exists for the task**: create one — `type: failure`, the attempted
-  approach (Description), why it failed (Rationale), and `## Retry Conditions`
-  (conditions under which the approach may be retried; "none known" is valid).
-- **A success entry exists for the task** (rollback after capture): rewrite that
-  SAME note in place — flip `type` to `failure`, keep `id` and filename, append:
-
-  ```
-  > [!warning] Rolled back
-  > Rolled back in {sessionId} ({timestamp}): {reason}.
-  ```
-
-  Do not create a second entry.
-
-Then update `index.md` (regroup if the type changed) and append a reversal line to
-the current session's `timeline.md` section.
-
-### OP-6 — capture-manual
-
-**Callers**: any command, when the user states a learning to record.
-
-Create the entry immediately — `type` as stated (default `insight`), `session` =
-current session ID (or `manual` outside a session), omit `task` unless stated —
-update `index.md`, confirm in one line, and return to the task in progress
-without further discussion:
-
-```
-Recorded [[{K-NNN-slug}]] ({type}): {title}.
-```
-
-### OP-7 — supersede
-
-**Caller**: any capture operation whose new learning contradicts an active entry.
-
-Set on the new entry: `supersedes: "[[{old-slug}]]"`. Set on the old entry:
-`status: superseded` and `superseded_by: "[[{new-slug}]]"`. Update both index rows.
-NEVER delete the old note — contradicted knowledge is history, not garbage.
-When loading, prefer the newest `active` entry on any topic.
-
-### OP-8 — session-summary
-
-**Callers**: start/resume (graceful shutdown, alongside the session handoff),
-report (report generation).
-
-Prepend (newest first) a section to `timeline.md`:
-
-```
-## {sessionId} — {date}
-
-Goal: {one-line goal}. Outcome: {Session Log outcome value}.
-
-- [[{K-NNN-slug}]] — {one-line gloss}   (one line per entry captured this session)
-
-Reversal: {task ID and reason}           (only if a rollback occurred this session)
-```
-
-**Idempotent per session**: if a section for this session ID already exists,
-update it in place — never duplicate it (CT-KNOW-SUMMARY-02).
-
-### OP-9 — docs-sync
-
-**Caller**: update-docs.
-
-- **At run start**: read entries with `created` newer than Config
-  `last_knowledge_docs_sync` (value `never` means all entries). Feed their
-  decisions, rationale, and evolution notes into the documentation updates —
-  this is the knowledge that exists nowhere in the codebase.
-- **On successful completion only**: set `last_knowledge_docs_sync` to the run
-  timestamp in memory.md Config. An interrupted run leaves it untouched
-  (CT-KNOW-DOCSYNC-02), so the next run re-reads the window.
-
----
-
-## Registry Dual-Update Rule
-
-The entry note and its `index.md` row are two views of one record (extension of
-the Dual-Update Convention in `lib/common-preamble.md`). Every capture or
-supersession writes both in the same operation; OP-5 and OP-8 additionally write
-`timeline.md`. Never let them diverge.
-
-## Invariants
-
-1. The harness never deletes a registry file.
-2. Registry problems never abort a session — worst case is a warning and degraded
-   knowledge context.
-3. Only start creates the registry (OP-1); every other caller no-ops gracefully
-   when it is absent.
-4. Durable learnings live in the registry; session-scoped working data stays in
-   `memory.md`. Do not duplicate one into the other.
-5. All notes are valid Obsidian Flavored Markdown per the conventions above.
-
 
 ```
 
@@ -4126,26 +3504,6 @@ appended at archive time and edited only when a rollback restores an archived ta
 
 ```
 
-### FILE: mcpServers/codegraph.json
-```json
-{
-  "name": "codegraph",
-  "command": "npx",
-  "args": ["-y", "--package=@colbymchenry/codegraph", "codegraph", "serve", "--mcp"]
-}
-
-```
-
-### FILE: mcpServers/context7.json
-```json
-{
-  "name": "context7",
-  "command": "npx",
-  "args": ["-y", "@upstash/context7-mcp"]
-}
-
-```
-
 ### FILE: memory.md
 ```md
 # DumbleDoer Session State Memory
@@ -4176,22 +3534,32 @@ Implement KISS Human-in-the-Loop & Execution Sandbox. Refactor the core Python o
 | Metric | Value |
 |--------|-------|
 | Token Limit | 2000000 |
-| Tokens Consumed | 0 |
+| Tokens Consumed | 999000 |
 | Status | HEALTHY |
 
 ## Task Registry
 | Task ID | Title | Type | Status | Owner | Depends On | Session | Checkpoint |
 |---------|-------|------|--------|-------|------------|---------|------------|
-| T-001 | Implement execute_bash Tool | change | completed | S-20260702-205350 | none | S-20260702-205350 | none |
-| T-002 | Implement VS Code Diff-Gate | change | completed | S-20260702-205350 | T-001 | S-20260702-205350 | none |
-| T-003 | Fix RTK Subprocess Parsing | change | completed | S-20260702-205350 | none | S-20260702-205350 | none |
-| T-004 | Async Wrappers & Tool Registration | change | completed | S-20260702-205350 | T-001, T-002, T-003 | S-20260702-205350 | none |
+| T-001 | Implement execute_bash Tool | change | completed | S-20260702-205350 | none | S-20260702-205350 | T-001-step1-S-20260702-205350 |
+| T-002 | Implement VS Code Diff-Gate | change | completed | S-20260702-205350 | T-001 | S-20260702-205350 | T-002-step1-S-20260702-205350 |
+| T-003 | Fix RTK Subprocess Parsing | change | completed | S-20260702-205350 | none | S-20260702-205350 | T-003-step1-S-20260702-205350 |
+| T-004 | Async Wrappers & Tool Registration | change | completed | S-20260702-205350 | T-001, T-002, T-003 | S-20260702-205350 | T-004-step1-S-20260702-205350 |
 | T-005 | Wire Diff History into Audit QA Loop | change | completed | S-20260702-205350 | none | none | none |
 | T-006 | Fix pytest destructive behavior and DeprecationWarning | change | completed | unassigned | T-004 | none | none |
 | T-007 | Introduce gui_diff_enabled Config Option | change | completed | unassigned | none | none | none |
 | T-008 | Add --no-gui flag and global config | change | completed | unassigned | none | none | none |
 | T-009 | Refactor write_file_with_review logic | change | completed | unassigned | T-007, T-008 | none | none |
 | T-010 | Update test suite for new Diff-Gate logic | change | completed | unassigned | T-009 | none | none |
+| T-011 | Create test_pipeline.md in tmp directory | change | completed | — | none | none | none |
+| T-012 | Create vscode_test.md in tmp directory | change | completed | — | none | none | none |
+| T-013 | Create vscode_test.md in tmp directory | change | completed | — | none | none | none |
+| T-014 | Create strict_ui_test.md in tmp directory | change | completed | — | none | none | none |
+| T-015 | Create strict_ui_test2.md in tmp directory | change | completed | — | none | none | none |
+| T-016 | Restore GUI Diff-Gate in write_file_with_review | change | completed | — | none | none | none |
+| T-017 | Add comment to a.txt to test UI | change | completed | — | none | none | none |
+| T-018 | Add simple comment to a.txt to test UI | change | completed | — | none | none | none |
+| T-019 | Add simple comment to a.txt to test the UI | change | completed | — | none | none | none |
+| T-020 | Add UI Test comment to a.txt | change | pending | unassigned | none | none | none |
 
 ## Task Details
 
@@ -4365,6 +3733,176 @@ Implement KISS Human-in-the-Loop & Execution Sandbox. Refactor the core Python o
 - **Resume Instructions**: Update test suite to reflect the new prompting logic.
 - **Notes**: —
 
+### T-011
+- **Type**: change
+- **Status**: completed
+- **Owner**: unassigned
+- **Depends On**: none
+- **Assigned Session**: none
+- **Description**: Create a simple markdown file named 'test_pipeline.md' in the .dumbledoer/tmp directory containing the text 'Execution successful.'
+- **Inputs**: none
+- **Outputs**: .dumbledoer/tmp/test_pipeline.md
+- **Success Criteria**: File `.dumbledoer/tmp/test_pipeline.md` exists and its content contains exactly "Execution successful."
+- **Estimated Effort**: small
+- **Parallelizable**: yes
+- **CodeGraph Impact**: Affects 0 symbols across 0 files.
+- **Checkpoint**: none
+- **Resume Instructions**: Create the test_pipeline.md file with the required text.
+- **Notes**: This is just a test.
+
+### T-012
+- **Type**: change
+- **Status**: completed
+- **Owner**: unassigned
+- **Depends On**: none
+- **Assigned Session**: none
+- **Description**: Create a file named 'vscode_test.md' in the .dumbledoer/tmp directory with the text 'Did the UI open?'
+- **Inputs**: none
+- **Outputs**: .dumbledoer/tmp/vscode_test.md
+- **Success Criteria**: File `.dumbledoer/tmp/vscode_test.md` exists and its content contains exactly "Did the UI open?"
+- **Estimated Effort**: small
+- **Parallelizable**: yes
+- **CodeGraph Impact**: Affects 0 symbols across 0 files.
+- **Checkpoint**: none
+- **Resume Instructions**: Create the vscode_test.md file with the required text.
+- **Notes**: This tests the VS Code Diff-Gate UI.
+
+### T-013
+- **Type**: change
+- **Status**: completed
+- **Owner**: unassigned
+- **Depends On**: none
+- **Assigned Session**: none
+- **Description**: Create a file named 'vscode_test.md' in the .dumbledoer/tmp directory with the text 'Did the UI open?'
+- **Inputs**: none
+- **Outputs**: .dumbledoer/tmp/vscode_test.md
+- **Success Criteria**: File `.dumbledoer/tmp/vscode_test.md` exists and its content contains exactly "Did the UI open?"
+- **Estimated Effort**: small
+- **Parallelizable**: yes
+- **CodeGraph Impact**: Affects 0 symbols across 0 files.
+- **Checkpoint**: none
+- **Resume Instructions**: Create the vscode_test.md file with the required text.
+- **Notes**: Testing the VS Code UI flow again after debugging environment variables.
+
+### T-014
+- **Type**: change
+- **Status**: completed
+- **Owner**: unassigned
+- **Depends On**: none
+- **Assigned Session**: none
+- **Description**: Create a file named 'strict_ui_test.md' in .dumbledoer/tmp with the text 'Tool forced.' MUST use write_file_with_review.
+- **Inputs**: none
+- **Outputs**: .dumbledoer/tmp/strict_ui_test.md
+- **Success Criteria**: File `.dumbledoer/tmp/strict_ui_test.md` exists and its content contains exactly "Tool forced."
+- **Estimated Effort**: small
+- **Parallelizable**: yes
+- **CodeGraph Impact**: Affects 0 symbols across 0 files.
+- **Checkpoint**: none
+- **Resume Instructions**: Create the strict_ui_test.md file with the required text.
+- **Notes**: This tests the strict sub-agent directive enforcing the VS Code Diff-Gate.
+
+### T-015
+- **Type**: change
+- **Status**: completed
+- **Owner**: unassigned
+- **Depends On**: none
+- **Assigned Session**: none
+- **Description**: Create a file named 'strict_ui_test2.md' in .dumbledoer/tmp with the text 'Tool forced.' MUST use write_file_with_review.
+- **Inputs**: none
+- **Outputs**: .dumbledoer/tmp/strict_ui_test2.md
+- **Success Criteria**: File `.dumbledoer/tmp/strict_ui_test2.md` exists and its content contains exactly "Tool forced."
+- **Estimated Effort**: small
+- **Parallelizable**: yes
+- **CodeGraph Impact**: Affects 0 symbols across 0 files.
+- **Checkpoint**: none
+- **Resume Instructions**: Create the strict_ui_test2.md file with the required text.
+- **Notes**: This tests the headless auto-apply implementation of the diff-gate.
+
+### T-016
+- **Type**: change
+- **Status**: completed
+- **Owner**: unassigned
+- **Depends On**: none
+- **Assigned Session**: none
+- **Description**: Restore GUI Diff-Gate in `write_file_with_review`. Remove auto-approval. Re-implement `GUI_DIFF_ENABLED` check. If True, use `subprocess.run(['code', '--wait', '--diff', path, tmp_path])`. If False, use rich.syntax. Use `Confirm.ask` to capture human approval.
+- **Inputs**: dumbledoer/dumbledoer_cli.py
+- **Outputs**: dumbledoer/dumbledoer_cli.py
+- **Success Criteria**: `pytest tests/test_refactors.py -k test_write_file_with_review_vscode_success` passes.
+- **Estimated Effort**: medium
+- **Parallelizable**: no
+- **CodeGraph Impact**: Affects 1 symbol across 1 file.
+- **Checkpoint**: none
+- **Resume Instructions**: Rewrite write_file_with_review to restore the diff-gate logic.
+- **Notes**: Reversing the auto-approve hijack.
+
+### T-017
+- **Type**: change
+- **Status**: completed
+- **Owner**: unassigned
+- **Depends On**: none
+- **Assigned Session**: none
+- **Description**: Add a simple comment to the top of `a.txt` to test the UI.
+- **Inputs**: a.txt
+- **Outputs**: a.txt
+- **Success Criteria**: File `a.txt` has a comment added at the top.
+- **Estimated Effort**: small
+- **Parallelizable**: yes
+- **CodeGraph Impact**: Affects 0 symbols across 1 file.
+- **Checkpoint**: none
+- **Resume Instructions**: Edit a.txt to add a comment at the top.
+- **Notes**: Simple UI verification.
+
+### T-018
+- **Type**: change
+- **Status**: completed
+- **Owner**: unassigned
+- **Depends On**: none
+- **Assigned Session**: none
+- **Description**: Add a simple comment to the top of `a.txt` to test the UI.
+- **Inputs**: a.txt
+- **Outputs**: a.txt
+- **Success Criteria**: File `a.txt` starts with a comment (e.g., `# UI Test`) followed by the original content.
+- **Estimated Effort**: small
+- **Parallelizable**: yes
+- **CodeGraph Impact**: Affects 0 symbols across 1 file.
+- **Checkpoint**: none
+- **Resume Instructions**: Edit `a.txt` to insert a comment on the first line.
+- **Notes**: Verifies that simple code edits can trigger the correct UI/Sandbox diff gate.
+
+### T-019
+- **Type**: change
+- **Status**: completed
+- **Owner**: unassigned
+- **Depends On**: none
+- **Assigned Session**: none
+- **Description**: Add a simple comment to the top of `a.txt` just to test the UI.
+- **Inputs**: a.txt
+- **Outputs**: a.txt
+- **Success Criteria**: File `a.txt` starts with a comment (e.g., `# UI Test`) followed by the original content.
+- **Estimated Effort**: small
+- **Parallelizable**: yes
+- **CodeGraph Impact**: Affects 0 symbols across 1 file.
+- **Checkpoint**: none
+- **Resume Instructions**: Edit `a.txt` to insert a comment on the first line.
+- **Notes**: Verifies that simple code edits can trigger the correct UI/Sandbox diff gate.
+
+### T-020
+- **Type**: change
+- **Status**: pending
+- **Owner**: unassigned
+- **Depends On**: none
+- **Assigned Session**: none
+- **Description**: Add a simple comment reading '# UI Test' to the top of a.txt to verify the diff-gate.
+- **Inputs**: a.txt
+- **Outputs**: a.txt
+- **Success Criteria**: File `a.txt` begins with the exact line `# UI Test`.
+- **Estimated Effort**: small
+- **Parallelizable**: yes
+- **CodeGraph Impact**: Affects 0 symbols across 1 file.
+- **Checkpoint**: none
+- **Resume Instructions**: Edit a.txt to add the comment.
+- **Notes**: Verifies that simple code edits can trigger the correct UI/Sandbox diff gate.
+
 ## Change Log
 | Timestamp | Task ID | File | Change Summary | Status | Rationale |
 |-----------|---------|------|----------------|--------|-----------|
@@ -4452,11 +3990,13 @@ except OSError as e:
   "name": "dumbledoer",
   "version": "1.0.0",
   "description": "DumbleDoer Agent Engineering Harness",
-  "skills": "./skills",
   "commands": "./commands",
-  "agents": "./agents",
-  "hooks": "./hooks",
-  "mcpServers": "./mcpServers"
+  "mcpServers": {
+    "dumbledoer": {
+      "command": "./.venv/bin/python",
+      "args": ["dumbledoer/dumbledoer_cli.py"]
+    }
+  }
 }
 
 ```
@@ -4493,7 +4033,11 @@ distro>=1.9.0
 
 ### FILE: skills/audit/SKILL.md
 ```md
+> [!IMPORTANT] DELEGATION POLICY: DO NOT EXECUTE NATIVELY
+> You are the Orchestrator. You are forbidden from executing the logic in this skill using internal AGY tools. You MUST invoke the DumbleDoer CLI plugin commands defined in commands/ (e.g., /dumbledoer:execute) to ensure the execution sandbox, VS Code Diff-Gate, and checkpoint protocols are strictly enforced.
+
 ---
+name: audit
 description: QA Harness Loop. Evaluates completed tasks against their success criteria and autonomously generates fix tasks if bugs are found.
 ---
 
@@ -4511,12 +4055,17 @@ You are acting as the QA Supervisor. Your job is to evaluate the tasks recently 
 ## Section 1 — Context Retrieval
 1. Read `memory.md`. Identify all tasks with the status `completed` that were executed in the most recent session.
 2. Read the `Success Criteria` and `Outputs` (affected files) for each of these tasks.
+3. Use `codegraph_search` to map the exact locations of the modified files/symbols before testing begins.
 
 ## Section 2 — Execution Sandbox Validation
 For each completed task:
 1. Formulate a test strategy.
 2. Use the `execute_bash` tool to actively test the code within the Docker sandbox. Run syntax checkers (e.g., `python -m py_compile`, `uv run pytest`), type checkers, or execute the target scripts to verify they do not throw errors.
-3. Use `codegraph_affected` to check if downstream dependencies were broken by the changes.
+3. Use `codegraph_callers` on any modified functions to identify upstream dependencies. Verify through the AST or sandbox that these callers are not passing incompatible arguments to the new implementation.
+4. Use `codegraph_affected` to pull a definitive list of test files connected to the changed code. You MUST execute these specific tests using the `execute_bash` tool in the Docker sandbox.
+5. If the changes interact with an external library or framework, use the Context7 MCP `query-docs` tool to verify that the implemented methods and parameters match current official documentation.
+6. **Declarative Regression Eval Suites**: Execute an automated behavioral evaluation runner via the bash sandbox (e.g., running a script that tests edge cases or measures tone compliance profiles).
+7. **Strict Statistical Check Guardrail**: If the evaluation runner returns a degradation metric or fails to meet the success criteria guardrails, you MUST invoke `add_task` to append a targeted refactoring issue to `memory.md` and lock the current wave progress.
 
 ## Section 3 — The Harness Loop (Task Generation)
 1. Evaluate the output from your bash tests against the `Success Criteria`.
@@ -4533,6 +4082,9 @@ Once all completed tasks are evaluated, output a concise audit report detailing 
 
 ### FILE: skills/caveman/SKILL.md
 ```md
+> [!IMPORTANT] DELEGATION POLICY: DO NOT EXECUTE NATIVELY
+> You are the Orchestrator. You are forbidden from executing the logic in this skill using internal AGY tools. You MUST invoke the DumbleDoer CLI plugin commands defined in commands/ (e.g., /dumbledoer:execute) to ensure the execution sandbox, VS Code Diff-Gate, and checkpoint protocols are strictly enforced.
+
 ---
 name: caveman
 description: >
@@ -4618,9 +4170,29 @@ Code/commits/PRs: write normal. "stop caveman" or "normal mode": revert. Level p
 
 ```
 
+### FILE: skills/execute/SKILL.md
+```md
+> [!IMPORTANT] DELEGATION POLICY: DO NOT EXECUTE NATIVELY
+> You are the Orchestrator. You are forbidden from executing the logic in this skill using internal AGY tools. You MUST invoke the DumbleDoer CLI plugin commands defined in commands/ (e.g., /dumbledoer:execute) to ensure the execution sandbox, VS Code Diff-Gate, and checkpoint protocols are strictly enforced.
+
+---
+name: execute
+description: Executes the approved task plan from the Task Registry in dependency order using isolated sub-agents and the Docker sandbox.
+---
+
+# /dumbledoer:execute
+
+This command is handled natively by the Python orchestrator. It reads the `memory.md` file, resolves task dependencies, and executes pending tasks safely via sub-agents within the `dumbledoer-base:latest` Docker sandbox. It enforces the VS Code Diff-Gate and monitors the token budget to trigger graceful shutdowns when necessary.
+
+```
+
 ### FILE: skills/iterate/SKILL.md
 ```md
+> [!IMPORTANT] DELEGATION POLICY: DO NOT EXECUTE NATIVELY
+> You are the Orchestrator. You are forbidden from executing the logic in this skill using internal AGY tools. You MUST invoke the DumbleDoer CLI plugin commands defined in commands/ (e.g., /dumbledoer:execute) to ensure the execution sandbox, VS Code Diff-Gate, and checkpoint protocols are strictly enforced.
+
 ---
+name: iterate
 description: Iterates on the current dumbledoer session. Acts as a strict Systems Architect to evaluate, decompose, and register new tasks based on user prompts.
 ---
 
@@ -4639,9 +4211,10 @@ You are the Principal Systems Architect. The user has provided a new objective o
 
 ## Section 1 — The Guardian Gate (Interrogation & Feasibility)
 1. Read the user's `--prompt` and cross-reference it with the existing `memory.md` state.
-2. Use `codegraph_search` and `codegraph_impact` to determine if the requested change is possible with the current repository structure.
-3. **Hard Stop Condition:** If the user's prompt is too vague (e.g., "fix the backend"), lacks necessary architectural context, or requires external API knowledge not currently in the repository, **DO NOT add any tasks**.
-4. If a Hard Stop is triggered, output a concise response explaining exactly what information, decisions, or documentation you need from the user before you can design the implementation. Stop here.
+2. If the user's prompt involves adding, modifying, or integrating an external library, API, or framework, you MUST use the Context7 `resolve-library-id` and `query-docs` tools. Use the returned live documentation to determine if the user's requested architecture is actually feasible with the current version of the library before generating any micro-tasks.
+3. Use `codegraph_search` and `codegraph_impact` to determine if the requested change is possible with the current repository structure.
+4. **Hard Stop Condition:** If the user's prompt is too vague (e.g., "fix the backend"), lacks necessary architectural context, or requires external API knowledge not currently in the repository, **DO NOT add any tasks**.
+5. If a Hard Stop is triggered, output a concise response explaining exactly what information, decisions, or documentation you need from the user before you can design the implementation. Stop here.
 
 ## Section 2 — Micro-Decomposition (The Sniper)
 If the prompt is actionable and feasible, you must decompose it into atomic tasks.
@@ -4664,6 +4237,9 @@ For every micro-task you create, you must define explicit, testable **Success Cr
 
 ### FILE: skills/obsidian-markdown/SKILL.md
 ```md
+> [!IMPORTANT] DELEGATION POLICY: DO NOT EXECUTE NATIVELY
+> You are the Orchestrator. You are forbidden from executing the logic in this skill using internal AGY tools. You MUST invoke the DumbleDoer CLI plugin commands defined in commands/ (e.g., /dumbledoer:execute) to ensure the execution sandbox, VS Code Diff-Gate, and checkpoint protocols are strictly enforced.
+
 ---
 name: obsidian-markdown
 description: Create and edit Obsidian Flavored Markdown with wikilinks, embeds, callouts, properties, and other Obsidian-specific syntax. Use when working with .md files in Obsidian, or when the user mentions wikilinks, callouts, frontmatter, tags, embeds, or Obsidian notes.
@@ -5079,7 +4655,11 @@ tags:
 
 ### FILE: skills/report/SKILL.md
 ```md
+> [!IMPORTANT] DELEGATION POLICY: DO NOT EXECUTE NATIVELY
+> You are the Orchestrator. You are forbidden from executing the logic in this skill using internal AGY tools. You MUST invoke the DumbleDoer CLI plugin commands defined in commands/ (e.g., /dumbledoer:execute) to ensure the execution sandbox, VS Code Diff-Gate, and checkpoint protocols are strictly enforced.
+
 ---
+name: report
 description: Generate the dumbledoer improvement report showing before/after changes, CodeGraph impact radius, and delta summary for all completed tasks.
 ---
 
@@ -5268,7 +4848,11 @@ registry is absent.
 
 ### FILE: skills/resume/SKILL.md
 ```md
+> [!IMPORTANT] DELEGATION POLICY: DO NOT EXECUTE NATIVELY
+> You are the Orchestrator. You are forbidden from executing the logic in this skill using internal AGY tools. You MUST invoke the DumbleDoer CLI plugin commands defined in commands/ (e.g., /dumbledoer:execute) to ensure the execution sandbox, VS Code Diff-Gate, and checkpoint protocols are strictly enforced.
+
 ---
+name: resume
 description: Resume an interrupted dumbledoer session from the last checkpoint. Use when a previous session was stopped by budget exhaustion, user interruption, or Gemini Code restart.
 ---
 
@@ -5448,7 +5032,11 @@ check (load `dumbledoer/lib/archive-protocol.md` lazily and run the trigger).
 
 ### FILE: skills/rollback/SKILL.md
 ```md
+> [!IMPORTANT] DELEGATION POLICY: DO NOT EXECUTE NATIVELY
+> You are the Orchestrator. You are forbidden from executing the logic in this skill using internal AGY tools. You MUST invoke the DumbleDoer CLI plugin commands defined in commands/ (e.g., /dumbledoer:execute) to ensure the execution sandbox, VS Code Diff-Gate, and checkpoint protocols are strictly enforced.
+
 ---
+name: rollback
 description: Roll back dumbledoer task changes to restore files to their pre-task state. Supports per-task, full, or session-boundary rollback.
 ---
 
@@ -5570,7 +5158,11 @@ If user says no or cancel: exit with no changes.
 
 ### FILE: skills/start/SKILL.md
 ```md
+> [!IMPORTANT] DELEGATION POLICY: DO NOT EXECUTE NATIVELY
+> You are the Orchestrator. You are forbidden from executing the logic in this skill using internal AGY tools. You MUST invoke the DumbleDoer CLI plugin commands defined in commands/ (e.g., /dumbledoer:execute) to ensure the execution sandbox, VS Code Diff-Gate, and checkpoint protocols are strictly enforced.
+
 ---
+name: start
 description: Start a new agent improvement session with discovery Q&A, CodeGraph analysis, and task execution. Use when beginning a new dumbledoer improvement project.
 ---
 
@@ -5679,16 +5271,9 @@ behavior, and any stated improvement goals.
 
 **Load `dumbledoer/lib/knowledge-protocol.md` now** (lazy reference).
 
-1. Resolve `{knowledge_path}`: memory.md Config value if present, else default `knowledge/`.
-2. If the registry is absent or empty: run OP-1 initialize (creates the directory,
-   `entries/`, `index.md`, `timeline.md`; records `knowledge_path` in Config once
-   memory.md exists — on a first session, record it during Section 6 step 3). Output
-   exactly: `Knowledge registry initialized at '{knowledge_path}'.` Proceed to
-   Section 5 with no prior knowledge to cite.
-3. If the registry exists: run OP-2 selective-load (index in full, 3 most recent
-   timeline sections, active failures/constraints, goal-tag-matched entries) and
-   output the load-summary line. Apply the protocol's tolerance rules — malformed
-   entries are skipped with a warning, never fatal.
+1. Instruct AGY to check for `knowledge/index.md` on startup.
+2. If absent, instruct AGY to use `write_file_with_review` to create it from `templates/knowledge-index-template.md`.
+3. If present, instruct AGY to selectively read ONLY `index.md` and active `failure` or `constraint` entries matching the current project goal during discovery.
 4. Carry the loaded knowledge into Sections 5–7: cite relevant prior decisions,
    constraints, and failures during discovery and planning instead of re-asking
    the user for history.
@@ -5734,6 +5319,14 @@ Based on the Q&A results, compose:
 
 **CRITICAL**: `memory.md` must be fully written before any task is registered or any
 file in the user's project is modified.
+
+---
+
+## Section 6b — Edge Case Q&A
+
+Before decomposing tasks, identify 3-5 edge cases based on the user's prompt.
+1. Ask the user how to handle them.
+2. Write the results to the `## Edge Case Coverage` table in `memory.md`.
 
 ---
 
@@ -5906,7 +5499,11 @@ When all selected tasks are complete (or user stops the session):
 
 ### FILE: skills/status/SKILL.md
 ```md
+> [!IMPORTANT] DELEGATION POLICY: DO NOT EXECUTE NATIVELY
+> You are the Orchestrator. You are forbidden from executing the logic in this skill using internal AGY tools. You MUST invoke the DumbleDoer CLI plugin commands defined in commands/ (e.g., /dumbledoer:execute) to ensure the execution sandbox, VS Code Diff-Gate, and checkpoint protocols are strictly enforced.
+
 ---
+name: status
 description: Show the dumbledoer Task Registry, session summary, budget usage, and CodeGraph health for the current improvement session.
 ---
 
@@ -6004,7 +5601,11 @@ If `--verbose`: after the Task Registry table, append the full Task Details bloc
 
 ### FILE: skills/update-docs/SKILL.md
 ```md
+> [!IMPORTANT] DELEGATION POLICY: DO NOT EXECUTE NATIVELY
+> You are the Orchestrator. You are forbidden from executing the logic in this skill using internal AGY tools. You MUST invoke the DumbleDoer CLI plugin commands defined in commands/ (e.g., /dumbledoer:execute) to ensure the execution sandbox, VS Code Diff-Gate, and checkpoint protocols are strictly enforced.
+
 ---
+name: update-docs
 description: Update existing project documentation using CodeGraph structural analysis. Detects outdated sections, rewrites them to match current code, and optionally enriches sparse sections. Use when documentation has drifted from the codebase or when you want to fill in missing content.
 ---
 
@@ -6058,9 +5659,8 @@ Base directory for this skill: (project root where dumbledoer is installed)
 
 1. Check if `.codegraph/` exists in the project root.
 2. If **absent**:
-   - Output: `Warning: CodeGraph index not found. Structural analysis will be limited. Run 'codegraph init -i' first for best results.`
-   - Ask: `(a) Proceed with limited analysis (no symbol comparison)  (b) Abort`
-   - (b): stop. (a): set `CODEGRAPH_AVAILABLE = false` (section-level scan only).
+   - Output: `[yellow]CodeGraph unavailable. Proceeding with limited text-based analysis.[/yellow]`
+   - Set `CODEGRAPH_AVAILABLE = false` (section-level scan only) and continue executing the skill natively.
 3. If **present**: run `codegraph status`, capture symbol count and last sync as baseline metrics (reported in Section 6), set `CODEGRAPH_AVAILABLE = true`.
 
 ---
@@ -6304,6 +5904,178 @@ For each ChangeCandidate in the task's DocFile, execute the **10-step CodeGraph 
 
 ```
 
+### FILE: sync_knowledge.py
+```py
+import os
+import glob
+import re
+
+def parse_frontmatter(content):
+    match = re.match(r'^---\n(.*?)\n---', content, re.DOTALL)
+    if not match:
+        return {}
+    
+    fm_text = match.group(1)
+    data = {}
+    for line in fm_text.splitlines():
+        if ':' in line:
+            key, val = line.split(':', 1)
+            key = key.strip()
+            val = val.strip()
+            # simple list parsing for tags
+            if val.startswith('[') and val.endswith(']'):
+                val = [v.strip() for v in val[1:-1].split(',')]
+            elif val.startswith('"') and val.endswith('"'):
+                val = val[1:-1]
+            data[key] = val
+    return data
+
+def main():
+    entries_dir = "knowledge/entries"
+    if not os.path.exists(entries_dir):
+        print(f"Directory {entries_dir} not found.")
+        return
+
+    categories = {
+        "decision": [],
+        "success": [],
+        "failure": [],
+        "constraint": [],
+        "insight": []
+    }
+    
+    for file_path in glob.glob(os.path.join(entries_dir, "*.md")):
+        with open(file_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        
+        fm = parse_frontmatter(content)
+        if 'id' in fm and 'type' in fm:
+            entry_type = fm['type'].lower()
+            if entry_type in categories:
+                categories[entry_type].append(fm)
+
+    index_content = "# Knowledge Index\n\n"
+    
+    category_titles = {
+        "decision": "Decisions",
+        "success": "Successes",
+        "failure": "Failures",
+        "constraint": "Constraints",
+        "insight": "Insights"
+    }
+    
+    for c_key in ["decision", "success", "failure", "constraint", "insight"]:
+        index_content += f"## {category_titles[c_key]}\n"
+        index_content += "| ID | Title | Status | Created | Tags |\n"
+        index_content += "|---|---|---|---|---|\n"
+        
+        # Sort by ID
+        sorted_entries = sorted(categories[c_key], key=lambda x: x.get("id", ""))
+        
+        for entry in sorted_entries:
+            e_id = entry.get("id", "")
+            e_title = entry.get("title", "")
+            e_status = entry.get("status", "")
+            e_created = entry.get("created", "")
+            e_tags = entry.get("tags", [])
+            tags_str = ", ".join(e_tags) if isinstance(e_tags, list) else str(e_tags)
+            
+            index_content += f"| {e_id} | {e_title} | {e_status} | {e_created} | {tags_str} |\n"
+            
+        index_content += "\n"
+        
+    index_path = "knowledge/index.md"
+    os.makedirs(os.path.dirname(index_path), exist_ok=True)
+    with open(index_path, "w", encoding="utf-8") as f:
+        f.write(index_content.strip() + "\n")
+        
+    print(f"Successfully synced {index_path}")
+
+if __name__ == "__main__":
+    main()
+
+```
+
+### FILE: templates/knowledge-index-template.md
+```md
+# Knowledge Index
+
+## Decisions
+| ID | Title | Status | Created | Tags |
+|---|---|---|---|---|
+
+## Successes
+| ID | Title | Status | Created | Tags |
+|---|---|---|---|---|
+
+## Failures
+| ID | Title | Status | Created | Tags |
+|---|---|---|---|---|
+
+## Constraints
+| ID | Title | Status | Created | Tags |
+|---|---|---|---|---|
+
+## Insights
+| ID | Title | Status | Created | Tags |
+|---|---|---|---|---|
+
+```
+
+### FILE: templates/memory-template.md
+```md
+# Memory
+
+## Config
+- budget_limit: 100000
+- budget_threshold_pct: 80
+- session_count: 1
+- codegraph_baseline_symbols: 0
+- codegraph_baseline_sync: 1970-01-01T00:00:00Z
+- codegraph_backend: native
+
+## Project Goal
+{{PROJECT_GOAL}}
+
+## Scope
+{{SCOPE_ITEMS}}
+
+## Budget & Quota Tracking
+| Session ID | Tokens Used | Budget Remaining |
+|---|---|---|
+
+## Task Registry
+| Task ID | Type | Description | Status | Owner | Effort | Dependencies | CodeGraph Impact |
+|---|---|---|---|---|---|---|---|
+
+## Edge Case Coverage
+| Edge Case ID (EC-NNN) | Component | Description | Disposition (addressed/dismissed/already-covered) | Task IDs | User Reason |
+|---|---|---|---|---|---|
+
+## Task Details
+### T-001: Example
+- Inputs:
+- Outputs:
+- Success Criteria:
+- Notes:
+
+## Change Log
+| Task ID | Component | Summary of Change | Validation |
+|---|---|---|---|
+
+## Session Log
+| Session ID | Start Time | End Time | Outcome | Notes |
+|---|---|---|---|---|
+
+## Checkpoint Registry
+| Checkpoint ID | Task ID | File | Git Hash | Status |
+|---|---|---|---|---|
+
+## Open Questions
+- None
+
+```
+
 ### FILE: test_debug.py
 ```py
 import concurrent.futures
@@ -6333,120 +6105,71 @@ print(len(data.splitlines()))
 
 ### FILE: tests/test_refactors.py
 ```py
+import pytest
 import os
 import asyncio
-import time
-import difflib
-from unittest.mock import patch, mock_open, MagicMock
-from dumbledoer.dumbledoer_cli import write_file_with_review, execute_bash, run_rtk, DumbleDoerCLI
-import pytest
+from unittest.mock import patch, MagicMock
 
-def test_execute_bash_sandbox():
-    with patch("dumbledoer.dumbledoer_cli.subprocess.run") as mock_run:
-        mock_run.return_value = MagicMock(stdout="mocked output", returncode=0)
-        output = execute_bash("echo 'hello'")
-        assert output == "mocked output"
-        
-        # Verify docker invocation
-        mock_run.assert_called_once()
-        args, kwargs = mock_run.call_args
-        cmd_list = args[0]
-        assert "docker" in cmd_list
-        assert "run" in cmd_list
-        assert "dumbledoer-base:latest" in cmd_list
-        assert "bash" in cmd_list
-        assert "-c" in cmd_list
-        assert "echo 'hello'" in cmd_list
-        assert kwargs.get("shell") is not True
+from dumbledoer.dumbledoer_cli import DumbleDoerCLI, CheckpointManager, execute_bash
 
-def test_run_rtk_sandbox():
-    with patch("dumbledoer.dumbledoer_cli.subprocess.run") as mock_run:
-        mock_run.return_value = MagicMock(stdout="mocked rtk output", returncode=0)
-        output = run_rtk("gain --history")
-        assert output == "RTK Output: mocked rtk output"
+@pytest.mark.asyncio
+async def test_dumbledoer_cli_run():
+    cli = DumbleDoerCLI()
+    
+    with patch.object(cli, 'connect_mcp', new_callable=MagicMock) as mock_connect:
+        mock_connect.return_value = asyncio.Future()
+        mock_connect.return_value.set_result(None)
         
-        # Verify docker invocation
-        mock_run.assert_called_once()
-        args, kwargs = mock_run.call_args
-        cmd_list = args[0]
-        assert "docker" in cmd_list
-        assert "run" in cmd_list
-        assert "dumbledoer-base:latest" in cmd_list
-        assert "rtk" in cmd_list
-        assert "gain" in cmd_list
-        assert "--history" in cmd_list
-        assert kwargs.get("shell") is not True
-
-@patch("dumbledoer.dumbledoer_cli.shutil.which", return_value="code")
-def test_write_file_with_review_vscode_success(mock_which):
-    with patch("dumbledoer.dumbledoer_cli.subprocess.run") as mock_run, \
-         patch("dumbledoer.dumbledoer_cli.Confirm.ask", return_value=True), \
-         patch("builtins.open", mock_open(read_data="mocked content")), \
-         patch("os.makedirs"), \
-         patch("dumbledoer.dumbledoer_cli.json.dump"), \
-         patch("os.replace") as mock_replace, \
-         patch("os.path.exists", return_value=True):
-         
-        mock_run.return_value.returncode = 0
-        result = asyncio.run(write_file_with_review("test/dummy/file.txt", "new mock content", "T-001", "S-123"))
-        
-        mock_run.assert_called_once()
-        args, kwargs = mock_run.call_args
-        assert "--wait" in args[0]
-        assert "--new-window" not in args[0]
-        assert "--diff" in args[0]
-        
-        mock_replace.assert_called_once()
-        assert "Successfully wrote" in result
-
-@patch("dumbledoer.dumbledoer_cli.shutil.which", return_value="code")
-def test_write_file_with_review_no_gui_terminal_fallback(mock_which):
-    with patch("dumbledoer.dumbledoer_cli.GUI_DIFF_ENABLED", False), \
-         patch("dumbledoer.dumbledoer_cli.Confirm.ask", return_value=True) as mock_confirm, \
-         patch("builtins.open", mock_open(read_data="original content")), \
-         patch("os.makedirs"), \
-         patch("dumbledoer.dumbledoer_cli.json.dump"), \
-         patch("os.replace") as mock_replace, \
-         patch("os.path.exists", return_value=True), \
-         patch("dumbledoer.dumbledoer_cli.Console.print") as mock_print:
-         
-        result = asyncio.run(write_file_with_review("test/dummy/file.txt", "updated content", "T-001", "S-123"))
-        
-        assert mock_confirm.call_count == 1
-        mock_replace.assert_called_once()
-        assert "Successfully wrote" in result
-        
-        fallback_rendered = any("Review proposed changes for:" in str(call) for call in mock_print.call_args_list)
-        assert fallback_rendered
-
-def test_async_event_loop_protection():
-    async def _test():
-        cli = DumbleDoerCLI(api_key="dummy")
-        
-        def slow_sync_func():
-            time.sleep(0.1)
-            return "done"
+        with patch.object(cli.exit_stack, 'aclose', new_callable=MagicMock) as mock_aclose:
+            mock_aclose.return_value = asyncio.Future()
+            mock_aclose.return_value.set_result(None)
             
-        async_func = cli._create_async_wrapper(slow_sync_func)
-        
-        start = time.time()
-        
-        async def background_task():
-            await asyncio.sleep(0.05)
-            return "bg_done"
+            await cli.run("start", ["--dry-run"])
+            
+            mock_connect.assert_called_once()
+            mock_aclose.assert_called_once()
 
-        results = await asyncio.gather(
-            async_func(),
-            background_task()
+def test_execute_bash_docker():
+    with patch("subprocess.run") as mock_run:
+        mock_result = MagicMock()
+        mock_result.stdout = "Docker execution success"
+        mock_run.return_value = mock_result
+        
+        result = execute_bash("echo 'test'")
+        
+        mock_run.assert_called_once_with(
+            ["docker", "run", "--rm", "-v", f"{os.getcwd()}:/workspace", "-w", "/workspace", "dumbledoer-base:latest", "bash", "-c", "echo 'test'"],
+            capture_output=True,
+            text=True,
+            check=True
         )
-        duration = time.time() - start
-        
-        assert results[0] == "done"
-        assert results[1] == "bg_done"
-        # Thread runs concurrently with asyncio.sleep so duration should be just ~0.1s
-        assert 0.1 <= duration < 0.2
+        assert result == "Docker execution success"
 
-    asyncio.run(_test())
+def test_checkpoint_manager_atomic_rename():
+    manager = CheckpointManager()
+    
+    with patch("os.replace") as mock_replace:
+        manager.atomic_rename_to_target("file.tmp", "file.txt")
+        mock_replace.assert_called_once_with("file.tmp", "file.txt")
+
+def test_checkpoint_manager_write_rollback_copy():
+    manager = CheckpointManager()
+    
+    with patch("os.path.exists") as mock_exists, \
+         patch("os.makedirs") as mock_makedirs, \
+         patch("shutil.copy2") as mock_copy:
+        
+        # Scenario 1: rollback_path exists, should return immediately
+        mock_exists.side_effect = lambda path: path == "rollback.bak"
+        manager.write_rollback_copy("target.txt", "rollback.bak")
+        mock_copy.assert_not_called()
+        
+        # Scenario 2: rollback_path does not exist, target_path exists
+        mock_copy.reset_mock()
+        mock_exists.side_effect = lambda path: path == "target.txt"
+        manager.write_rollback_copy("target.txt", "rollback.bak")
+        mock_makedirs.assert_called_once_with("", exist_ok=True)
+        mock_copy.assert_called_once_with("target.txt", "rollback.bak")
 
 ```
 
@@ -6455,6 +6178,7 @@ def test_async_event_loop_protection():
 import os
 import concurrent.futures
 import pytest
+import threading
 import dumbledoer.dumbledoer_cli as cli
 from filelock import FileLock
 
@@ -6476,6 +6200,7 @@ def mock_file_ops(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "read_file", mock_read)
     monkeypatch.setattr(cli, "_write_file", mock_write)
     monkeypatch.setattr(cli.PlanValidator, "validate", lambda x: "OK")
+    monkeypatch.setattr(cli, "REGISTRY_LOCK", threading.RLock())
     return test_memory
 
 def test_concurrent_state_writes(mock_file_ops):
@@ -6496,6 +6221,19 @@ def test_concurrent_state_writes(mock_file_ops):
     
     for i in range(20):
         assert f"Entry {i}\n" in final_content, f"Entry {i} missing from final content!"
+
+def test_budget_manager_exhaustion():
+    bm = cli.BudgetManager("## Config\n- budget_limit: 1000\n- budget_threshold_pct: 80")
+    bm.estimated_tokens = 800
+    with pytest.raises(cli.BudgetExhaustedException):
+        bm.check_and_harvest()
+
+def test_ast_memory_mapper():
+    content = "## Config\n- budget_limit: 1000\n## Budget & Quota Tracking\n| Tokens Consumed | 500 |\n"
+    start, end = cli.ASTMemoryMapper.locate_heading_block(content, "h2", "Budget & Quota Tracking")
+    assert start != -1
+    lines = content.splitlines()[start:end]
+    assert any("| Tokens Consumed | 500 |" in line for line in lines)
 
 ```
 

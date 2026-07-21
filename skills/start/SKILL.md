@@ -1,5 +1,8 @@
+> [!IMPORTANT] DELEGATION POLICY: DO NOT EXECUTE NATIVELY
+> You are the Orchestrator. You are forbidden from executing the logic in this skill using internal AGY tools. You MUST invoke the DumbleDoer CLI plugin commands defined in commands/ (e.g., /dumbledoer:execute) to ensure the execution sandbox, VS Code Diff-Gate, and checkpoint protocols are strictly enforced.
+
 ---
-name: dumbledoer-start
+name: start
 description: Start a new agent improvement session with discovery Q&A, CodeGraph analysis, and task execution. Use when beginning a new dumbledoer improvement project.
 ---
 
@@ -108,16 +111,9 @@ behavior, and any stated improvement goals.
 
 **Load `dumbledoer/lib/knowledge-protocol.md` now** (lazy reference).
 
-1. Resolve `{knowledge_path}`: memory.md Config value if present, else default `knowledge/`.
-2. If the registry is absent or empty: run OP-1 initialize (creates the directory,
-   `entries/`, `index.md`, `timeline.md`; records `knowledge_path` in Config once
-   memory.md exists — on a first session, record it during Section 6 step 3). Output
-   exactly: `Knowledge registry initialized at '{knowledge_path}'.` Proceed to
-   Section 5 with no prior knowledge to cite.
-3. If the registry exists: run OP-2 selective-load (index in full, 3 most recent
-   timeline sections, active failures/constraints, goal-tag-matched entries) and
-   output the load-summary line. Apply the protocol's tolerance rules — malformed
-   entries are skipped with a warning, never fatal.
+1. Instruct AGY to check for `knowledge/index.md` on startup.
+2. If absent, instruct AGY to use `write_file_with_review` to create it from `templates/knowledge-index-template.md`.
+3. If present, instruct AGY to selectively read ONLY `index.md` and active `failure` or `constraint` entries matching the current project goal during discovery.
 4. Carry the loaded knowledge into Sections 5–7: cite relevant prior decisions,
    constraints, and failures during discovery and planning instead of re-asking
    the user for history.
@@ -163,6 +159,14 @@ Based on the Q&A results, compose:
 
 **CRITICAL**: `memory.md` must be fully written before any task is registered or any
 file in the user's project is modified.
+
+---
+
+## Section 6b — Edge Case Q&A
+
+Before decomposing tasks, identify 3-5 edge cases based on the user's prompt.
+1. Ask the user how to handle them.
+2. Write the results to the `## Edge Case Coverage` table in `memory.md`.
 
 ---
 

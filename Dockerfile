@@ -14,6 +14,8 @@ RUN apt-get update && apt-get install -y \
     build-essential \
     docker.io \
     docker-compose-v2 \
+    nodejs \
+    npm \
     && rm -rf /var/lib/apt/lists/*
 
 # 2. Install Node.js v20+ (Required for MCP npx servers)

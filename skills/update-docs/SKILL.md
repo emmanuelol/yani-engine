@@ -1,5 +1,8 @@
+> [!IMPORTANT] DELEGATION POLICY: DO NOT EXECUTE NATIVELY
+> You are the Orchestrator. You are forbidden from executing the logic in this skill using internal AGY tools. You MUST invoke the DumbleDoer CLI plugin commands defined in commands/ (e.g., /dumbledoer:execute) to ensure the execution sandbox, VS Code Diff-Gate, and checkpoint protocols are strictly enforced.
+
 ---
-name: dumbledoer-update-docs
+name: update-docs
 description: Update existing project documentation using CodeGraph structural analysis. Detects outdated sections, rewrites them to match current code, and optionally enriches sparse sections. Use when documentation has drifted from the codebase or when you want to fill in missing content.
 ---
 
@@ -53,9 +56,8 @@ Base directory for this skill: (project root where dumbledoer is installed)
 
 1. Check if `.codegraph/` exists in the project root.
 2. If **absent**:
-   - Output: `Warning: CodeGraph index not found. Structural analysis will be limited. Run 'codegraph init -i' first for best results.`
-   - Ask: `(a) Proceed with limited analysis (no symbol comparison)  (b) Abort`
-   - (b): stop. (a): set `CODEGRAPH_AVAILABLE = false` (section-level scan only).
+   - Output: `[yellow]CodeGraph unavailable. Proceeding with limited text-based analysis.[/yellow]`
+   - Set `CODEGRAPH_AVAILABLE = false` (section-level scan only) and continue executing the skill natively.
 3. If **present**: run `codegraph status`, capture symbol count and last sync as baseline metrics (reported in Section 6), set `CODEGRAPH_AVAILABLE = true`.
 
 ---
