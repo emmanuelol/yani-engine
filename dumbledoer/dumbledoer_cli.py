@@ -1,5 +1,6 @@
 import os
 import sys
+import inspect
 import asyncio
 from dotenv import load_dotenv
 import argparse
@@ -414,13 +415,36 @@ class DumbleDoerCLI:
         self.local_tools = [read_file, write_file_with_review, execute_bash, update_memory_registry, run_rtk]
         self.gemini_tools = self.local_tools
 
-    def _create_mcp_wrapper(self, server_name: str, tool_name: str):
+    def _create_mcp_wrapper(self, server_name: str, tool):
         async def mcp_wrapper(**kwargs):
             session = self.mcp_sessions[server_name]
-            result = await session.call_tool(tool_name, arguments=kwargs)
+            result = await session.call_tool(tool.name, arguments=kwargs)
             return "\n".join([x.text for x in result.content if hasattr(x, 'text')])
-        safe_name = tool_name.replace("-", "_")
+        
+        safe_name = tool.name.replace("-", "_")
         mcp_wrapper.__name__ = safe_name if safe_name.startswith(server_name) else f"{server_name}_{safe_name}"
+        
+        # --- DYNAMIC SIGNATURE INJECTION ---
+        params = []
+        if hasattr(tool, 'inputSchema') and tool.inputSchema and "properties" in tool.inputSchema:
+            for prop_name, prop_schema in tool.inputSchema["properties"].items():
+                ptype = str
+                if prop_schema.get("type") == "integer": ptype = int
+                elif prop_schema.get("type") == "boolean": ptype = bool
+                elif prop_schema.get("type") == "number": ptype = float
+                elif prop_schema.get("type") == "array": ptype = list
+                
+                is_req = prop_name in tool.inputSchema.get("required", [])
+                default = inspect.Parameter.empty if is_req else None
+                params.append(inspect.Parameter(
+                    name=prop_name, 
+                    kind=inspect.Parameter.POSITIONAL_OR_KEYWORD, 
+                    annotation=ptype, 
+                    default=default
+                ))
+        
+        mcp_wrapper.__signature__ = inspect.Signature(parameters=params)
+        mcp_wrapper.__doc__ = getattr(tool, 'description', '')
         return mcp_wrapper
 
     async def connect_mcp(self):
@@ -434,7 +458,7 @@ class DumbleDoerCLI:
         await codegraph_session.initialize()
         cg_tools = await codegraph_session.list_tools()
         for tool in cg_tools.tools:
-            self.gemini_tools.append(self._create_mcp_wrapper("codegraph", tool.name))
+            self.gemini_tools.append(self._create_mcp_wrapper("codegraph", tool))
         self.mcp_sessions["codegraph"] = codegraph_session
 
         # Connect to context7
@@ -447,7 +471,7 @@ class DumbleDoerCLI:
         await context7_session.initialize()
         c7_tools = await context7_session.list_tools()
         for tool in c7_tools.tools:
-            self.gemini_tools.append(self._create_mcp_wrapper("context7", tool.name))
+            self.gemini_tools.append(self._create_mcp_wrapper("context7", tool))
         self.mcp_sessions["context7"] = context7_session
 
     async def _graceful_shutdown(self, task_id: str = None):
