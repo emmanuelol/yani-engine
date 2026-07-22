@@ -401,6 +401,7 @@ class OrphanRecoveryScanner:
 
 class DumbleDoerCLI:
     def __init__(self):
+        self.plugin_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
         self.client = genai.Client()
         self.exit_stack = AsyncExitStack()
         self.mcp_sessions = {}
@@ -470,25 +471,29 @@ class DumbleDoerCLI:
         await asyncio.to_thread(_shutdown)
         print("Graceful Shutdown Sequence Complete. State preserved in memory.md.")
 
-    def _get_system_instructions(self):
-        return """
-System Instructions:
-1. Adhere to all DumbleDoer architectural rules.
-2. Utilize Caveman compression policies: keep responses ultra-brief, omit filler words, and minimize token usage while retaining technical accuracy.
-"""
+    async def _get_system_instructions(self):
+        instructions = [
+            "# MISSION",
+            "You are DumbleDoer, an Agent Engineering Harness. Your goal is to systematically analyze, improve, and validate agent projects.",
+            await self.local_tools[0](os.path.join(self.plugin_root, "SYSTEM_INSTRUCTIONS.md")) or "Core rules not found.",
+            await self.local_tools[0](os.path.join(self.plugin_root, "lib", "common-preamble.md")) or "",
+            await self.local_tools[0](os.path.join(self.plugin_root, "lib", "compression-policy.md")) or "",
+            await self.local_tools[0]("memory.md") or "No memory.md found. Start a new project."
+        ]
+        return "\n\n".join(instructions)
 
     async def execute_task(self, task_id: str, description: str):
         print(f"Executing task {task_id}: {description}")
         chat_session = self.client.aio.chats.create(model="gemini-2.5-flash", config={"tools": self.gemini_tools})
-        system_instructions = self._get_system_instructions()
+        system_instructions = await self._get_system_instructions()
         prompt_payload = f"""{system_instructions}
 
 This project has CodeGraph initialized (.codegraph/ exists). You are executing task {task_id}: {description}.
 
 Mandatory rules:
-1. Read dumbledoer/lib/codegraph-integration.md before modifying any file.
+1. Read {os.path.join(self.plugin_root, 'lib', 'codegraph-integration.md')} before modifying any file.
 2. Follow the 10-step data flow for change tasks exactly.
-3. Follow dumbledoer/lib/checkpoint-protocol.md for every file write.
+3. Follow {os.path.join(self.plugin_root, 'lib', 'checkpoint-protocol.md')} for every file write.
 4. Log your codegraph_impact result to memory.md task {task_id} CodeGraph Impact field.
 5. Do not modify any file listed in another in-progress task's Outputs."""
         try:
