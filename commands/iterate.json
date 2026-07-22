@@ -10,7 +10,7 @@
     }
   ],
   "execute": {
-    "command": "./run_dumbledoer.sh",
+    "command": "~/.gemini/config/plugins/dumbledoer/run_dumbledoer.sh",
     "args": [
       ,
       "iterate",

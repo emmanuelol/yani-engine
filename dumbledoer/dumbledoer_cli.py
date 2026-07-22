@@ -1,6 +1,7 @@
 import os
 import sys
 import asyncio
+from dotenv import load_dotenv
 import argparse
 import subprocess
 import shlex
@@ -402,7 +403,12 @@ class OrphanRecoveryScanner:
 class DumbleDoerCLI:
     def __init__(self):
         self.plugin_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-        self.client = genai.Client()
+        load_dotenv(dotenv_path=os.path.join(os.getcwd(), '.env'), override=True)
+        api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+        if not api_key:
+            print("Error: GEMINI_API_KEY or GOOGLE_API_KEY not found in environment or local .env file.", file=sys.stderr)
+            sys.exit(1)
+        self.client = genai.Client(api_key=api_key)
         self.exit_stack = AsyncExitStack()
         self.mcp_sessions = {}
         self.local_tools = [read_file, write_file_with_review, execute_bash, update_memory_registry, run_rtk]
@@ -778,7 +784,7 @@ async def main_async():
     parser = argparse.ArgumentParser(description="DumbleDoer CLI")
     parser.add_argument(
         "command",
-        choices=["start", "execute", "resume", "report", "rollback", "update-docs", "audit", "iterate"],
+        choices=["start", "execute", "resume", "report", "rollback", "update-docs", "audit", "iterate", "status"],
         help="The dumbledoer command to run"
     )
     parser.add_argument("--no-gui", action="store_true", help="Disable GUI diff-gate for headless environments")
