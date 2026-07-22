@@ -2,7 +2,7 @@
   "name": "execute",
   "description": "Dispatches the task plan in strict dependency order through the secure Docker execution sandbox.",
   "execute": {
-    "command": "./.venv/bin/python",
-    "args": ["dumbledoer/dumbledoer_cli.py", "execute"]
+    "command": "./run_dumbledoer.sh",
+    "args": ["execute"]
   }
 }

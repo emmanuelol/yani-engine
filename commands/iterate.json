@@ -10,9 +10,9 @@
     }
   ],
   "execute": {
-    "command": "./.venv/bin/python",
+    "command": "./run_dumbledoer.sh",
     "args": [
-      "dumbledoer/dumbledoer_cli.py",
+      ,
       "iterate",
       "--prompt",
       "{{prompt}}"

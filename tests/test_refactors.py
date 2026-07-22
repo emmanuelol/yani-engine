@@ -22,16 +22,17 @@ async def test_dumbledoer_cli_run():
             mock_connect.assert_called_once()
             mock_aclose.assert_called_once()
 
-def test_execute_bash_docker():
+@pytest.mark.asyncio
+async def test_execute_bash_docker():
     with patch("subprocess.run") as mock_run:
         mock_result = MagicMock()
         mock_result.stdout = "Docker execution success"
         mock_run.return_value = mock_result
         
-        result = execute_bash("echo 'test'")
+        result = await execute_bash("echo 'test'")
         
         mock_run.assert_called_once_with(
-            ["docker", "run", "--rm", "-v", f"{os.getcwd()}:/workspace", "-w", "/workspace", "dumbledoer-base:latest", "bash", "-c", "echo 'test'"],
+            ["docker", "run", "--rm", "--user", f"{os.getuid()}:{os.getgid()}", "-v", f"{os.getcwd()}:/workspace", "-w", "/workspace", "dumbledoer-base:latest", "bash", "-c", "echo 'test'"],
             capture_output=True,
             text=True,
             check=True

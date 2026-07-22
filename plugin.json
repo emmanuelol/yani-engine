@@ -5,8 +5,8 @@
   "commands": "./commands",
   "mcpServers": {
     "dumbledoer": {
-      "command": "./.venv/bin/python",
-      "args": ["dumbledoer/dumbledoer_cli.py"]
+      "command": "./run_dumbledoer.sh",
+      "args": []
     }
   }
 }

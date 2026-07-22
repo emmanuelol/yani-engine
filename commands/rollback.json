@@ -10,7 +10,7 @@
     }
   ],
   "execute": {
-    "command": "./.venv/bin/python",
-    "args": ["dumbledoer/dumbledoer_cli.py", "rollback", "{{task}}"]
+    "command": "./run_dumbledoer.sh",
+    "args": ["rollback", "{{task}}"]
   }
 }

@@ -40,6 +40,10 @@ if [ ! -d ".dumbledoer" ]; then
 fi
 
 echo ""
+echo "🐳 Building Docker Base Image..."
+docker build -t dumbledoer-base:latest .
+
+echo ""
 echo "✨ DumbleDoer installation complete! ✨"
 echo "To activate your spellbook, run:"
 echo "  source .venv/bin/activate"

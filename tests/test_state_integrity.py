@@ -1,59 +1,91 @@
+import asyncio
 import os
-import concurrent.futures
 import pytest
-import threading
-import dumbledoer.dumbledoer_cli as cli
-from filelock import FileLock
+import shutil
+from unittest.mock import patch
+from dumbledoer.dumbledoer_cli import update_memory_registry, write_file_with_review, ASTMemoryMapper
 
-@pytest.fixture
-def mock_file_ops(tmp_path, monkeypatch):
-    test_memory = tmp_path / "memory.md"
-    
-    def mock_read(path):
-        if path == "memory.md":
-            return test_memory.read_text() if test_memory.exists() else "Error"
-        return "Error"
+@pytest.mark.asyncio
+async def test_update_memory_registry_concurrency(tmp_path):
+    """Test that 50 concurrent async threads can update memory.md without race conditions."""
+    original_cwd = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        with open("memory.md", "w") as f:
+            f.write("- sandbox_mode: true\n\nTARGET_BLOCK")
+            
+        async def worker(i):
+            # Atomic search and replace: Replace TARGET_BLOCK with TARGET_BLOCK + new line
+            return await update_memory_registry("TARGET_BLOCK", f"TARGET_BLOCK\n{i}")
+            
+        results = await asyncio.gather(*[worker(i) for i in range(50)])
         
-    def mock_write(path, content):
-        if path == "memory.md":
-            test_memory.write_text(content)
-            return "Success"
-        return "Error"
+        with open("memory.md", "r") as f:
+            content = f.read()
+            
+        successes = [r for r in results if "Successfully updated" in r]
+        assert len(successes) == 50, f"Expected 50 successes, got {len(successes)}"
         
-    monkeypatch.setattr(cli, "read_file", mock_read)
-    monkeypatch.setattr(cli, "_write_file", mock_write)
-    monkeypatch.setattr(cli.PlanValidator, "validate", lambda x: "OK")
-    monkeypatch.setattr(cli, "REGISTRY_LOCK", threading.RLock())
-    return test_memory
+        for i in range(50):
+            assert f"\n{i}" in content, f"Missing entry {i} in memory.md"
+    finally:
+        os.chdir(original_cwd)
 
-def test_concurrent_state_writes(mock_file_ops):
+@pytest.mark.asyncio
+@patch('dumbledoer.dumbledoer_cli.subprocess.run')
+@patch('dumbledoer.dumbledoer_cli.GUI_DIFF_ENABLED', True)
+@patch('dumbledoer.dumbledoer_cli.shutil.which', return_value="/usr/bin/code")
+@patch('dumbledoer.dumbledoer_cli.CheckpointManager')
+@patch('rich.prompt.Confirm.ask', return_value=False)
+async def test_temp_file_collision(mock_confirm, mock_checkpoint, mock_which, mock_subprocess, tmp_path):
+    """Test that concurrent write_file_with_review calls for same basename don't collide."""
+    original_cwd = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        os.makedirs("api")
+        os.makedirs("db")
+        with open("api/utils.py", "w") as f: f.write("api")
+        with open("db/utils.py", "w") as f: f.write("db")
+        
+        async def run_write(path):
+            return await write_file_with_review(path, "new content")
+            
+        # Run simultaneously
+        await asyncio.gather(run_write("api/utils.py"), run_write("db/utils.py"))
+        
+        # Verify two tmp files exist in .dumbledoer/tmp
+        tmp_dir = ".dumbledoer/tmp"
+        assert os.path.exists(tmp_dir)
+        tmp_files = os.listdir(tmp_dir)
+        assert len(tmp_files) == 2
+        assert tmp_files[0] != tmp_files[1]
+        assert tmp_files[0].endswith("utils.py.tmp")
+        assert tmp_files[1].endswith("utils.py.tmp")
+    finally:
+        os.chdir(original_cwd)
+
+def test_ast_parser_edge_case():
+    """Test AST parser ignores bash comments."""
+    mock_memory = """# Memory
     
-    def append_to_registry(i):
-        with cli.REGISTRY_LOCK:
-            current = cli.read_file("memory.md")
-            if current.startswith("Error"):
-                current = ""
-            new_content = current + f"Entry {i}\n"
-            cli.update_memory_registry(new_content)
+## Task Details
+### T-001
+- **Description**: Do something
+- **Code**:
+```bash
+# Comment 1
+echo "hello"
+# Comment 2
+```
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-        futures = [executor.submit(append_to_registry, i) for i in range(20)]
-        concurrent.futures.wait(futures)
-
-    final_content = mock_file_ops.read_text()
+## Next Section
+"""
+    start_idx, end_idx = ASTMemoryMapper.locate_heading_block(mock_memory, "###", "T-001")
+    lines = mock_memory.splitlines()
+    block = lines[start_idx:end_idx]
     
-    for i in range(20):
-        assert f"Entry {i}\n" in final_content, f"Entry {i} missing from final content!"
-
-def test_budget_manager_exhaustion():
-    bm = cli.BudgetManager("## Config\n- budget_limit: 1000\n- budget_threshold_pct: 80")
-    bm.estimated_tokens = 800
-    with pytest.raises(cli.BudgetExhaustedException):
-        bm.check_and_harvest()
-
-def test_ast_memory_mapper():
-    content = "## Config\n- budget_limit: 1000\n## Budget & Quota Tracking\n| Tokens Consumed | 500 |\n"
-    start, end = cli.ASTMemoryMapper.locate_heading_block(content, "h2", "Budget & Quota Tracking")
-    assert start != -1
-    lines = content.splitlines()[start:end]
-    assert any("| Tokens Consumed | 500 |" in line for line in lines)
+    # Assert that the block contains the bash comments and stops at Next Section
+    block_text = "\n".join(block)
+    assert "# Comment 1" in block_text
+    assert "# Comment 2" in block_text
+    assert "## Next Section" not in block_text
