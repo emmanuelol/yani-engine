@@ -1,6 +1,6 @@
 --- REPOSITORY CONTEXT ---
 Repository Name: DumbleDoer
-Export Date: 2026-07-21 20:03:46
+Export Date: 2026-07-22 20:16:54
 Part: 1 of 1
 --------------------------
 
@@ -16,27 +16,7 @@ This document contains the entire codebase. You may answer user queries fully ba
 ├── .codegraph
 │   └── .gitignore
 ├── .dumbledoer
-│   ├── checkpoints
-│   │   ├── chk_1784682126.json
-│   │   ├── chk_1784683505.json
-│   │   ├── chk_1784683615.json
-│   │   ├── T-001-step1-S-20260702-205350.json
-│   │   ├── T-002-step1-S-20260702-205350.json
-│   │   ├── T-003-step1-S-20260702-205350.json
-│   │   └── T-004-step1-S-20260702-205350.json
-│   ├── rollbacks
-│   │   ├── T-001
-│   │   │   └── dumbledoer__dumbledoer_cli.py
-│   │   ├── T-002
-│   │   │   └── dumbledoer__dumbledoer_cli.py
-│   │   ├── T-003
-│   │   │   └── dumbledoer__dumbledoer_cli.py
-│   │   ├── T-004
-│   │   │   └── dumbledoer__dumbledoer_cli.py
-│   │   ├── chk_1784682126_a.txt.bak
-│   │   ├── chk_1784683505_b.txt.bak
-│   │   └── chk_1784683615_b.txt.bak
-│   └── tmp
+│   └── task_registry.json
 ├── agents
 │   └── agnes.json
 ├── commands
@@ -45,7 +25,8 @@ This document contains the entire codebase. You may answer user queries fully ba
 │   ├── iterate.json
 │   ├── report.json
 │   ├── rollback.json
-│   └── start.json
+│   ├── start.json
+│   └── status.json
 ├── docs
 │   ├── 01-installation.md
 │   ├── 03-use-guide.md
@@ -116,33 +97,59 @@ This document contains the entire codebase. You may answer user queries fully ba
 ├── templates
 │   ├── knowledge-index-template.md
 │   └── memory-template.md
+├── test_venv
+│   ├── bin
+│   │   ├── python
+│   │   ├── python3
+│   │   ├── python3.14
+│   │   └── 𝜋thon
+│   ├── include
+│   ├── lib
+│   │   └── python3.14
+│   │       └── site-packages
+│   ├── lib64
+│   │   └── python3.14
+│   │       └── site-packages
+│   ├── .gitignore
+│   └── pyvenv.cfg
 ├── tests
 │   ├── __init__.py
 │   ├── test_ast_mock.py
+│   ├── test_chaos_validation.py
+│   ├── test_mapping.py
+│   ├── test_mapping2.py
+│   ├── test_qa_harness.py
 │   ├── test_refactors.py
 │   └── test_state_integrity.py
 ├── .env
 ├── .mcp.json
 ├── a.txt
+├── apply_transformations.sh
 ├── b.txt
 ├── Dockerfile
 ├── DumbleDoer_part_1_of_1.txt
 ├── extract_protocols.py
+├── fix_rabbit_hole.py
 ├── generate_repository_export.py
 ├── install.sh
 ├── memory.md
 ├── memory.md.corrupted.20260615214733
 ├── memory.md.lock
 ├── patch_cli.py
+├── patch_global_dumbledoer.py
+├── patch_sdk.py
 ├── plugin.json
 ├── pyproject.toml
 ├── README.md
+├── refactor.py
 ├── requirements.txt
 ├── run_dumbledoer.sh
 ├── sync_knowledge.py
 ├── SYSTEM_INSTRUCTIONS.md
 ├── test
 ├── test_debug.py
+├── test_mapping.py
+├── test_mapping2.py
 ├── test_perm.txt
 ├── test_permissions.py
 └── uv.lock
@@ -150,850 +157,18 @@ This document contains the entire codebase. You may answer user queries fully ba
 
 ## File Contents
 
-### FILE: .dumbledoer/checkpoints/T-001-step1-S-20260702-205350.json
+### FILE: .dumbledoer/task_registry.json
 ```json
 {
-  "checkpointId": "T-001-step1-S-20260702-205350",
-  "taskId": "T-001",
-  "stepIndex": 1,
-  "sessionId": "S-20260702-205350",
-  "description": "About to implement execute_bash in dumbledoer_cli.py",
-  "timestamp": "2026-07-03T02:57:23.661080Z",
-  "files": {
-    "dumbledoer/dumbledoer_cli.py": "import os\nimport sys\nfrom filelock import FileLock\nimport asyncio\nimport subprocess\nfrom typing import List, Optional, Dict\nfrom dotenv import load_dotenv\nfrom google import genai\nfrom rich.console import Console\nfrom rich.markdown import Markdown\nfrom rich.panel import Panel\nfrom mcp.client.session import ClientSession\nfrom mcp.client.stdio import StdioServerParameters, stdio_client\nfrom contextlib import AsyncExitStack\n\nload_dotenv()\nconsole = Console()\nREGISTRY_LOCK = FileLock(\"memory.md.lock\", timeout=10)\n\ndef read_file(path: str) -> str:\n    \"\"\"Reads a file from the file system.\"\"\"\n    try:\n        with open(path, \"r\") as f:\n            return f.read()\n    except Exception as e:\n        return f\"Error reading file {path}: {e}\"\n\ndef write_file(path: str, content: str) -> str:\n    \"\"\"Writes content to a file on the file system.\"\"\"\n    try:\n        if os.path.dirname(path):\n            os.makedirs(os.path.dirname(path), exist_ok=True)\n        with open(path, \"w\") as f:\n            f.write(content)\n        return f\"Successfully wrote to {path}\"\n    except Exception as e:\n        return f\"Error writing to file {path}: {e}\"\n\ndef update_memory_registry(content: str) -> str:\n    \"\"\"Updates the memory.md file with the provided content.\n    CRITICAL CONSTRAINT: You MUST preserve the entire Config block exactly as it was, including 'budget_limit' and 'budget_threshold_pct'. Do not compress, omit, or truncate the Config section under any circumstances.\n    \"\"\"\n    with REGISTRY_LOCK:\n        return write_file(\"memory.md\", content)\n\ndef run_rtk(command: str) -> str:\n    \"\"\"\n    Executes a heavy system command using the Rust Token Killer (rtk).\n    Use this for all system management and heavy optimization tasks.\n    \"\"\"\n    try:\n        result = subprocess.run([\"rtk\", command], capture_output=True, text=True, check=True)\n        return f\"RTK Output: {result.stdout}\"\n    except subprocess.CalledProcessError as e:\n        return f\"RTK Error: {e.stderr}\"\n    except FileNotFoundError:\n        return \"Error: RTK binary not found in system PATH.\"\n\nclass DumbleDoerCLI:\n    def __init__(self, api_key: Optional[str] = None, model_id: str = \"gemini-2.5-flash\"):\n        self.api_key = api_key or os.getenv(\"GOOGLE_API_KEY\")\n        if not self.api_key:\n            console.print(\"[red]Error: GOOGLE_API_KEY not found.[/red]\")\n            sys.exit(1)\n            \n        self.client = genai.Client(api_key=self.api_key)\n        self.model_id = model_id\n        self.chat_session = None\n        self.mcp_sessions: Dict[str, ClientSession] = {}\n        self.exit_stack = AsyncExitStack()\n        \n        self.local_tools = [read_file, write_file, update_memory_registry, run_rtk]\n        self.gemini_tools = list(self.local_tools)\n\n    async def _init_mcp(self, name: str, command: str, args: List[str]):\n        console.print(f\"[dim]Initializing MCP server: {name}...[/dim]\")\n        try:\n            params = StdioServerParameters(command=command, args=args)\n            read, write = await self.exit_stack.enter_async_context(stdio_client(params))\n            session = await self.exit_stack.enter_async_context(ClientSession(read, write))\n            await session.initialize()\n            self.mcp_sessions[name] = session\n            \n            mcp_tools = await session.list_tools()\n            for tool in mcp_tools.tools:\n                wrapper = self._create_mcp_wrapper(name, tool.name)\n                wrapper.__name__ = f\"{name}_{tool.name}\"\n                wrapper.__doc__ = f\"{tool.description}\\n\\nMCP Server: {name}\"\n                self.gemini_tools.append(wrapper)\n                \n            console.print(f\"[green]\u2713 MCP server {name} initialized.[/green]\")\n        except Exception as e:\n            console.print(f\"[yellow]\u26a0 Failed to initialize {name}: {e}[/yellow]\")\n\n    def _create_mcp_wrapper(self, server_name: str, tool_name: str):\n        async def mcp_wrapper(**kwargs):\n            session = self.mcp_sessions[server_name]\n            result = await session.call_tool(tool_name, arguments=kwargs)\n            return result.content\n        return mcp_wrapper\n\n    def _get_system_instructions(self) -> str:\n        instructions = [\n            \"# MISSION\",\n            \"You are DumbleDoer, an Agent Engineering Harness. Your goal is to systematically analyze, improve, and validate agent projects.\",\n            self.local_tools[0](\"SYSTEM_INSTRUCTIONS.md\") or \"Core rules not found.\",\n            self.local_tools[0](\"lib/common-preamble.md\") or \"\",\n            self.local_tools[0](\"lib/compression-policy.md\") or \"\",\n            self.local_tools[0](\"memory.md\") or \"No memory.md found. Start a new project.\"\n        ]\n        return \"\\n\\n\".join(instructions)\n\n    async def start_chat(self, action: str, docs_path: Optional[str] = None):\n        await self._init_mcp(\"context7\", \"npx\", [\"-y\", \"@upstash/context7-mcp\"])\n        await self._init_mcp(\"codegraph\", \"npx\", [\"-y\", \"--package=@colbymchenry/codegraph\", \"codegraph\", \"serve\", \"--mcp\"])\n        \n        self.chat_session = self.client.aio.chats.create(\n            model=self.model_id,\n            config={\"system_instruction\": self._get_system_instructions(), \"tools\": self.gemini_tools}\n        )\n        \n        console.print(Panel(f\"DumbleDoer Executing: [bold blue]/{action}[/bold blue]\", title=\"DumbleDoer\"))\n        response = await self.chat_session.send_message(f\"Execute the /{action} command. Docs path: {docs_path}\")\n        if response.text:\n            console.print(Markdown(response.text))\n\ndef main():\n    import argparse\n    parser = argparse.ArgumentParser()\n    parser.add_argument(\"command\", choices=[\"start\", \"execute\", \"resume\", \"report\", \"rollback\", \"update-docs\"])\n    parser.add_argument(\"--docs\", type=str)\n    args = parser.parse_args()\n    \n    try:\n        dumbledoer = DumbleDoerCLI()\n        asyncio.run(dumbledoer.start_chat(args.command, args.docs))\n    except KeyboardInterrupt:\n        pass\n\nif __name__ == \"__main__\":\n    main()\n"
-  },
-  "codeGraphSnapshot": {
-    "symbol": "DumbleDoerCLI",
-    "impactRadius": 7,
-    "affectedSymbols": [
-      "__init__",
-      "_init_mcp",
-      "start_chat",
-      "main",
-      "_create_mcp_wrapper",
-      "_get_system_instructions"
-    ],
-    "affectedFiles": [
-      "dumbledoer/dumbledoer_cli.py"
-    ],
-    "rawOutput": "Impact of changing \"DumbleDoerCLI\" \u2014 7 affected symbols"
-  },
-  "nextStepDescription": "Write new execute_bash implementation to tmp file."
+  "task-1": {
+    "id": "task-1",
+    "desc": "Call the codegraph_impact tool to search for \"test\" and print the result. This is just a test to verify the tool runs without KeyError.",
+    "title": "Call codegraph_impact tool to search for \"test\"",
+    "status": "completed",
+    "deps": [],
+    "original_line": "| task-1 | Call codegraph_impact tool to search for \"test\" | test | pending | High | none | Low | TestAgent |"
+  }
 }
-
-```
-
-### FILE: .dumbledoer/checkpoints/T-002-step1-S-20260702-205350.json
-```json
-{
-  "checkpointId": "T-002-step1-S-20260702-205350",
-  "taskId": "T-002",
-  "stepIndex": 1,
-  "sessionId": "S-20260702-205350",
-  "description": "About to replace write_file with write_file_with_review in dumbledoer_cli.py",
-  "timestamp": "2026-07-03T03:08:15.929643Z",
-  "files": {
-    "dumbledoer/dumbledoer_cli.py": "import os\nimport sys\nfrom filelock import FileLock\nimport asyncio\nimport subprocess\nfrom typing import List, Optional, Dict\nfrom dotenv import load_dotenv\nfrom google import genai\nfrom rich.console import Console\nfrom rich.markdown import Markdown\nfrom rich.panel import Panel\nfrom mcp.client.session import ClientSession\nfrom mcp.client.stdio import StdioServerParameters, stdio_client\nfrom contextlib import AsyncExitStack\n\nload_dotenv()\nconsole = Console()\nREGISTRY_LOCK = FileLock(\"memory.md.lock\", timeout=10)\n\ndef read_file(path: str) -> str:\n    \"\"\"Reads a file from the file system.\"\"\"\n    try:\n        with open(path, \"r\") as f:\n            return f.read()\n    except Exception as e:\n        return f\"Error reading file {path}: {e}\"\n\ndef write_file(path: str, content: str) -> str:\n    \"\"\"Writes content to a file on the file system.\"\"\"\n    try:\n        if os.path.dirname(path):\n            os.makedirs(os.path.dirname(path), exist_ok=True)\n        with open(path, \"w\") as f:\n            f.write(content)\n        return f\"Successfully wrote to {path}\"\n    except Exception as e:\n        return f\"Error writing to file {path}: {e}\"\n\ndef execute_bash(command: str) -> str:\n    \"\"\"\n    Executes a bash command in the execution sandbox.\n    Use this to run tests, uv, and git commands autonomously.\n    \"\"\"\n    try:\n        result = subprocess.run(command, shell=True, capture_output=True, text=True, check=True)\n        return result.stdout\n    except subprocess.CalledProcessError as e:\n        return f\"Error ({e.returncode}):\\nSTDOUT: {e.stdout}\\nSTDERR: {e.stderr}\"\n    except Exception as e:\n        return f\"Exception executing command: {e}\"\n\ndef update_memory_registry(content: str) -> str:\n    \"\"\"Updates the memory.md file with the provided content.\n    CRITICAL CONSTRAINT: You MUST preserve the entire Config block exactly as it was, including 'budget_limit' and 'budget_threshold_pct'. Do not compress, omit, or truncate the Config section under any circumstances.\n    \"\"\"\n    with REGISTRY_LOCK:\n        return write_file(\"memory.md\", content)\n\ndef run_rtk(command: str) -> str:\n    \"\"\"\n    Executes a heavy system command using the Rust Token Killer (rtk).\n    Use this for all system management and heavy optimization tasks.\n    \"\"\"\n    try:\n        result = subprocess.run([\"rtk\", command], capture_output=True, text=True, check=True)\n        return f\"RTK Output: {result.stdout}\"\n    except subprocess.CalledProcessError as e:\n        return f\"RTK Error: {e.stderr}\"\n    except FileNotFoundError:\n        return \"Error: RTK binary not found in system PATH.\"\n\nclass DumbleDoerCLI:\n    def __init__(self, api_key: Optional[str] = None, model_id: str = \"gemini-2.5-flash\"):\n        self.api_key = api_key or os.getenv(\"GOOGLE_API_KEY\")\n        if not self.api_key:\n            console.print(\"[red]Error: GOOGLE_API_KEY not found.[/red]\")\n            sys.exit(1)\n            \n        self.client = genai.Client(api_key=self.api_key)\n        self.model_id = model_id\n        self.chat_session = None\n        self.mcp_sessions: Dict[str, ClientSession] = {}\n        self.exit_stack = AsyncExitStack()\n        \n        self.local_tools = [read_file, write_file, update_memory_registry, run_rtk]\n        self.gemini_tools = list(self.local_tools)\n\n    async def _init_mcp(self, name: str, command: str, args: List[str]):\n        console.print(f\"[dim]Initializing MCP server: {name}...[/dim]\")\n        try:\n            params = StdioServerParameters(command=command, args=args)\n            read, write = await self.exit_stack.enter_async_context(stdio_client(params))\n            session = await self.exit_stack.enter_async_context(ClientSession(read, write))\n            await session.initialize()\n            self.mcp_sessions[name] = session\n            \n            mcp_tools = await session.list_tools()\n            for tool in mcp_tools.tools:\n                wrapper = self._create_mcp_wrapper(name, tool.name)\n                wrapper.__name__ = f\"{name}_{tool.name}\"\n                wrapper.__doc__ = f\"{tool.description}\\n\\nMCP Server: {name}\"\n                self.gemini_tools.append(wrapper)\n                \n            console.print(f\"[green]\u2713 MCP server {name} initialized.[/green]\")\n        except Exception as e:\n            console.print(f\"[yellow]\u26a0 Failed to initialize {name}: {e}[/yellow]\")\n\n    def _create_mcp_wrapper(self, server_name: str, tool_name: str):\n        async def mcp_wrapper(**kwargs):\n            session = self.mcp_sessions[server_name]\n            result = await session.call_tool(tool_name, arguments=kwargs)\n            return result.content\n        return mcp_wrapper\n\n    def _get_system_instructions(self) -> str:\n        instructions = [\n            \"# MISSION\",\n            \"You are DumbleDoer, an Agent Engineering Harness. Your goal is to systematically analyze, improve, and validate agent projects.\",\n            self.local_tools[0](\"SYSTEM_INSTRUCTIONS.md\") or \"Core rules not found.\",\n            self.local_tools[0](\"lib/common-preamble.md\") or \"\",\n            self.local_tools[0](\"lib/compression-policy.md\") or \"\",\n            self.local_tools[0](\"memory.md\") or \"No memory.md found. Start a new project.\"\n        ]\n        return \"\\n\\n\".join(instructions)\n\n    async def start_chat(self, action: str, docs_path: Optional[str] = None):\n        await self._init_mcp(\"context7\", \"npx\", [\"-y\", \"@upstash/context7-mcp\"])\n        await self._init_mcp(\"codegraph\", \"npx\", [\"-y\", \"--package=@colbymchenry/codegraph\", \"codegraph\", \"serve\", \"--mcp\"])\n        \n        self.chat_session = self.client.aio.chats.create(\n            model=self.model_id,\n            config={\"system_instruction\": self._get_system_instructions(), \"tools\": self.gemini_tools}\n        )\n        \n        console.print(Panel(f\"DumbleDoer Executing: [bold blue]/{action}[/bold blue]\", title=\"DumbleDoer\"))\n        response = await self.chat_session.send_message(f\"Execute the /{action} command. Docs path: {docs_path}\")\n        if response.text:\n            console.print(Markdown(response.text))\n\ndef main():\n    import argparse\n    parser = argparse.ArgumentParser()\n    parser.add_argument(\"command\", choices=[\"start\", \"execute\", \"resume\", \"report\", \"rollback\", \"update-docs\"])\n    parser.add_argument(\"--docs\", type=str)\n    args = parser.parse_args()\n    \n    try:\n        dumbledoer = DumbleDoerCLI()\n        asyncio.run(dumbledoer.start_chat(args.command, args.docs))\n    except KeyboardInterrupt:\n        pass\n\nif __name__ == \"__main__\":\n    main()\n"
-  },
-  "codeGraphSnapshot": {
-    "symbol": "write_file",
-    "impactRadius": 3,
-    "affectedSymbols": [
-      "write_file",
-      "update_memory_registry",
-      "__init__"
-    ],
-    "affectedFiles": [
-      "dumbledoer/dumbledoer_cli.py"
-    ],
-    "rawOutput": "Impact of changing \"write_file\" \u2014 3 affected symbols"
-  },
-  "nextStepDescription": "Write diff-gate implementation to tmp file."
-}
-
-```
-
-### FILE: .dumbledoer/checkpoints/T-003-step1-S-20260702-205350.json
-```json
-{
-  "checkpointId": "T-003-step1-S-20260702-205350",
-  "taskId": "T-003",
-  "stepIndex": 1,
-  "sessionId": "S-20260702-205350",
-  "description": "About to use shlex.split in run_rtk in dumbledoer_cli.py",
-  "timestamp": "2026-07-03T03:18:54.200676Z",
-  "files": {
-    "dumbledoer/dumbledoer_cli.py": "import os\nimport sys\nfrom filelock import FileLock\nimport asyncio\nimport subprocess\nfrom typing import List, Optional, Dict\nfrom dotenv import load_dotenv\nfrom google import genai\nfrom rich.console import Console\nfrom rich.markdown import Markdown\nfrom rich.panel import Panel\nfrom mcp.client.session import ClientSession\nfrom mcp.client.stdio import StdioServerParameters, stdio_client\nfrom contextlib import AsyncExitStack\n\nload_dotenv()\nconsole = Console()\nREGISTRY_LOCK = FileLock(\"memory.md.lock\", timeout=10)\n\ndef read_file(path: str) -> str:\n    \"\"\"Reads a file from the file system.\"\"\"\n    try:\n        with open(path, \"r\") as f:\n            return f.read()\n    except Exception as e:\n        return f\"Error reading file {path}: {e}\"\n\ndef _write_file(path: str, content: str) -> str:\n    \"\"\"Internal function to write content to a file on the file system.\"\"\"\n    try:\n        if os.path.dirname(path):\n            os.makedirs(os.path.dirname(path), exist_ok=True)\n        with open(path, \"w\") as f:\n            f.write(content)\n        return f\"Successfully wrote to {path}\"\n    except Exception as e:\n        return f\"Error writing to file {path}: {e}\"\n\ndef write_file_with_review(path: str, content: str) -> str:\n    \"\"\"Writes content to a file via a VS Code Diff-Gate for user approval.\"\"\"\n    try:\n        tmp_dir = \".dumbledoer/tmp\"\n        os.makedirs(tmp_dir, exist_ok=True)\n        filename = os.path.basename(path)\n        tmp_path = os.path.join(tmp_dir, f\"{filename}.tmp\")\n        \n        with open(tmp_path, \"w\") as f:\n            f.write(content)\n            \n        if os.path.exists(path):\n            subprocess.run([\"code\", \"--wait\", \"--diff\", path, tmp_path], check=True)\n        else:\n            subprocess.run([\"code\", \"--wait\", tmp_path], check=True)\n            \n        console.print(f\"[yellow]Review proposed changes for {path} in VS Code.[/yellow]\")\n        approval = input(\"Approve changes? [Y/n]: \").strip().lower()\n        if approval in ('', 'y', 'yes'):\n            os.replace(tmp_path, path)\n            return f\"Successfully wrote to {path} (Approved by user)\"\n        else:\n            return f\"Error: Changes to {path} were rejected by the user.\"\n    except Exception as e:\n        return f\"Error in write_file_with_review for {path}: {e}\"\n\ndef execute_bash(command: str) -> str:\n    \"\"\"\n    Executes a bash command in the execution sandbox.\n    Use this to run tests, uv, and git commands autonomously.\n    \"\"\"\n    try:\n        result = subprocess.run(command, shell=True, capture_output=True, text=True, check=True)\n        return result.stdout\n    except subprocess.CalledProcessError as e:\n        return f\"Error ({e.returncode}):\\nSTDOUT: {e.stdout}\\nSTDERR: {e.stderr}\"\n    except Exception as e:\n        return f\"Exception executing command: {e}\"\n\ndef update_memory_registry(content: str) -> str:\n    \"\"\"Updates the memory.md file with the provided content.\n    CRITICAL CONSTRAINT: You MUST preserve the entire Config block exactly as it was, including 'budget_limit' and 'budget_threshold_pct'. Do not compress, omit, or truncate the Config section under any circumstances.\n    \"\"\"\n    with REGISTRY_LOCK:\n        return _write_file(\"memory.md\", content)\n\ndef run_rtk(command: str) -> str:\n    \"\"\"\n    Executes a heavy system command using the Rust Token Killer (rtk).\n    Use this for all system management and heavy optimization tasks.\n    \"\"\"\n    try:\n        result = subprocess.run([\"rtk\", command], capture_output=True, text=True, check=True)\n        return f\"RTK Output: {result.stdout}\"\n    except subprocess.CalledProcessError as e:\n        return f\"RTK Error: {e.stderr}\"\n    except FileNotFoundError:\n        return \"Error: RTK binary not found in system PATH.\"\n\nclass DumbleDoerCLI:\n    def __init__(self, api_key: Optional[str] = None, model_id: str = \"gemini-2.5-flash\"):\n        self.api_key = api_key or os.getenv(\"GOOGLE_API_KEY\")\n        if not self.api_key:\n            console.print(\"[red]Error: GOOGLE_API_KEY not found.[/red]\")\n            sys.exit(1)\n            \n        self.client = genai.Client(api_key=self.api_key)\n        self.model_id = model_id\n        self.chat_session = None\n        self.mcp_sessions: Dict[str, ClientSession] = {}\n        self.exit_stack = AsyncExitStack()\n        \n        self.local_tools = [read_file, write_file_with_review, execute_bash, update_memory_registry, run_rtk]\n        self.gemini_tools = list(self.local_tools)\n\n    async def _init_mcp(self, name: str, command: str, args: List[str]):\n        console.print(f\"[dim]Initializing MCP server: {name}...[/dim]\")\n        try:\n            params = StdioServerParameters(command=command, args=args)\n            read, write = await self.exit_stack.enter_async_context(stdio_client(params))\n            session = await self.exit_stack.enter_async_context(ClientSession(read, write))\n            await session.initialize()\n            self.mcp_sessions[name] = session\n            \n            mcp_tools = await session.list_tools()\n            for tool in mcp_tools.tools:\n                wrapper = self._create_mcp_wrapper(name, tool.name)\n                wrapper.__name__ = f\"{name}_{tool.name}\"\n                wrapper.__doc__ = f\"{tool.description}\\n\\nMCP Server: {name}\"\n                self.gemini_tools.append(wrapper)\n                \n            console.print(f\"[green]\u2713 MCP server {name} initialized.[/green]\")\n        except Exception as e:\n            console.print(f\"[yellow]\u26a0 Failed to initialize {name}: {e}[/yellow]\")\n\n    def _create_mcp_wrapper(self, server_name: str, tool_name: str):\n        async def mcp_wrapper(**kwargs):\n            session = self.mcp_sessions[server_name]\n            result = await session.call_tool(tool_name, arguments=kwargs)\n            return result.content\n        return mcp_wrapper\n\n    def _get_system_instructions(self) -> str:\n        instructions = [\n            \"# MISSION\",\n            \"You are DumbleDoer, an Agent Engineering Harness. Your goal is to systematically analyze, improve, and validate agent projects.\",\n            self.local_tools[0](\"SYSTEM_INSTRUCTIONS.md\") or \"Core rules not found.\",\n            self.local_tools[0](\"lib/common-preamble.md\") or \"\",\n            self.local_tools[0](\"lib/compression-policy.md\") or \"\",\n            self.local_tools[0](\"memory.md\") or \"No memory.md found. Start a new project.\"\n        ]\n        return \"\\n\\n\".join(instructions)\n\n    async def start_chat(self, action: str, docs_path: Optional[str] = None):\n        await self._init_mcp(\"context7\", \"npx\", [\"-y\", \"@upstash/context7-mcp\"])\n        await self._init_mcp(\"codegraph\", \"npx\", [\"-y\", \"--package=@colbymchenry/codegraph\", \"codegraph\", \"serve\", \"--mcp\"])\n        \n        self.chat_session = self.client.aio.chats.create(\n            model=self.model_id,\n            config={\"system_instruction\": self._get_system_instructions(), \"tools\": self.gemini_tools}\n        )\n        \n        console.print(Panel(f\"DumbleDoer Executing: [bold blue]/{action}[/bold blue]\", title=\"DumbleDoer\"))\n        response = await self.chat_session.send_message(f\"Execute the /{action} command. Docs path: {docs_path}\")\n        if response.text:\n            console.print(Markdown(response.text))\n\ndef main():\n    import argparse\n    parser = argparse.ArgumentParser()\n    parser.add_argument(\"command\", choices=[\"start\", \"execute\", \"resume\", \"report\", \"rollback\", \"update-docs\"])\n    parser.add_argument(\"--docs\", type=str)\n    args = parser.parse_args()\n    \n    try:\n        dumbledoer = DumbleDoerCLI()\n        asyncio.run(dumbledoer.start_chat(args.command, args.docs))\n    except KeyboardInterrupt:\n        pass\n\nif __name__ == \"__main__\":\n    main()\n"
-  },
-  "codeGraphSnapshot": {
-    "symbol": "run_rtk",
-    "impactRadius": 2,
-    "affectedSymbols": [
-      "run_rtk",
-      "__init__"
-    ],
-    "affectedFiles": [
-      "dumbledoer/dumbledoer_cli.py"
-    ],
-    "rawOutput": "Impact of changing \"run_rtk\" \u2014 2 affected symbols"
-  },
-  "nextStepDescription": "Update run_rtk using shlex.split."
-}
-
-```
-
-### FILE: .dumbledoer/checkpoints/T-004-step1-S-20260702-205350.json
-```json
-{
-  "checkpointId": "T-004-step1-S-20260702-205350",
-  "taskId": "T-004",
-  "stepIndex": 1,
-  "sessionId": "S-20260702-205350",
-  "description": "About to add async wrappers in dumbledoer_cli.py",
-  "timestamp": "2026-07-03T03:23:54.890952Z",
-  "files": {
-    "dumbledoer/dumbledoer_cli.py": "import os\nimport sys\nfrom filelock import FileLock\nimport asyncio\nimport subprocess\nimport shlex\nfrom typing import List, Optional, Dict\nfrom dotenv import load_dotenv\nfrom google import genai\nfrom rich.console import Console\nfrom rich.markdown import Markdown\nfrom rich.panel import Panel\nfrom mcp.client.session import ClientSession\nfrom mcp.client.stdio import StdioServerParameters, stdio_client\nfrom contextlib import AsyncExitStack\n\nload_dotenv()\nconsole = Console()\nREGISTRY_LOCK = FileLock(\"memory.md.lock\", timeout=10)\n\ndef read_file(path: str) -> str:\n    \"\"\"Reads a file from the file system.\"\"\"\n    try:\n        with open(path, \"r\") as f:\n            return f.read()\n    except Exception as e:\n        return f\"Error reading file {path}: {e}\"\n\ndef _write_file(path: str, content: str) -> str:\n    \"\"\"Internal function to write content to a file on the file system.\"\"\"\n    try:\n        if os.path.dirname(path):\n            os.makedirs(os.path.dirname(path), exist_ok=True)\n        with open(path, \"w\") as f:\n            f.write(content)\n        return f\"Successfully wrote to {path}\"\n    except Exception as e:\n        return f\"Error writing to file {path}: {e}\"\n\ndef write_file_with_review(path: str, content: str) -> str:\n    \"\"\"Writes content to a file via a VS Code Diff-Gate for user approval.\"\"\"\n    try:\n        tmp_dir = \".dumbledoer/tmp\"\n        os.makedirs(tmp_dir, exist_ok=True)\n        filename = os.path.basename(path)\n        tmp_path = os.path.join(tmp_dir, f\"{filename}.tmp\")\n        \n        with open(tmp_path, \"w\") as f:\n            f.write(content)\n            \n        if os.path.exists(path):\n            subprocess.run([\"code\", \"--wait\", \"--diff\", path, tmp_path], check=True)\n        else:\n            subprocess.run([\"code\", \"--wait\", tmp_path], check=True)\n            \n        console.print(f\"[yellow]Review proposed changes for {path} in VS Code.[/yellow]\")\n        approval = input(\"Approve changes? [Y/n]: \").strip().lower()\n        if approval in ('', 'y', 'yes'):\n            os.replace(tmp_path, path)\n            return f\"Successfully wrote to {path} (Approved by user)\"\n        else:\n            return f\"Error: Changes to {path} were rejected by the user.\"\n    except Exception as e:\n        return f\"Error in write_file_with_review for {path}: {e}\"\n\ndef execute_bash(command: str) -> str:\n    \"\"\"\n    Executes a bash command in the execution sandbox.\n    Use this to run tests, uv, and git commands autonomously.\n    \"\"\"\n    try:\n        result = subprocess.run(command, shell=True, capture_output=True, text=True, check=True)\n        return result.stdout\n    except subprocess.CalledProcessError as e:\n        return f\"Error ({e.returncode}):\\nSTDOUT: {e.stdout}\\nSTDERR: {e.stderr}\"\n    except Exception as e:\n        return f\"Exception executing command: {e}\"\n\ndef update_memory_registry(content: str) -> str:\n    \"\"\"Updates the memory.md file with the provided content.\n    CRITICAL CONSTRAINT: You MUST preserve the entire Config block exactly as it was, including 'budget_limit' and 'budget_threshold_pct'. Do not compress, omit, or truncate the Config section under any circumstances.\n    \"\"\"\n    with REGISTRY_LOCK:\n        return _write_file(\"memory.md\", content)\n\ndef run_rtk(command: str) -> str:\n    \"\"\"\n    Executes a heavy system command using the Rust Token Killer (rtk).\n    Use this for all system management and heavy optimization tasks.\n    \"\"\"\n    try:\n        args = [\"rtk\"] + shlex.split(command)\n        result = subprocess.run(args, capture_output=True, text=True, check=True)\n        return f\"RTK Output: {result.stdout}\"\n    except subprocess.CalledProcessError as e:\n        return f\"RTK Error: {e.stderr}\"\n    except FileNotFoundError:\n        return \"Error: RTK binary not found in system PATH.\"\n\nclass DumbleDoerCLI:\n    def __init__(self, api_key: Optional[str] = None, model_id: str = \"gemini-2.5-flash\"):\n        self.api_key = api_key or os.getenv(\"GOOGLE_API_KEY\")\n        if not self.api_key:\n            console.print(\"[red]Error: GOOGLE_API_KEY not found.[/red]\")\n            sys.exit(1)\n            \n        self.client = genai.Client(api_key=self.api_key)\n        self.model_id = model_id\n        self.chat_session = None\n        self.mcp_sessions: Dict[str, ClientSession] = {}\n        self.exit_stack = AsyncExitStack()\n        \n        self.local_tools = [read_file, write_file_with_review, execute_bash, update_memory_registry, run_rtk]\n        self.gemini_tools = list(self.local_tools)\n\n    async def _init_mcp(self, name: str, command: str, args: List[str]):\n        console.print(f\"[dim]Initializing MCP server: {name}...[/dim]\")\n        try:\n            params = StdioServerParameters(command=command, args=args)\n            read, write = await self.exit_stack.enter_async_context(stdio_client(params))\n            session = await self.exit_stack.enter_async_context(ClientSession(read, write))\n            await session.initialize()\n            self.mcp_sessions[name] = session\n            \n            mcp_tools = await session.list_tools()\n            for tool in mcp_tools.tools:\n                wrapper = self._create_mcp_wrapper(name, tool.name)\n                wrapper.__name__ = f\"{name}_{tool.name}\"\n                wrapper.__doc__ = f\"{tool.description}\\n\\nMCP Server: {name}\"\n                self.gemini_tools.append(wrapper)\n                \n            console.print(f\"[green]\u2713 MCP server {name} initialized.[/green]\")\n        except Exception as e:\n            console.print(f\"[yellow]\u26a0 Failed to initialize {name}: {e}[/yellow]\")\n\n    def _create_mcp_wrapper(self, server_name: str, tool_name: str):\n        async def mcp_wrapper(**kwargs):\n            session = self.mcp_sessions[server_name]\n            result = await session.call_tool(tool_name, arguments=kwargs)\n            return result.content\n        return mcp_wrapper\n\n    def _get_system_instructions(self) -> str:\n        instructions = [\n            \"# MISSION\",\n            \"You are DumbleDoer, an Agent Engineering Harness. Your goal is to systematically analyze, improve, and validate agent projects.\",\n            self.local_tools[0](\"SYSTEM_INSTRUCTIONS.md\") or \"Core rules not found.\",\n            self.local_tools[0](\"lib/common-preamble.md\") or \"\",\n            self.local_tools[0](\"lib/compression-policy.md\") or \"\",\n            self.local_tools[0](\"memory.md\") or \"No memory.md found. Start a new project.\"\n        ]\n        return \"\\n\\n\".join(instructions)\n\n    async def start_chat(self, action: str, docs_path: Optional[str] = None):\n        await self._init_mcp(\"context7\", \"npx\", [\"-y\", \"@upstash/context7-mcp\"])\n        await self._init_mcp(\"codegraph\", \"npx\", [\"-y\", \"--package=@colbymchenry/codegraph\", \"codegraph\", \"serve\", \"--mcp\"])\n        \n        self.chat_session = self.client.aio.chats.create(\n            model=self.model_id,\n            config={\"system_instruction\": self._get_system_instructions(), \"tools\": self.gemini_tools}\n        )\n        \n        console.print(Panel(f\"DumbleDoer Executing: [bold blue]/{action}[/bold blue]\", title=\"DumbleDoer\"))\n        response = await self.chat_session.send_message(f\"Execute the /{action} command. Docs path: {docs_path}\")\n        if response.text:\n            console.print(Markdown(response.text))\n\ndef main():\n    import argparse\n    parser = argparse.ArgumentParser()\n    parser.add_argument(\"command\", choices=[\"start\", \"execute\", \"resume\", \"report\", \"rollback\", \"update-docs\"])\n    parser.add_argument(\"--docs\", type=str)\n    args = parser.parse_args()\n    \n    try:\n        dumbledoer = DumbleDoerCLI()\n        asyncio.run(dumbledoer.start_chat(args.command, args.docs))\n    except KeyboardInterrupt:\n        pass\n\nif __name__ == \"__main__\":\n    main()\n"
-  },
-  "codeGraphSnapshot": {
-    "symbol": "DumbleDoerCLI",
-    "impactRadius": 7,
-    "affectedSymbols": [
-      "__init__",
-      "_init_mcp",
-      "start_chat",
-      "main",
-      "_create_mcp_wrapper",
-      "_get_system_instructions"
-    ],
-    "affectedFiles": [
-      "dumbledoer/dumbledoer_cli.py"
-    ],
-    "rawOutput": "Impact of changing \"DumbleDoerCLI\" \u2014 7 affected symbols"
-  },
-  "nextStepDescription": "Update DumbleDoerCLI to wrap tools with asyncio.to_thread."
-}
-
-```
-
-### FILE: .dumbledoer/checkpoints/chk_1784682126.json
-```json
-{
-  "Timestamp": "2026-07-21T19:02:06.985659",
-  "Task ID": "manual-edit",
-  "Change Summary": "Update a.txt via Diff-Gate",
-  "Rationale": "User-approved manual write_file_with_review",
-  "Checkpoint ID": "chk_1784682126",
-  "Session ID": "manual",
-  "Step": "diff-gate",
-  "Files Snapshotted": "a.txt"
-}
-
-```
-
-### FILE: .dumbledoer/checkpoints/chk_1784683505.json
-```json
-{
-  "Timestamp": "2026-07-21T19:25:05.989893",
-  "Task ID": "manual-edit",
-  "Change Summary": "Update b.txt via Diff-Gate",
-  "Rationale": "User-approved manual write_file_with_review",
-  "Checkpoint ID": "chk_1784683505",
-  "Session ID": "manual",
-  "Step": "diff-gate",
-  "Files Snapshotted": "b.txt"
-}
-
-```
-
-### FILE: .dumbledoer/checkpoints/chk_1784683615.json
-```json
-{
-  "Timestamp": "2026-07-21T19:26:55.291211",
-  "Task ID": "manual-edit",
-  "Change Summary": "Update b.txt via Diff-Gate",
-  "Rationale": "User-approved manual write_file_with_review",
-  "Checkpoint ID": "chk_1784683615",
-  "Session ID": "manual",
-  "Step": "diff-gate",
-  "Files Snapshotted": "b.txt"
-}
-
-```
-
-### FILE: .dumbledoer/rollbacks/T-001/dumbledoer__dumbledoer_cli.py
-```py
-import os
-import sys
-from filelock import FileLock
-import asyncio
-import subprocess
-from typing import List, Optional, Dict
-from dotenv import load_dotenv
-from google import genai
-from rich.console import Console
-from rich.markdown import Markdown
-from rich.panel import Panel
-from mcp.client.session import ClientSession
-from mcp.client.stdio import StdioServerParameters, stdio_client
-from contextlib import AsyncExitStack
-
-load_dotenv()
-console = Console()
-REGISTRY_LOCK = FileLock("memory.md.lock", timeout=10)
-
-def read_file(path: str) -> str:
-    """Reads a file from the file system."""
-    try:
-        with open(path, "r") as f:
-            return f.read()
-    except Exception as e:
-        return f"Error reading file {path}: {e}"
-
-def write_file(path: str, content: str) -> str:
-    """Writes content to a file on the file system."""
-    try:
-        if os.path.dirname(path):
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "w") as f:
-            f.write(content)
-        return f"Successfully wrote to {path}"
-    except Exception as e:
-        return f"Error writing to file {path}: {e}"
-
-def update_memory_registry(content: str) -> str:
-    """Updates the memory.md file with the provided content.
-    CRITICAL CONSTRAINT: You MUST preserve the entire Config block exactly as it was, including 'budget_limit' and 'budget_threshold_pct'. Do not compress, omit, or truncate the Config section under any circumstances.
-    """
-    with REGISTRY_LOCK:
-        return write_file("memory.md", content)
-
-def run_rtk(command: str) -> str:
-    """
-    Executes a heavy system command using the Rust Token Killer (rtk).
-    Use this for all system management and heavy optimization tasks.
-    """
-    try:
-        result = subprocess.run(["rtk", command], capture_output=True, text=True, check=True)
-        return f"RTK Output: {result.stdout}"
-    except subprocess.CalledProcessError as e:
-        return f"RTK Error: {e.stderr}"
-    except FileNotFoundError:
-        return "Error: RTK binary not found in system PATH."
-
-class DumbleDoerCLI:
-    def __init__(self, api_key: Optional[str] = None, model_id: str = "gemini-2.5-flash"):
-        self.api_key = api_key or os.getenv("GOOGLE_API_KEY")
-        if not self.api_key:
-            console.print("[red]Error: GOOGLE_API_KEY not found.[/red]")
-            sys.exit(1)
-            
-        self.client = genai.Client(api_key=self.api_key)
-        self.model_id = model_id
-        self.chat_session = None
-        self.mcp_sessions: Dict[str, ClientSession] = {}
-        self.exit_stack = AsyncExitStack()
-        
-        self.local_tools = [read_file, write_file, update_memory_registry, run_rtk]
-        self.gemini_tools = list(self.local_tools)
-
-    async def _init_mcp(self, name: str, command: str, args: List[str]):
-        console.print(f"[dim]Initializing MCP server: {name}...[/dim]")
-        try:
-            params = StdioServerParameters(command=command, args=args)
-            read, write = await self.exit_stack.enter_async_context(stdio_client(params))
-            session = await self.exit_stack.enter_async_context(ClientSession(read, write))
-            await session.initialize()
-            self.mcp_sessions[name] = session
-            
-            mcp_tools = await session.list_tools()
-            for tool in mcp_tools.tools:
-                wrapper = self._create_mcp_wrapper(name, tool.name)
-                wrapper.__name__ = f"{name}_{tool.name}"
-                wrapper.__doc__ = f"{tool.description}\n\nMCP Server: {name}"
-                self.gemini_tools.append(wrapper)
-                
-            console.print(f"[green]✓ MCP server {name} initialized.[/green]")
-        except Exception as e:
-            console.print(f"[yellow]⚠ Failed to initialize {name}: {e}[/yellow]")
-
-    def _create_mcp_wrapper(self, server_name: str, tool_name: str):
-        async def mcp_wrapper(**kwargs):
-            session = self.mcp_sessions[server_name]
-            result = await session.call_tool(tool_name, arguments=kwargs)
-            return result.content
-        return mcp_wrapper
-
-    def _get_system_instructions(self) -> str:
-        instructions = [
-            "# MISSION",
-            "You are DumbleDoer, an Agent Engineering Harness. Your goal is to systematically analyze, improve, and validate agent projects.",
-            self.local_tools[0]("SYSTEM_INSTRUCTIONS.md") or "Core rules not found.",
-            self.local_tools[0]("lib/common-preamble.md") or "",
-            self.local_tools[0]("lib/compression-policy.md") or "",
-            self.local_tools[0]("memory.md") or "No memory.md found. Start a new project."
-        ]
-        return "\n\n".join(instructions)
-
-    async def start_chat(self, action: str, docs_path: Optional[str] = None):
-        await self._init_mcp("context7", "npx", ["-y", "@upstash/context7-mcp"])
-        await self._init_mcp("codegraph", "npx", ["-y", "--package=@colbymchenry/codegraph", "codegraph", "serve", "--mcp"])
-        
-        self.chat_session = self.client.aio.chats.create(
-            model=self.model_id,
-            config={"system_instruction": self._get_system_instructions(), "tools": self.gemini_tools}
-        )
-        
-        console.print(Panel(f"DumbleDoer Executing: [bold blue]/{action}[/bold blue]", title="DumbleDoer"))
-        response = await self.chat_session.send_message(f"Execute the /{action} command. Docs path: {docs_path}")
-        if response.text:
-            console.print(Markdown(response.text))
-
-def main():
-    import argparse
-    parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=["start", "execute", "resume", "report", "rollback", "update-docs"])
-    parser.add_argument("--docs", type=str)
-    args = parser.parse_args()
-    
-    try:
-        dumbledoer = DumbleDoerCLI()
-        asyncio.run(dumbledoer.start_chat(args.command, args.docs))
-    except KeyboardInterrupt:
-        pass
-
-if __name__ == "__main__":
-    main()
-
-```
-
-### FILE: .dumbledoer/rollbacks/T-002/dumbledoer__dumbledoer_cli.py
-```py
-import os
-import sys
-from filelock import FileLock
-import asyncio
-import subprocess
-from typing import List, Optional, Dict
-from dotenv import load_dotenv
-from google import genai
-from rich.console import Console
-from rich.markdown import Markdown
-from rich.panel import Panel
-from mcp.client.session import ClientSession
-from mcp.client.stdio import StdioServerParameters, stdio_client
-from contextlib import AsyncExitStack
-
-load_dotenv()
-console = Console()
-REGISTRY_LOCK = FileLock("memory.md.lock", timeout=10)
-
-def read_file(path: str) -> str:
-    """Reads a file from the file system."""
-    try:
-        with open(path, "r") as f:
-            return f.read()
-    except Exception as e:
-        return f"Error reading file {path}: {e}"
-
-def write_file(path: str, content: str) -> str:
-    """Writes content to a file on the file system."""
-    try:
-        if os.path.dirname(path):
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "w") as f:
-            f.write(content)
-        return f"Successfully wrote to {path}"
-    except Exception as e:
-        return f"Error writing to file {path}: {e}"
-
-def execute_bash(command: str) -> str:
-    """
-    Executes a bash command in the execution sandbox.
-    Use this to run tests, uv, and git commands autonomously.
-    """
-    try:
-        result = subprocess.run(command, shell=True, capture_output=True, text=True, check=True)
-        return result.stdout
-    except subprocess.CalledProcessError as e:
-        return f"Error ({e.returncode}):\nSTDOUT: {e.stdout}\nSTDERR: {e.stderr}"
-    except Exception as e:
-        return f"Exception executing command: {e}"
-
-def update_memory_registry(content: str) -> str:
-    """Updates the memory.md file with the provided content.
-    CRITICAL CONSTRAINT: You MUST preserve the entire Config block exactly as it was, including 'budget_limit' and 'budget_threshold_pct'. Do not compress, omit, or truncate the Config section under any circumstances.
-    """
-    with REGISTRY_LOCK:
-        return write_file("memory.md", content)
-
-def run_rtk(command: str) -> str:
-    """
-    Executes a heavy system command using the Rust Token Killer (rtk).
-    Use this for all system management and heavy optimization tasks.
-    """
-    try:
-        result = subprocess.run(["rtk", command], capture_output=True, text=True, check=True)
-        return f"RTK Output: {result.stdout}"
-    except subprocess.CalledProcessError as e:
-        return f"RTK Error: {e.stderr}"
-    except FileNotFoundError:
-        return "Error: RTK binary not found in system PATH."
-
-class DumbleDoerCLI:
-    def __init__(self, api_key: Optional[str] = None, model_id: str = "gemini-2.5-flash"):
-        self.api_key = api_key or os.getenv("GOOGLE_API_KEY")
-        if not self.api_key:
-            console.print("[red]Error: GOOGLE_API_KEY not found.[/red]")
-            sys.exit(1)
-            
-        self.client = genai.Client(api_key=self.api_key)
-        self.model_id = model_id
-        self.chat_session = None
-        self.mcp_sessions: Dict[str, ClientSession] = {}
-        self.exit_stack = AsyncExitStack()
-        
-        self.local_tools = [read_file, write_file, update_memory_registry, run_rtk]
-        self.gemini_tools = list(self.local_tools)
-
-    async def _init_mcp(self, name: str, command: str, args: List[str]):
-        console.print(f"[dim]Initializing MCP server: {name}...[/dim]")
-        try:
-            params = StdioServerParameters(command=command, args=args)
-            read, write = await self.exit_stack.enter_async_context(stdio_client(params))
-            session = await self.exit_stack.enter_async_context(ClientSession(read, write))
-            await session.initialize()
-            self.mcp_sessions[name] = session
-            
-            mcp_tools = await session.list_tools()
-            for tool in mcp_tools.tools:
-                wrapper = self._create_mcp_wrapper(name, tool.name)
-                wrapper.__name__ = f"{name}_{tool.name}"
-                wrapper.__doc__ = f"{tool.description}\n\nMCP Server: {name}"
-                self.gemini_tools.append(wrapper)
-                
-            console.print(f"[green]✓ MCP server {name} initialized.[/green]")
-        except Exception as e:
-            console.print(f"[yellow]⚠ Failed to initialize {name}: {e}[/yellow]")
-
-    def _create_mcp_wrapper(self, server_name: str, tool_name: str):
-        async def mcp_wrapper(**kwargs):
-            session = self.mcp_sessions[server_name]
-            result = await session.call_tool(tool_name, arguments=kwargs)
-            return result.content
-        return mcp_wrapper
-
-    def _get_system_instructions(self) -> str:
-        instructions = [
-            "# MISSION",
-            "You are DumbleDoer, an Agent Engineering Harness. Your goal is to systematically analyze, improve, and validate agent projects.",
-            self.local_tools[0]("SYSTEM_INSTRUCTIONS.md") or "Core rules not found.",
-            self.local_tools[0]("lib/common-preamble.md") or "",
-            self.local_tools[0]("lib/compression-policy.md") or "",
-            self.local_tools[0]("memory.md") or "No memory.md found. Start a new project."
-        ]
-        return "\n\n".join(instructions)
-
-    async def start_chat(self, action: str, docs_path: Optional[str] = None):
-        await self._init_mcp("context7", "npx", ["-y", "@upstash/context7-mcp"])
-        await self._init_mcp("codegraph", "npx", ["-y", "--package=@colbymchenry/codegraph", "codegraph", "serve", "--mcp"])
-        
-        self.chat_session = self.client.aio.chats.create(
-            model=self.model_id,
-            config={"system_instruction": self._get_system_instructions(), "tools": self.gemini_tools}
-        )
-        
-        console.print(Panel(f"DumbleDoer Executing: [bold blue]/{action}[/bold blue]", title="DumbleDoer"))
-        response = await self.chat_session.send_message(f"Execute the /{action} command. Docs path: {docs_path}")
-        if response.text:
-            console.print(Markdown(response.text))
-
-def main():
-    import argparse
-    parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=["start", "execute", "resume", "report", "rollback", "update-docs"])
-    parser.add_argument("--docs", type=str)
-    args = parser.parse_args()
-    
-    try:
-        dumbledoer = DumbleDoerCLI()
-        asyncio.run(dumbledoer.start_chat(args.command, args.docs))
-    except KeyboardInterrupt:
-        pass
-
-if __name__ == "__main__":
-    main()
-
-```
-
-### FILE: .dumbledoer/rollbacks/T-003/dumbledoer__dumbledoer_cli.py
-```py
-import os
-import sys
-from filelock import FileLock
-import asyncio
-import subprocess
-from typing import List, Optional, Dict
-from dotenv import load_dotenv
-from google import genai
-from rich.console import Console
-from rich.markdown import Markdown
-from rich.panel import Panel
-from mcp.client.session import ClientSession
-from mcp.client.stdio import StdioServerParameters, stdio_client
-from contextlib import AsyncExitStack
-
-load_dotenv()
-console = Console()
-REGISTRY_LOCK = FileLock("memory.md.lock", timeout=10)
-
-def read_file(path: str) -> str:
-    """Reads a file from the file system."""
-    try:
-        with open(path, "r") as f:
-            return f.read()
-    except Exception as e:
-        return f"Error reading file {path}: {e}"
-
-def _write_file(path: str, content: str) -> str:
-    """Internal function to write content to a file on the file system."""
-    try:
-        if os.path.dirname(path):
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "w") as f:
-            f.write(content)
-        return f"Successfully wrote to {path}"
-    except Exception as e:
-        return f"Error writing to file {path}: {e}"
-
-def write_file_with_review(path: str, content: str) -> str:
-    """Writes content to a file via a VS Code Diff-Gate for user approval."""
-    try:
-        tmp_dir = ".dumbledoer/tmp"
-        os.makedirs(tmp_dir, exist_ok=True)
-        filename = os.path.basename(path)
-        tmp_path = os.path.join(tmp_dir, f"{filename}.tmp")
-        
-        with open(tmp_path, "w") as f:
-            f.write(content)
-            
-        if os.path.exists(path):
-            subprocess.run(["code", "--wait", "--diff", path, tmp_path], check=True)
-        else:
-            subprocess.run(["code", "--wait", tmp_path], check=True)
-            
-        console.print(f"[yellow]Review proposed changes for {path} in VS Code.[/yellow]")
-        approval = input("Approve changes? [Y/n]: ").strip().lower()
-        if approval in ('', 'y', 'yes'):
-            os.replace(tmp_path, path)
-            return f"Successfully wrote to {path} (Approved by user)"
-        else:
-            return f"Error: Changes to {path} were rejected by the user."
-    except Exception as e:
-        return f"Error in write_file_with_review for {path}: {e}"
-
-def execute_bash(command: str) -> str:
-    """
-    Executes a bash command in the execution sandbox.
-    Use this to run tests, uv, and git commands autonomously.
-    """
-    try:
-        result = subprocess.run(command, shell=True, capture_output=True, text=True, check=True)
-        return result.stdout
-    except subprocess.CalledProcessError as e:
-        return f"Error ({e.returncode}):\nSTDOUT: {e.stdout}\nSTDERR: {e.stderr}"
-    except Exception as e:
-        return f"Exception executing command: {e}"
-
-def update_memory_registry(content: str) -> str:
-    """Updates the memory.md file with the provided content.
-    CRITICAL CONSTRAINT: You MUST preserve the entire Config block exactly as it was, including 'budget_limit' and 'budget_threshold_pct'. Do not compress, omit, or truncate the Config section under any circumstances.
-    """
-    with REGISTRY_LOCK:
-        return _write_file("memory.md", content)
-
-def run_rtk(command: str) -> str:
-    """
-    Executes a heavy system command using the Rust Token Killer (rtk).
-    Use this for all system management and heavy optimization tasks.
-    """
-    try:
-        result = subprocess.run(["rtk", command], capture_output=True, text=True, check=True)
-        return f"RTK Output: {result.stdout}"
-    except subprocess.CalledProcessError as e:
-        return f"RTK Error: {e.stderr}"
-    except FileNotFoundError:
-        return "Error: RTK binary not found in system PATH."
-
-class DumbleDoerCLI:
-    def __init__(self, api_key: Optional[str] = None, model_id: str = "gemini-2.5-flash"):
-        self.api_key = api_key or os.getenv("GOOGLE_API_KEY")
-        if not self.api_key:
-            console.print("[red]Error: GOOGLE_API_KEY not found.[/red]")
-            sys.exit(1)
-            
-        self.client = genai.Client(api_key=self.api_key)
-        self.model_id = model_id
-        self.chat_session = None
-        self.mcp_sessions: Dict[str, ClientSession] = {}
-        self.exit_stack = AsyncExitStack()
-        
-        self.local_tools = [read_file, write_file_with_review, execute_bash, update_memory_registry, run_rtk]
-        self.gemini_tools = list(self.local_tools)
-
-    async def _init_mcp(self, name: str, command: str, args: List[str]):
-        console.print(f"[dim]Initializing MCP server: {name}...[/dim]")
-        try:
-            params = StdioServerParameters(command=command, args=args)
-            read, write = await self.exit_stack.enter_async_context(stdio_client(params))
-            session = await self.exit_stack.enter_async_context(ClientSession(read, write))
-            await session.initialize()
-            self.mcp_sessions[name] = session
-            
-            mcp_tools = await session.list_tools()
-            for tool in mcp_tools.tools:
-                wrapper = self._create_mcp_wrapper(name, tool.name)
-                wrapper.__name__ = f"{name}_{tool.name}"
-                wrapper.__doc__ = f"{tool.description}\n\nMCP Server: {name}"
-                self.gemini_tools.append(wrapper)
-                
-            console.print(f"[green]✓ MCP server {name} initialized.[/green]")
-        except Exception as e:
-            console.print(f"[yellow]⚠ Failed to initialize {name}: {e}[/yellow]")
-
-    def _create_mcp_wrapper(self, server_name: str, tool_name: str):
-        async def mcp_wrapper(**kwargs):
-            session = self.mcp_sessions[server_name]
-            result = await session.call_tool(tool_name, arguments=kwargs)
-            return result.content
-        return mcp_wrapper
-
-    def _get_system_instructions(self) -> str:
-        instructions = [
-            "# MISSION",
-            "You are DumbleDoer, an Agent Engineering Harness. Your goal is to systematically analyze, improve, and validate agent projects.",
-            self.local_tools[0]("SYSTEM_INSTRUCTIONS.md") or "Core rules not found.",
-            self.local_tools[0]("lib/common-preamble.md") or "",
-            self.local_tools[0]("lib/compression-policy.md") or "",
-            self.local_tools[0]("memory.md") or "No memory.md found. Start a new project."
-        ]
-        return "\n\n".join(instructions)
-
-    async def start_chat(self, action: str, docs_path: Optional[str] = None):
-        await self._init_mcp("context7", "npx", ["-y", "@upstash/context7-mcp"])
-        await self._init_mcp("codegraph", "npx", ["-y", "--package=@colbymchenry/codegraph", "codegraph", "serve", "--mcp"])
-        
-        self.chat_session = self.client.aio.chats.create(
-            model=self.model_id,
-            config={"system_instruction": self._get_system_instructions(), "tools": self.gemini_tools}
-        )
-        
-        console.print(Panel(f"DumbleDoer Executing: [bold blue]/{action}[/bold blue]", title="DumbleDoer"))
-        response = await self.chat_session.send_message(f"Execute the /{action} command. Docs path: {docs_path}")
-        if response.text:
-            console.print(Markdown(response.text))
-
-def main():
-    import argparse
-    parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=["start", "execute", "resume", "report", "rollback", "update-docs"])
-    parser.add_argument("--docs", type=str)
-    args = parser.parse_args()
-    
-    try:
-        dumbledoer = DumbleDoerCLI()
-        asyncio.run(dumbledoer.start_chat(args.command, args.docs))
-    except KeyboardInterrupt:
-        pass
-
-if __name__ == "__main__":
-    main()
-
-```
-
-### FILE: .dumbledoer/rollbacks/T-004/dumbledoer__dumbledoer_cli.py
-```py
-import os
-import sys
-from filelock import FileLock
-import asyncio
-import subprocess
-import shlex
-from typing import List, Optional, Dict
-from dotenv import load_dotenv
-from google import genai
-from rich.console import Console
-from rich.markdown import Markdown
-from rich.panel import Panel
-from mcp.client.session import ClientSession
-from mcp.client.stdio import StdioServerParameters, stdio_client
-from contextlib import AsyncExitStack
-
-load_dotenv()
-console = Console()
-REGISTRY_LOCK = FileLock("memory.md.lock", timeout=10)
-
-def read_file(path: str) -> str:
-    """Reads a file from the file system."""
-    try:
-        with open(path, "r") as f:
-            return f.read()
-    except Exception as e:
-        return f"Error reading file {path}: {e}"
-
-def _write_file(path: str, content: str) -> str:
-    """Internal function to write content to a file on the file system."""
-    try:
-        if os.path.dirname(path):
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "w") as f:
-            f.write(content)
-        return f"Successfully wrote to {path}"
-    except Exception as e:
-        return f"Error writing to file {path}: {e}"
-
-def write_file_with_review(path: str, content: str) -> str:
-    """Writes content to a file via a VS Code Diff-Gate for user approval."""
-    try:
-        tmp_dir = ".dumbledoer/tmp"
-        os.makedirs(tmp_dir, exist_ok=True)
-        filename = os.path.basename(path)
-        tmp_path = os.path.join(tmp_dir, f"{filename}.tmp")
-        
-        with open(tmp_path, "w") as f:
-            f.write(content)
-            
-        if os.path.exists(path):
-            subprocess.run(["code", "--wait", "--diff", path, tmp_path], check=True)
-        else:
-            subprocess.run(["code", "--wait", tmp_path], check=True)
-            
-        console.print(f"[yellow]Review proposed changes for {path} in VS Code.[/yellow]")
-        approval = input("Approve changes? [Y/n]: ").strip().lower()
-        if approval in ('', 'y', 'yes'):
-            os.replace(tmp_path, path)
-            return f"Successfully wrote to {path} (Approved by user)"
-        else:
-            return f"Error: Changes to {path} were rejected by the user."
-    except Exception as e:
-        return f"Error in write_file_with_review for {path}: {e}"
-
-def execute_bash(command: str) -> str:
-    """
-    Executes a bash command in the execution sandbox.
-    Use this to run tests, uv, and git commands autonomously.
-    """
-    try:
-        result = subprocess.run(command, shell=True, capture_output=True, text=True, check=True)
-        return result.stdout
-    except subprocess.CalledProcessError as e:
-        return f"Error ({e.returncode}):\nSTDOUT: {e.stdout}\nSTDERR: {e.stderr}"
-    except Exception as e:
-        return f"Exception executing command: {e}"
-
-def update_memory_registry(content: str) -> str:
-    """Updates the memory.md file with the provided content.
-    CRITICAL CONSTRAINT: You MUST preserve the entire Config block exactly as it was, including 'budget_limit' and 'budget_threshold_pct'. Do not compress, omit, or truncate the Config section under any circumstances.
-    """
-    with REGISTRY_LOCK:
-        return _write_file("memory.md", content)
-
-def run_rtk(command: str) -> str:
-    """
-    Executes a heavy system command using the Rust Token Killer (rtk).
-    Use this for all system management and heavy optimization tasks.
-    """
-    try:
-        args = ["rtk"] + shlex.split(command)
-        result = subprocess.run(args, capture_output=True, text=True, check=True)
-        return f"RTK Output: {result.stdout}"
-    except subprocess.CalledProcessError as e:
-        return f"RTK Error: {e.stderr}"
-    except FileNotFoundError:
-        return "Error: RTK binary not found in system PATH."
-
-class DumbleDoerCLI:
-    def __init__(self, api_key: Optional[str] = None, model_id: str = "gemini-2.5-flash"):
-        self.api_key = api_key or os.getenv("GOOGLE_API_KEY")
-        if not self.api_key:
-            console.print("[red]Error: GOOGLE_API_KEY not found.[/red]")
-            sys.exit(1)
-            
-        self.client = genai.Client(api_key=self.api_key)
-        self.model_id = model_id
-        self.chat_session = None
-        self.mcp_sessions: Dict[str, ClientSession] = {}
-        self.exit_stack = AsyncExitStack()
-        
-        self.local_tools = [read_file, write_file_with_review, execute_bash, update_memory_registry, run_rtk]
-        self.gemini_tools = list(self.local_tools)
-
-    async def _init_mcp(self, name: str, command: str, args: List[str]):
-        console.print(f"[dim]Initializing MCP server: {name}...[/dim]")
-        try:
-            params = StdioServerParameters(command=command, args=args)
-            read, write = await self.exit_stack.enter_async_context(stdio_client(params))
-            session = await self.exit_stack.enter_async_context(ClientSession(read, write))
-            await session.initialize()
-            self.mcp_sessions[name] = session
-            
-            mcp_tools = await session.list_tools()
-            for tool in mcp_tools.tools:
-                wrapper = self._create_mcp_wrapper(name, tool.name)
-                wrapper.__name__ = f"{name}_{tool.name}"
-                wrapper.__doc__ = f"{tool.description}\n\nMCP Server: {name}"
-                self.gemini_tools.append(wrapper)
-                
-            console.print(f"[green]✓ MCP server {name} initialized.[/green]")
-        except Exception as e:
-            console.print(f"[yellow]⚠ Failed to initialize {name}: {e}[/yellow]")
-
-    def _create_mcp_wrapper(self, server_name: str, tool_name: str):
-        async def mcp_wrapper(**kwargs):
-            session = self.mcp_sessions[server_name]
-            result = await session.call_tool(tool_name, arguments=kwargs)
-            return result.content
-        return mcp_wrapper
-
-    def _get_system_instructions(self) -> str:
-        instructions = [
-            "# MISSION",
-            "You are DumbleDoer, an Agent Engineering Harness. Your goal is to systematically analyze, improve, and validate agent projects.",
-            self.local_tools[0]("SYSTEM_INSTRUCTIONS.md") or "Core rules not found.",
-            self.local_tools[0]("lib/common-preamble.md") or "",
-            self.local_tools[0]("lib/compression-policy.md") or "",
-            self.local_tools[0]("memory.md") or "No memory.md found. Start a new project."
-        ]
-        return "\n\n".join(instructions)
-
-    async def start_chat(self, action: str, docs_path: Optional[str] = None):
-        await self._init_mcp("context7", "npx", ["-y", "@upstash/context7-mcp"])
-        await self._init_mcp("codegraph", "npx", ["-y", "--package=@colbymchenry/codegraph", "codegraph", "serve", "--mcp"])
-        
-        self.chat_session = self.client.aio.chats.create(
-            model=self.model_id,
-            config={"system_instruction": self._get_system_instructions(), "tools": self.gemini_tools}
-        )
-        
-        console.print(Panel(f"DumbleDoer Executing: [bold blue]/{action}[/bold blue]", title="DumbleDoer"))
-        response = await self.chat_session.send_message(f"Execute the /{action} command. Docs path: {docs_path}")
-        if response.text:
-            console.print(Markdown(response.text))
-
-def main():
-    import argparse
-    parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=["start", "execute", "resume", "report", "rollback", "update-docs"])
-    parser.add_argument("--docs", type=str)
-    args = parser.parse_args()
-    
-    try:
-        dumbledoer = DumbleDoerCLI()
-        asyncio.run(dumbledoer.start_chat(args.command, args.docs))
-    except KeyboardInterrupt:
-        pass
-
-if __name__ == "__main__":
-    main()
 
 ```
 
@@ -1208,6 +383,32 @@ You can interact with DumbleDoer using the following slash commands within `agy`
 
 ```
 
+### FILE: apply_transformations.sh
+```sh
+#!/usr/bin/env bash
+
+# 1. Ensure JSON commands utilize relative workspace pathing
+find commands/ -name "*.json" -type f -exec sed -i 's|"~/.gemini/config/plugins/dumbledoer/run_dumbledoer.sh"|"./run_dumbledoer.sh"|g' {} +
+
+# 2. Strict String replacement for artifact naming boundaries
+find docs/ tests/ lib/ -type f -name "*.md" -exec python3 -c '
+import sys
+import os
+for filepath in sys.argv[1:]:
+    with open(filepath, "r", encoding="utf-8") as f:
+        content = f.read()
+    
+    # Safe boundary replacements
+    content = content.replace(".kandalf", ".dumbledoer")
+    content = content.replace("/kandalf:", "/dumbledoer:")
+    content = content.replace("kandalf/", "dumbledoer/")
+    
+    with open(filepath, "w", encoding="utf-8") as f:
+        f.write(content)
+' {} +
+
+```
+
 ### FILE: b.txt
 ```txt
 # This is a comment for b.txt
@@ -1258,7 +459,6 @@ You can interact with DumbleDoer using the following slash commands within `agy`
   "execute": {
     "command": "./run_dumbledoer.sh",
     "args": [
-      ,
       "iterate",
       "--prompt",
       "{{prompt}}"
@@ -1310,6 +510,19 @@ You can interact with DumbleDoer using the following slash commands within `agy`
   "execute": {
     "command": "./run_dumbledoer.sh",
     "args": ["start"]
+  }
+}
+
+```
+
+### FILE: commands/status.json
+```json
+{
+  "name": "status",
+  "description": "Show the dumbledoer Task Registry, session summary, budget usage, and CodeGraph health for the current improvement session.",
+  "execute": {
+    "command": "./run_dumbledoer.sh",
+    "args": ["status"]
   }
 }
 
@@ -1420,7 +633,9 @@ DumbleDoer generates the `/report` locally and synchronizes `memory.md`. Your pr
 ```py
 import os
 import sys
+import inspect
 import asyncio
+from dotenv import load_dotenv
 import argparse
 import subprocess
 import shlex
@@ -1428,12 +643,10 @@ import re
 from contextlib import AsyncExitStack
 import shutil
 import difflib
-from filelock import FileLock
+from filelock import FileLock, Timeout
 
-REGISTRY_LOCK = FileLock("memory.md.lock", timeout=10)
-
-GUI_DIFF_ENABLED = True
-
+REGISTRY_LOCK = FileLock("memory.md.lock", timeout=60)
+# GUI_DIFF_ENABLED will be set dynamically in main_async
 from google import genai
 from mcp.client.session import ClientSession
 from mcp.client.stdio import stdio_client, StdioServerParameters
@@ -1470,10 +683,16 @@ class ASTMemoryMapper:
         start_idx = -1
         end_idx = -1
         target_pattern = re.compile(rf"^{re.escape(heading_level)}\s+{re.escape(title)}\s*$", re.IGNORECASE)
+        in_code_block = False
+        
         for i, line in enumerate(lines):
-            if target_pattern.match(line.strip()):
+            stripped = line.strip()
+            if stripped.startswith("```"):
+                in_code_block = not in_code_block
+            if not in_code_block and target_pattern.match(stripped):
                 start_idx = i
                 break
+                
         if start_idx != -1:
             end_idx = len(lines)
             in_code_block = False
@@ -1481,8 +700,7 @@ class ASTMemoryMapper:
                 stripped = lines[j].strip()
                 if stripped.startswith("```"):
                     in_code_block = not in_code_block
-                    
-                if not in_code_block and re.match(r"^#{1,6}\s+", lines[j]):
+                if not in_code_block and re.match(r"^#{1,6}\s+", stripped):
                     end_idx = j
                     break
         return start_idx, end_idx
@@ -1515,11 +733,12 @@ async def execute_bash(command: str, sandbox_mode: str = None) -> str:
     def _read_mode():
         mode = "dumbledoer-base"
         try:
-            with open("memory.md", "r", encoding="utf-8") as f:
-                for line in f:
-                    if line.strip().startswith("- sandbox_mode:"):
-                        mode = line.split(":", 1)[1].strip()
-                        break
+            with REGISTRY_LOCK:
+                with open("memory.md", "r", encoding="utf-8") as f:
+                    for line in f:
+                        if line.strip().startswith("- sandbox_mode:"):
+                            mode = line.split(":", 1)[1].strip()
+                            break
         except Exception:
             pass
         return mode
@@ -1528,12 +747,16 @@ async def execute_bash(command: str, sandbox_mode: str = None) -> str:
         sandbox_mode = await asyncio.to_thread(_read_mode)
 
     try:
+        import platform
+        user_args = [] if platform.system() == "Windows" else ["--user", f"{os.getuid()}:{os.getgid()}"]
+        
         if sandbox_mode == "docker-compose":
             args = ["docker", "compose", "exec", "-T", "app", "bash", "-c", command]
-        elif sandbox_mode == "native":
-            args = ["docker", "run", "--rm", "--user", f"{os.getuid()}:{os.getgid()}", "-v", f"{os.getcwd()}:/workspace", "-w", "/workspace", "target-repo-img", "bash", "-c", command]
         else:
-            args = ["docker", "run", "--rm", "--user", f"{os.getuid()}:{os.getgid()}", "-v", f"{os.getcwd()}:/workspace", "-w", "/workspace", "dumbledoer-base:latest", "bash", "-c", command]
+            args = ["docker", "run", "--rm"] + user_args + [
+                "-v", f"{os.getcwd()}:/workspace", "-w", "/workspace", 
+                "dumbledoer-base:latest", "bash", "-c", command
+            ]
             
         result = await asyncio.to_thread(subprocess.run, args, capture_output=True, text=True, check=True)
         return result.stdout
@@ -1560,31 +783,37 @@ def _write_file(path: str, content: str) -> str:
     except Exception as e:
         return f"Error writing file {path}: {e}"
 
+import filelock
+
 async def update_memory_registry(target: str, replacement: str) -> str:
-    """Updates the memory.md file by performing a synchronous search and replace to prevent concurrency data loss. Pass the EXACT block of text to be replaced as `target`, and the new block of text as `replacement`. This operation happens under a file lock to guarantee atomic modifications."""
+    """Updates the memory.md file securely with exponential backoff on lock timeouts."""
     def _do_update():
-        with REGISTRY_LOCK:
-            try:
-                with open("memory.md", "r") as f:
-                    current_content = f.read()
+        with FileLock("memory.md.lock", timeout=60):
+            with open("memory.md", "r", encoding="utf-8") as f:
+                current_content = f.read()
+            
+            if target not in current_content:
+                return "Error: Target block not found in memory.md. Stale state or invalid target string."
                 
-                if target not in current_content:
-                    return f"Error: Target block not found in memory.md. Stale state or invalid target string."
-                    
-                new_content = current_content.replace(target, replacement, 1)
+            new_content = current_content.replace(target, replacement, 1)
+            
+            if "- sandbox_mode:" not in new_content:
+                return "Error updating memory registry: Constraint failed, missing '- sandbox_mode:' in Config block after replacement."
                 
-                if "- sandbox_mode:" not in new_content:
-                    return "Error updating memory registry: Constraint failed, missing '- sandbox_mode:' in Config block after replacement."
-                    
-                _write_file("memory.md", new_content)
-                return "Successfully updated memory.md via atomic search and replace."
-            except Exception as inner_e:
-                return f"Inner exception updating memory.md: {inner_e}"
-                
-    try:
-        return await asyncio.to_thread(_do_update)
-    except Exception as e:
-        return f"Error updating memory registry: {e}"
+            os.makedirs(os.path.dirname(os.path.abspath("memory.md")), exist_ok=True)
+            with open("memory.md", "w", encoding="utf-8") as f:
+                f.write(new_content)
+            return "Successfully updated memory.md via atomic search and replace."
+
+    for attempt in range(5):
+        try:
+            return await asyncio.to_thread(_do_update)
+        except filelock.Timeout:
+            await asyncio.sleep(2 ** attempt)
+        except Exception as e:
+            return f"Error updating memory registry: {e}"
+            
+    return "Error: Failed to acquire memory.md.lock after 5 attempts due to high concurrency load."
 
 async def run_rtk(command: str) -> str:
     rtk_bin = shutil.which("rtk")
@@ -1595,16 +824,113 @@ async def run_rtk(command: str) -> str:
         elif os.path.exists("./bin/rtk"):
             rtk_bin = "./bin/rtk"
         else:
-            return "Error: RTK binary not found in standard paths."
+            raise RuntimeError("Error: RTK binary not found in standard paths.")
 
     try:
         args = [rtk_bin] + shlex.split(command)
         result = await asyncio.to_thread(subprocess.run, args, capture_output=True, text=True, check=True)
         return result.stdout
     except subprocess.CalledProcessError as e:
-        return f"Error ({e.returncode}):\nSTDOUT: {e.stdout}\nSTDERR: {e.stderr}"
+        raise RuntimeError(f"Error ({e.returncode}):\nSTDOUT: {e.stdout}\nSTDERR: {e.stderr}")
     except Exception as e:
-        return f"Exception executing rtk command: {e}"
+        raise RuntimeError(f"Exception executing rtk command: {e}")
+
+class TaskRegistryState:
+    def __init__(self):
+        self.json_path = ".dumbledoer/task_registry.json"
+        self.md_path = "memory.md"
+        os.makedirs(os.path.dirname(self.json_path), exist_ok=True)
+        
+    def load_tasks(self) -> dict:
+        with REGISTRY_LOCK:
+            if os.path.exists(self.json_path):
+                import json
+                try:
+                    with open(self.json_path, "r") as f:
+                        return json.load(f)
+                except Exception:
+                    pass
+                    
+            tasks = {}
+            try:
+                with open(self.md_path, "r", encoding="utf-8") as f:
+                    content = f.read()
+                start_idx, end_idx = ASTMemoryMapper.locate_heading_block(content, "##", "Task Registry")
+                if start_idx != -1:
+                    lines = content.splitlines()[start_idx+1:end_idx]
+                    for line in lines:
+                        if not line.strip().startswith("|"): continue
+                        parts = [p.strip() for p in line.split("|")]
+                        if len(parts) >= 9 and parts[1] != "Task ID" and not parts[1].startswith("---"):
+                            task_id = parts[1].strip()
+                            
+                            desc_start, desc_end = ASTMemoryMapper.locate_heading_block(content, "###", task_id)
+                            description = parts[2].strip()
+                            if desc_start != -1:
+                                desc_lines = content.splitlines()[desc_start+1:desc_end]
+                                for dline in desc_lines:
+                                    if dline.startswith("- **Description**:"):
+                                        description = dline.split("- **Description**:")[1].strip()
+                                        break
+                                        
+                            tasks[task_id] = {
+                                "id": task_id,
+                                "desc": description,
+                                "title": parts[2].strip(),
+                                "status": parts[4].strip(),
+                                "deps": [d.strip() for d in parts[6].split(",")] if parts[6].strip() != "none" else [],
+                                "original_line": line
+                            }
+            except Exception:
+                pass
+            self.save_tasks(tasks)
+            return tasks
+
+    def save_tasks(self, tasks: dict):
+        import json
+        with open(self.json_path, "w") as f:
+            json.dump(tasks, f, indent=2)
+        self._sync_to_markdown(tasks)
+        
+    async def update_task_status(self, task_id: str, new_status: str):
+        def _do_update():
+            with REGISTRY_LOCK:
+                tasks = self.load_tasks()
+                if task_id in tasks:
+                    tasks[task_id]["status"] = new_status
+                    self.save_tasks(tasks)
+        await asyncio.to_thread(_do_update)
+
+    def _sync_to_markdown(self, tasks: dict):
+        with REGISTRY_LOCK:
+            try:
+                with open(self.md_path, "r", encoding="utf-8") as f:
+                    content = f.read()
+                start_idx, end_idx = ASTMemoryMapper.locate_heading_block(content, "##", "Task Registry")
+                if start_idx == -1: return
+                
+                lines = content.splitlines()
+                new_block = []
+                for line in lines[start_idx+1:end_idx]:
+                    if not line.strip().startswith("|") or "---" in line or "Task ID" in line:
+                        new_block.append(line)
+                    else:
+                        parts = [p.strip() for p in line.split("|")]
+                        if len(parts) >= 9:
+                            tid = parts[1].strip()
+                            if tid in tasks:
+                                parts[4] = f" {tasks[tid]['status']} "
+                                new_block.append("|".join(parts))
+                            else:
+                                new_block.append(line)
+                        else:
+                            new_block.append(line)
+                            
+                new_content = "\n".join(lines[:start_idx+1] + new_block + lines[end_idx:])
+                with open(self.md_path, "w", encoding="utf-8") as f:
+                    f.write(new_content)
+            except Exception:
+                pass
 
 async def write_file_with_review(path: str, content: str) -> str:
     """Writes content to a file via a VS Code Diff-Gate for user approval."""
@@ -1612,8 +938,8 @@ async def write_file_with_review(path: str, content: str) -> str:
         tmp_dir = ".dumbledoer/tmp"
         os.makedirs(tmp_dir, exist_ok=True)
         import uuid
-        filename = os.path.basename(path)
-        tmp_path = os.path.join(tmp_dir, f"{uuid.uuid4().hex}_{filename}.tmp")
+        encoded_path = path.replace("/", "__")
+        tmp_path = os.path.join(tmp_dir, f"{uuid.uuid4().hex}_{encoded_path}.tmp")
         
         import time
         from datetime import datetime
@@ -1622,179 +948,266 @@ async def write_file_with_review(path: str, content: str) -> str:
         metadata = {
             "Timestamp": datetime.now().isoformat(),
             "Task ID": "manual-edit",
-            "Change Summary": f"Update {filename} via Diff-Gate",
+            "Change Summary": f"Update {os.path.basename(path)} via Diff-Gate",
             "Rationale": "User-approved manual write_file_with_review",
             "Checkpoint ID": chk_id,
             "Session ID": "manual",
             "Step": "diff-gate",
             "Files Snapshotted": path
         }
-        rollback_path = os.path.join(".dumbledoer", "rollbacks", f"{chk_id}_{filename}.bak")
+        rollback_path = os.path.join(".dumbledoer", "rollbacks", f"{chk_id}_{encoded_path}.bak")
         checkpoint_path = os.path.join(".dumbledoer", "checkpoints", f"{chk_id}.json")
         
-        manager.write_rollback_copy(path, rollback_path)
-        manager.log_planned_change(path, metadata)
-        manager.write_checkpoint_json(checkpoint_path, metadata)
+        await manager.write_rollback_copy(path, rollback_path)
+        await manager.log_planned_change(path, metadata)
+        await manager.write_checkpoint_json(checkpoint_path, metadata)
         
         with open(tmp_path, "w") as f:
             f.write(content)
             
-        has_code = shutil.which("code") is not None
-
-        if GUI_DIFF_ENABLED and has_code:
-            print(f"Review proposed changes for {path} in VS Code.", file=sys.stderr)
-            if os.path.exists(path):
-                await asyncio.to_thread(subprocess.run, ["code", "--wait", "--diff", path, tmp_path], check=True)
-            else:
-                await asyncio.to_thread(subprocess.run, ["code", "--wait", tmp_path], check=True)
-        else:
-            if os.path.exists(path):
-                with open(path, "r") as f:
-                    old_content = f.readlines()
-                new_content = content.splitlines(keepends=True)
-                diff = "".join(difflib.unified_diff(old_content, new_content, fromfile=path, tofile=tmp_path))
-                if diff:
-                    from rich.console import Console
-                    from rich.syntax import Syntax
-                    console = Console()
-                    console.print(Syntax(diff, "diff", theme="monokai"))
-            else:
-                print(f"Creating new file {path}. Content preview:\n{content}")
-            
-        from rich.prompt import Confirm
-        approval = await asyncio.to_thread(Confirm.ask, f"Approve changes to {path}?")
-        if approval:
-            os.replace(tmp_path, path)
-            return f"Successfully wrote to {path} (Approved by user)"
-        else:
-            return f"Error: Changes to {path} were rejected by the user."
+        return f"Successfully staged changes for {path} (Pending wave review)"
     except Exception as e:
         return f"Error in write_file_with_review for {path}: {e}"
 
 class CheckpointManager:
-    def write_rollback_copy(self, target_path: str, rollback_path: str):
-        if os.path.exists(rollback_path):
-            return
-        if os.path.exists(target_path):
-            os.makedirs(os.path.dirname(rollback_path), exist_ok=True)
-            shutil.copy2(target_path, rollback_path)
+    async def write_rollback_copy(self, target_path: str, rollback_path: str):
+        def _do_write():
+            if os.path.exists(rollback_path):
+                return
+            if os.path.exists(target_path):
+                os.makedirs(os.path.dirname(rollback_path), exist_ok=True)
+                shutil.copy2(target_path, rollback_path)
+        await asyncio.to_thread(_do_write)
             
-    def log_planned_change(self, target_path: str, metadata: dict):
+    async def log_planned_change(self, target_path: str, metadata: dict):
         timestamp = metadata.get("Timestamp", "")
         task_id = metadata.get("Task ID", "")
         summary = metadata.get("Change Summary", "")
         rationale = metadata.get("Rationale", "")
         row = f"| {timestamp} | {task_id} | {target_path} | {summary} | planned | {rationale} |"
-        with REGISTRY_LOCK:
-            ASTMemoryMapper.append_to_markdown_table("memory.md", "Change Log", row)
+        def _do_log():
+            with REGISTRY_LOCK:
+                ASTMemoryMapper.append_to_markdown_table("memory.md", "Change Log", row)
+        await asyncio.to_thread(_do_log)
         
-    def write_checkpoint_json(self, checkpoint_path: str, metadata: dict):
-        os.makedirs(os.path.dirname(checkpoint_path), exist_ok=True)
-        with open(checkpoint_path, "w") as f:
-            import json
-            json.dump(metadata, f, indent=2)
+    async def write_checkpoint_json(self, checkpoint_path: str, metadata: dict):
+        def _do_write():
+            os.makedirs(os.path.dirname(checkpoint_path), exist_ok=True)
+            with open(checkpoint_path, "w") as f:
+                import json
+                json.dump(metadata, f, indent=2)
+                
+            checkpoint_id = metadata.get("Checkpoint ID", "")
+            task_id = metadata.get("Task ID", "")
+            step = metadata.get("Step", "")
+            session_id = metadata.get("Session ID", "")
+            files_snapshotted = metadata.get("Files Snapshotted", "")
+            row = f"| {checkpoint_id} | {task_id} | {step} | {session_id} | {files_snapshotted} |"
+            with REGISTRY_LOCK:
+                ASTMemoryMapper.append_to_markdown_table("memory.md", "Checkpoint Registry", row)
+        await asyncio.to_thread(_do_write)
             
-        checkpoint_id = metadata.get("Checkpoint ID", "")
-        task_id = metadata.get("Task ID", "")
-        step = metadata.get("Step", "")
-        session_id = metadata.get("Session ID", "")
-        files_snapshotted = metadata.get("Files Snapshotted", "")
-        row = f"| {checkpoint_id} | {task_id} | {step} | {session_id} | {files_snapshotted} |"
-        with REGISTRY_LOCK:
-            ASTMemoryMapper.append_to_markdown_table("memory.md", "Checkpoint Registry", row)
+    async def stage_tmp_write(self, tmp_path: str, content: str):
+        def _do_write():
+            os.makedirs(os.path.dirname(tmp_path), exist_ok=True)
+            with open(tmp_path, "w") as f:
+                f.write(content)
+        await asyncio.to_thread(_do_write)
             
-    def stage_tmp_write(self, tmp_path: str, content: str):
-        os.makedirs(os.path.dirname(tmp_path), exist_ok=True)
-        with open(tmp_path, "w") as f:
-            f.write(content)
-            
-    def atomic_rename_to_target(self, tmp_path: str, target_path: str):
-        os.replace(tmp_path, target_path)
+    async def atomic_rename_to_target(self, tmp_path: str, target_path: str):
+        def _do_rename():
+            os.replace(tmp_path, target_path)
+        await asyncio.to_thread(_do_rename)
         
-    def log_applied_change(self, target_path: str, metadata: dict):
+    async def log_applied_change(self, target_path: str, metadata: dict):
         timestamp = metadata.get("Timestamp", "")
         task_id = metadata.get("Task ID", "")
         summary = metadata.get("Change Summary", "")
         rationale = metadata.get("Rationale", "")
         row = f"| {timestamp} | {task_id} | {target_path} | {summary} | applied | {rationale} |"
-        with REGISTRY_LOCK:
-            ASTMemoryMapper.append_to_markdown_table("memory.md", "Change Log", row)
+        def _do_log():
+            with REGISTRY_LOCK:
+                ASTMemoryMapper.append_to_markdown_table("memory.md", "Change Log", row)
+        await asyncio.to_thread(_do_log)
 
 class OrphanRecoveryScanner:
     def run(self):
-        tmp_dir = ".dumbledoer/tmp"
-        if not os.path.exists(tmp_dir):
-            return
-            
-        planned_changes = {}
-        try:
-            with open("memory.md", "r", encoding="utf-8") as f:
-                content = f.read()
-            start_idx, end_idx = ASTMemoryMapper.locate_heading_block(content, "##", "Change Log")
-            if start_idx != -1:
-                lines = content.splitlines()[start_idx+1:end_idx]
-                for line in lines:
-                    if line.strip().startswith("|") and "---" not in line and "Timestamp" not in line:
-                        parts = [p.strip() for p in line.split("|")]
-                        if len(parts) >= 7:
-                            target_path = parts[3]
-                            status = parts[5]
-                            if status == "planned":
-                                filename = os.path.basename(target_path)
-                                tmp_path = os.path.join(tmp_dir, f"{filename}.tmp")
-                                planned_changes[tmp_path] = target_path
-        except FileNotFoundError:
-            pass
-
-        import glob
-        from rich.prompt import Confirm
-        from rich.console import Console
-        console = Console()
-        
-        for file in glob.glob(os.path.join(tmp_dir, "*.tmp")):
+        with REGISTRY_LOCK:
+            tmp_dir = ".dumbledoer/tmp"
+            chk_dir = ".dumbledoer/checkpoints"
+            bak_dir = ".dumbledoer/rollbacks"
+            os.makedirs(tmp_dir, exist_ok=True)
+            os.makedirs(chk_dir, exist_ok=True)
+            os.makedirs(bak_dir, exist_ok=True)
+                
+            change_log = []
+            content = ""
             try:
-                if file in planned_changes:
-                    target = planned_changes[file]
-                    if Confirm.ask(f"Found orphaned planned change for [bold]{target}[/bold]. Apply it?"):
-                        os.replace(file, target)
-                        console.print(f"[green]Applied {file} to {target}[/green]")
+                with open("memory.md", "r", encoding="utf-8") as f:
+                    content = f.read()
+                start_idx, end_idx = ASTMemoryMapper.locate_heading_block(content, "##", "Change Log")
+                if start_idx != -1:
+                    lines = content.splitlines()[start_idx+1:end_idx]
+                    for line in lines:
+                        if line.strip().startswith("|") and "---" not in line and "Timestamp" not in line:
+                            parts = [p.strip() for p in line.split("|")]
+                            if len(parts) >= 7:
+                                # | Timestamp | Checkpoint ID | Task ID | Target Path | Action | Status | Rationale |
+                                change_log.append({
+                                    "chk_id": parts[2],
+                                    "target": parts[4],
+                                    "status": parts[6],
+                                    "line_text": line,
+                                })
+            except FileNotFoundError:
+                pass
+    
+            import glob
+            import filecmp
+            from rich.prompt import Confirm
+            from rich.console import Console
+            console = Console()
+            
+            valid_chks = {c["chk_id"] for c in change_log}
+            planned_chks = {c["chk_id"]: c for c in change_log if c["status"] == "planned"}
+            
+            # O3: Discard orphaned .json checkpoints
+            for chk_file in glob.glob(os.path.join(chk_dir, "*.json")):
+                basename = os.path.basename(chk_file)
+                chk_id = basename.replace(".json", "")
+                if chk_id not in valid_chks:
+                    os.remove(chk_file)
+                    console.print(f"[yellow]O3: Discarded orphaned checkpoint {chk_file}[/yellow]")
+                    
+            # O5: Discard orphaned .bak rollbacks
+            for bak_file in glob.glob(os.path.join(bak_dir, "*.bak")):
+                basename = os.path.basename(bak_file)
+                chk_id = basename.split("_")[0] if "_" in basename else basename.replace(".bak", "")
+                if chk_id not in valid_chks:
+                    os.remove(bak_file)
+                    console.print(f"[yellow]O5: Discarded orphaned rollback {bak_file}[/yellow]")
+                    
+            # O4: Evaluate planned Change Log entries and update memory.md
+            new_content = content
+            for chk_id, entry in planned_chks.items():
+                target = entry["target"]
+                bak_files = glob.glob(os.path.join(bak_dir, f"{chk_id}_*.bak"))
+                if bak_files and os.path.exists(target):
+                    bak_file = bak_files[0]
+                    if filecmp.cmp(target, bak_file, shallow=False):
+                        new_status = "rolled-back"
+                    else:
+                        new_status = "applied"
+                    new_line = entry["line_text"].replace("| planned |", f"| {new_status} |")
+                    new_content = new_content.replace(entry["line_text"], new_line)
+                    console.print(f"[green]O4: Resolved planned change {chk_id} as {new_status}[/green]")
+            
+            if new_content != content:
+                with open("memory.md", "w", encoding="utf-8") as f:
+                    f.write(new_content)
+            
+            # O1/O2: Handle .tmp files (using basename mapping since UUID is present)
+            for file in glob.glob(os.path.join(tmp_dir, "*.tmp")):
+                try:
+                    # Find corresponding target by decoding the path
+                    basename = os.path.basename(file)
+                    actual_filename = basename.split("_", 1)[1] if "_" in basename else basename
+                    actual_filename = actual_filename.replace(".tmp", "").replace("__", "/")
+                    
+                    matched_target = None
+                    for c in change_log:
+                        if c["status"] == "planned" and c["target"] == actual_filename:
+                            matched_target = c["target"]
+                            break
+                            
+                    if matched_target:
+                        if Confirm.ask(f"Found orphaned planned change for [bold]{matched_target}[/bold] (File: {file}). Apply it?"):
+                            os.replace(file, matched_target)
+                            console.print(f"[green]Applied {file} to {matched_target}[/green]")
+                        else:
+                            os.remove(file)
+                            console.print(f"[yellow]Discarded {file}[/yellow]")
                     else:
                         os.remove(file)
-                        console.print(f"[yellow]Discarded {file}[/yellow]")
-                else:
-                    os.remove(file)
-            except Exception as e:
-                console.print(f"[red]Error recovering {file}: {e}[/red]")
+                except Exception as e:
+                    console.print(f"[red]Error recovering {file}: {e}[/red]")
 
 class DumbleDoerCLI:
     def __init__(self):
-        self.client = genai.Client()
+        self.plugin_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        load_dotenv(dotenv_path=os.path.join(os.getcwd(), '.env'), override=True)
+        api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+        if not api_key:
+            print("Error: GEMINI_API_KEY or GOOGLE_API_KEY not found in environment or local .env file.", file=sys.stderr)
+            sys.exit(1)
+        self.client = genai.Client(api_key=api_key)
         self.exit_stack = AsyncExitStack()
         self.mcp_sessions = {}
         self.local_tools = [read_file, write_file_with_review, execute_bash, update_memory_registry, run_rtk]
-        self.gemini_tools = self.local_tools
+        self.gemini_tools = list(self.local_tools)
 
-    def _create_mcp_wrapper(self, server_name: str, tool_name: str):
+    def _create_mcp_wrapper(self, server_name: str, tool):
         async def mcp_wrapper(**kwargs):
             session = self.mcp_sessions[server_name]
-            result = await session.call_tool(tool_name, arguments=kwargs)
+            result = await session.call_tool(tool.name, arguments=kwargs)
             return "\n".join([x.text for x in result.content if hasattr(x, 'text')])
-        safe_name = tool_name.replace("-", "_")
-        mcp_wrapper.__name__ = safe_name if safe_name.startswith(server_name) else f"{server_name}_{safe_name}"
+        
+        # 1. Strip slashes and hyphens for Gemini compatibility
+        safe_name = tool.name.replace("-", "_").replace("/", "_")
+        final_name = safe_name if safe_name.startswith(server_name) else f"{server_name}_{safe_name}"
+        
+        # 2. Hard-bind both name attributes so the SDK caching doesn't overwrite it
+        mcp_wrapper.__name__ = final_name
+        mcp_wrapper.__qualname__ = final_name
+        
+        # --- DYNAMIC SIGNATURE INJECTION ---
+        params = []
+        annotations = {} # 3. Initialize explicit Pydantic annotations dict
+        
+        if hasattr(tool, 'inputSchema') and tool.inputSchema and "properties" in tool.inputSchema:
+            for prop_name, prop_schema in tool.inputSchema["properties"].items():
+                ptype = str
+                if prop_schema.get("type") == "integer": ptype = int
+                elif prop_schema.get("type") == "boolean": ptype = bool
+                elif prop_schema.get("type") == "number": ptype = float
+                elif prop_schema.get("type") == "array": ptype = list
+                
+                is_req = prop_name in tool.inputSchema.get("required", [])
+                default = inspect.Parameter.empty if is_req else None
+                
+                # 4. Map the type to the annotations dictionary
+                annotations[prop_name] = ptype
+                
+                params.append(inspect.Parameter(
+                    name=prop_name, 
+                    kind=inspect.Parameter.KEYWORD_ONLY, 
+                    annotation=ptype, 
+                    default=default
+                ))
+        
+        mcp_wrapper.__signature__ = inspect.Signature(parameters=params)
+        mcp_wrapper.__annotations__ = annotations # 5. Inject into the wrapper
+        mcp_wrapper.__doc__ = getattr(tool, 'description', '')
         return mcp_wrapper
 
     async def connect_mcp(self):
+        if not os.path.exists(".codegraph"):
+            os.makedirs(".codegraph", exist_ok=True)
+            print("Initializing CodeGraph index...", file=sys.stderr)
+            import subprocess
+            await asyncio.to_thread(subprocess.run, ["npx", "--yes", "--package=@colbymchenry/codegraph", "codegraph", "init"], check=False)
+            
         # Connect to codegraph
         codegraph_params = StdioServerParameters(
             command="npx",
-            args=["-y", "--package=@colbymchenry/codegraph", "codegraph", "serve", "--mcp"]
+            args=["--yes", "--quiet", "--package=@colbymchenry/codegraph", "codegraph", "serve", "--mcp"]
         )
         codegraph_transport, codegraph_stream = await self.exit_stack.enter_async_context(stdio_client(codegraph_params))
         codegraph_session = await self.exit_stack.enter_async_context(ClientSession(codegraph_transport, codegraph_stream))
         await codegraph_session.initialize()
         cg_tools = await codegraph_session.list_tools()
         for tool in cg_tools.tools:
-            self.gemini_tools.append(self._create_mcp_wrapper("codegraph", tool.name))
+            self.gemini_tools.append(self._create_mcp_wrapper("codegraph", tool))
         self.mcp_sessions["codegraph"] = codegraph_session
 
         # Connect to context7
@@ -1807,103 +1220,81 @@ class DumbleDoerCLI:
         await context7_session.initialize()
         c7_tools = await context7_session.list_tools()
         for tool in c7_tools.tools:
-            self.gemini_tools.append(self._create_mcp_wrapper("context7", tool.name))
+            self.gemini_tools.append(self._create_mcp_wrapper("context7", tool))
         self.mcp_sessions["context7"] = context7_session
 
     async def _graceful_shutdown(self, task_id: str = None):
         print("CRITICAL: Budget Exhausted. Initiating Graceful Shutdown Sequence...")
         def _shutdown():
             with REGISTRY_LOCK:
-                try:
-                    with open("memory.md", "r", encoding="utf-8") as f:
-                        content = f.read()
+                with open("memory.md", "r", encoding="utf-8") as f:
+                    content = f.read()
+                
+                if task_id:
+                    content = content.replace(f"| {task_id} | in-progress", f"| {task_id} | interrupted")
+                
+                summary = f"## Session Handoff Summary\n- Outcome: interrupted-budget\n"
+                if task_id:
+                    summary += f"- Interrupted Task: {task_id}\n"
+                summary += "- Recommended Next Scope: Resume interrupted tasks\n"
+                
+                start_idx, end_idx = ASTMemoryMapper.locate_heading_block(content, "##", "Session Handoff Summary")
+                if start_idx != -1:
+                    lines = content.splitlines()
+                    content = "\n".join(lines[:start_idx] + [summary.strip()] + lines[end_idx:])
+                else:
+                    content += f"\n\n{summary}"
                     
-                    if task_id:
-                        content = content.replace(f"| {task_id} | in-progress", f"| {task_id} | interrupted")
-                    
-                    summary = f"\n\n## Session Handoff Summary\n- Outcome: interrupted-budget\n"
-                    if task_id:
-                        summary += f"- Interrupted Task: {task_id}\n"
-                    summary += "- Recommended Next Scope: Resume interrupted tasks\n"
-                    
-                    if "## Session Handoff Summary" not in content:
-                        content += summary
-                        
-                    with open("memory.md", "w", encoding="utf-8") as f:
-                        f.write(content)
-                except Exception as e:
-                    print(f"Error during graceful shutdown: {e}")
+                with open("memory.md", "w", encoding="utf-8") as f:
+                    f.write(content)
                     
         await asyncio.to_thread(_shutdown)
         print("Graceful Shutdown Sequence Complete. State preserved in memory.md.")
 
-    def _get_system_instructions(self):
-        return """
-System Instructions:
-1. Adhere to all DumbleDoer architectural rules.
-2. Utilize Caveman compression policies: keep responses ultra-brief, omit filler words, and minimize token usage while retaining technical accuracy.
-"""
+    async def _get_system_instructions(self):
+        instructions = [
+            "# MISSION",
+            "You are DumbleDoer, an Agent Engineering Harness. Your goal is to systematically analyze, improve, and validate agent projects.",
+            await self.local_tools[0](os.path.join(self.plugin_root, "SYSTEM_INSTRUCTIONS.md")) or "Core rules not found.",
+            await self.local_tools[0](os.path.join(self.plugin_root, "lib", "common-preamble.md")) or "",
+            await self.local_tools[0](os.path.join(self.plugin_root, "lib", "compression-policy.md")) or "",
+            await self.local_tools[0]("memory.md") or "No memory.md found. Start a new project."
+        ]
+        return "\n\n".join(instructions)
 
     async def execute_task(self, task_id: str, description: str):
         print(f"Executing task {task_id}: {description}")
-        chat_session = self.client.aio.chats.create(model="gemini-2.5-flash", config={"tools": self.gemini_tools})
-        system_instructions = self._get_system_instructions()
+        chat_session = self.client.aio.chats.create(model="gemini-2.5-flash")
+        system_instructions = await self._get_system_instructions()
         prompt_payload = f"""{system_instructions}
 
 This project has CodeGraph initialized (.codegraph/ exists). You are executing task {task_id}: {description}.
 
 Mandatory rules:
-1. Read dumbledoer/lib/codegraph-integration.md before modifying any file.
+1. Read {os.path.join(self.plugin_root, 'lib', 'codegraph-integration.md')} before modifying any file.
 2. Follow the 10-step data flow for change tasks exactly.
-3. Follow dumbledoer/lib/checkpoint-protocol.md for every file write.
+3. Follow {os.path.join(self.plugin_root, 'lib', 'checkpoint-protocol.md')} for every file write.
 4. Log your codegraph_impact result to memory.md task {task_id} CodeGraph Impact field.
 5. Do not modify any file listed in another in-progress task's Outputs."""
         try:
-            response = await chat_session.send_message(prompt_payload)
+            response = await chat_session.send_message(prompt_payload, config={"tools": list(self.gemini_tools)})
             print(f"Task {task_id} completed: {response.text}")
+            await TaskRegistryState().update_task_status(task_id, "completed")
         except BudgetExhaustedException:
-            await self._graceful_shutdown(task_id)
+            try:
+                rtk_out = await run_rtk("gain")
+                response = await chat_session.send_message(prompt_payload, config={"tools": list(self.gemini_tools)})
+                print(f"Task {task_id} completed: {response.text}")
+                await TaskRegistryState().update_task_status(task_id, "completed")
+            except (BudgetExhaustedException, RuntimeError) as e:
+                print(f"Task failed or budget threshold blocked retry: {e}")
+                await self._graceful_shutdown(task_id)
 
     def get_pending_waves(self) -> list[list[dict]]:
-        try:
-            with open("memory.md", "r", encoding="utf-8") as f:
-                content = f.read()
-        except FileNotFoundError:
-            return []
-            
-        start_idx, end_idx = ASTMemoryMapper.locate_heading_block(content, "##", "Task Registry")
-        if start_idx == -1:
-            return []
-            
-        lines = content.splitlines()[start_idx+1:end_idx]
+        state = TaskRegistryState()
+        tasks_dict = state.load_tasks()
+        tasks = list(tasks_dict.values())
         
-        tasks = []
-        for line in lines:
-            if not line.strip().startswith("|"):
-                continue
-            parts = [p.strip() for p in line.split("|")]
-            if len(parts) >= 9 and parts[1] != "Task ID" and not parts[1].startswith("---"):
-                task_id = parts[1]
-                title = parts[2]
-                status = parts[4]
-                depends_on = parts[6]
-                
-                desc_start, desc_end = ASTMemoryMapper.locate_heading_block(content, "###", task_id)
-                description = title
-                if desc_start != -1:
-                    desc_lines = content.splitlines()[desc_start+1:desc_end]
-                    for dline in desc_lines:
-                        if dline.startswith("- **Description**:"):
-                            description = dline.split("- **Description**:")[1].strip()
-                            break
-
-                tasks.append({
-                    "id": task_id,
-                    "desc": description,
-                    "status": status,
-                    "deps": [d.strip() for d in depends_on.split(",")] if depends_on != "none" else []
-                })
-
         pending_tasks = {t['id']: t for t in tasks if t['status'] == 'pending'}
         completed_task_ids = {t['id'] for t in tasks if t['status'] == 'completed'}
         
@@ -1929,6 +1320,93 @@ Mandatory rules:
                 completed_task_ids.add(t['id'])
                 
         return waves
+        
+    async def batch_diff_review(self, wave_tmp_files: list):
+        if not wave_tmp_files: return
+        import subprocess, shutil, sys, os
+        has_code = shutil.which("code") is not None
+        if GUI_DIFF_ENABLED and has_code:
+            print("Review proposed changes for the wave in VS Code.", file=sys.stderr)
+            args = ["code", "--wait"] + wave_tmp_files
+            await asyncio.to_thread(subprocess.run, args, check=False)
+        else:
+            import difflib
+            from rich.syntax import Syntax
+            from rich.console import Console
+            console_diff = Console()
+            for tmp_path in wave_tmp_files:
+                basename = os.path.basename(tmp_path)
+                actual_filename = basename.split("_", 1)[1] if "_" in basename else basename
+                actual_filename = actual_filename.replace(".tmp", "").replace("__", "/")
+                
+                original_text = ""
+                if os.path.exists(actual_filename):
+                    with open(actual_filename, "r") as f:
+                        original_text = f.read()
+                        
+                with open(tmp_path, "r") as f:
+                    new_text = f.read()
+                    
+                diff = list(difflib.unified_diff(
+                    original_text.splitlines(keepends=True),
+                    new_text.splitlines(keepends=True),
+                    fromfile=f"a/{actual_filename}",
+                    tofile=f"b/{actual_filename}"
+                ))
+                if diff:
+                    diff_text = "".join(diff)
+                    syntax = Syntax(diff_text, "diff", theme="monokai")
+                    console_diff.print(f"\n[bold cyan]Diff for {actual_filename}:[/bold cyan]")
+                    console_diff.print(syntax)
+            
+        from rich.prompt import Prompt
+        from rich.console import Console
+        console = Console()
+        choice = Prompt.ask("Approve wave changes? [Y(all)/N(none)/S(select)]", choices=["Y", "N", "S"], default="Y")
+        rejected_files = set()
+        if choice == "S":
+            sel = Prompt.ask("Enter filenames to reject (comma separated)")
+            rejected_files = {s.strip() for s in sel.split(",") if s.strip()}
+        elif choice == "N":
+            rejected_files = {os.path.basename(f) for f in wave_tmp_files}
+            
+        state = TaskRegistryState()
+        for tmp_path in wave_tmp_files:
+            basename = os.path.basename(tmp_path)
+            actual_filename = basename.split("_", 1)[1] if "_" in basename else basename
+            actual_filename = actual_filename.replace(".tmp", "").replace("__", "/")
+            
+            target_path = actual_filename
+            task_id = None
+            try:
+                with open("memory.md", "r", encoding="utf-8") as f:
+                    content = f.read()
+                start_idx, end_idx = ASTMemoryMapper.locate_heading_block(content, "##", "Change Log")
+                if start_idx != -1:
+                    for line in content.splitlines()[start_idx+1:end_idx]:
+                        parts = [p.strip() for p in line.split("|")]
+                        if len(parts) >= 6 and parts[5].strip() == "planned" and parts[3].strip() == actual_filename:
+                            target_path = parts[3].strip()
+                            task_id = parts[2].strip()
+                            break
+            except Exception:
+                pass
+
+            if actual_filename in rejected_files or basename in rejected_files:
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+                console.print(f"[yellow]Rejected changes for {actual_filename}[/yellow]")
+                if task_id:
+                    await state.update_task_status(task_id, "pending")
+            else:
+                if os.path.exists(tmp_path):
+                    os.replace(tmp_path, target_path)
+                console.print(f"[green]Approved changes for {actual_filename}[/green]")
+
+        if rejected_files:
+            await asyncio.to_thread(OrphanRecoveryScanner().run)
+
+
 
     async def run(self, command: str, args: list):
         print(f"DumbleDoer running command: {command}")
@@ -1943,27 +1421,234 @@ Mandatory rules:
                     print("No pending tasks to execute.")
                 for i, wave in enumerate(waves):
                     print(f"Starting execution wave {i+1} with {len(wave)} tasks...")
+                    import glob
+                    before_tmps = set(glob.glob(".dumbledoer/tmp/*.tmp"))
                     try:
                         await asyncio.gather(*[self.execute_task(t['id'], t['desc']) for t in wave])
                     except BudgetExhaustedException:
                         await self._graceful_shutdown()
                         break
+                    after_tmps = set(glob.glob(".dumbledoer/tmp/*.tmp"))
+                    wave_tmps = list(after_tmps - before_tmps)
+                    if wave_tmps:
+                        await self.batch_diff_review(wave_tmps)
             else:
-                self.chat_session = self.client.aio.chats.create(model="gemini-2.5-flash", config={"tools": self.gemini_tools})
-                response = await self.chat_session.send_message(f"Execute {command} with {args}")
+                self.chat_session = self.client.aio.chats.create(model="gemini-2.5-flash")
+                response = await self.chat_session.send_message(f"Execute {command} with {args}", config={"tools": list(self.gemini_tools)})
                 print(response.text)
         finally:
+            self._archive_stale_sessions()
             await self.exit_stack.aclose()
+
+    def _archive_stale_sessions(self):
+        archive_keep_sessions = 1
+        
+        if not os.path.exists("memory.md"):
+            return
+            
+        with open("memory.md", "r", encoding="utf-8") as f:
+            content = f.read()
+            
+        config_start, config_end = ASTMemoryMapper.locate_heading_block(content, "##", "Config")
+        if config_start != -1:
+            for line in content.splitlines()[config_start:config_end]:
+                if "archive_keep_sessions:" in line:
+                    try:
+                        archive_keep_sessions = int(line.split(":")[1].strip())
+                    except:
+                        pass
+                        
+        sess_start, sess_end = ASTMemoryMapper.locate_heading_block(content, "##", "Session Log")
+        if sess_start == -1:
+            return
+            
+        lines = content.splitlines()
+        session_log_lines = lines[sess_start+1:sess_end]
+        
+        terminal_sessions = []
+        for i, line in enumerate(session_log_lines):
+            if line.strip().startswith("|") and "---" not in line and "Timestamp" not in line and "Session ID" not in line:
+                parts = [p.strip() for p in line.split("|")]
+                if len(parts) >= 6:
+                    sid = parts[1]
+                    outcome = parts[5].lower()
+                    if outcome in ("completed", "error") or (outcome.startswith("interrupted-") and not outcome.endswith("(archived)")):
+                        terminal_sessions.append((sid, line, i))
+                        
+        if len(terminal_sessions) <= archive_keep_sessions:
+            return
+            
+        to_archive = terminal_sessions[:-archive_keep_sessions]
+        if not to_archive:
+            return
+            
+        os.makedirs(".dumbledoer/archive", exist_ok=True)
+        os.makedirs(".dumbledoer/tmp", exist_ok=True)
+        
+        task_start, task_end = ASTMemoryMapper.locate_heading_block(content, "##", "Task Details")
+        
+        import re
+        tasks = {}
+        current_task = None
+        current_lines = []
+        
+        in_code_block = False
+        for idx, line in enumerate(lines):
+            stripped = line.strip()
+            if stripped.startswith("```"):
+                in_code_block = not in_code_block
+                
+            if not in_code_block and re.match(r"^###\s+(T-\d+)", line):
+                if current_task:
+                    tasks[current_task] = current_lines
+                current_task = re.match(r"^###\s+(T-\d+)", line).group(1)
+                current_lines = [line]
+            elif current_task:
+                if not in_code_block and re.match(r"^#+\s+", line):
+                    tasks[current_task] = current_lines
+                    current_task = None
+                else:
+                    current_lines.append(line)
+        if current_task:
+            tasks[current_task] = current_lines
+            
+        archived_tasks_per_session = {}
+        for sid, line, _ in to_archive:
+            archived_tasks = []
+            for tid, tlines in tasks.items():
+                status = "pending"
+                assigned = "none"
+                for tline in tlines:
+                    if tline.startswith("- **Status**:"):
+                        status = tline.split(":", 1)[1].strip()
+                    elif tline.startswith("- **Assigned Session**:"):
+                        assigned = tline.split(":", 1)[1].strip()
+                if assigned == sid and status in ("completed", "error", "deferred", "abandoned"):
+                    archived_tasks.append(tid)
+            archived_tasks_per_session[sid] = archived_tasks
+            
+        new_lines = list(lines)
+        from datetime import datetime
+        for sid, sess_line, _ in to_archive:
+            record_lines = [
+                f"# Archived Session: {sid}",
+                "",
+                f"session_id: {sid}",
+                f"archived_at: {datetime.utcnow().isoformat()}Z",
+                f"outcome: {sess_line.split('|')[5].strip()}",
+                "source: memory.md",
+                "",
+                "## Session Log Entry",
+                "| Session ID | Start Time | End Time | Tasks Claimed | Outcome |",
+                "|---|---|---|---|---|",
+                sess_line,
+                "",
+                "## Change Log Entries",
+                "| Timestamp | Task ID | Target Path | Summary | Status | Rationale |",
+                "|---|---|---|---|---|---|",
+            ]
+            
+            chg_start, chg_end = ASTMemoryMapper.locate_heading_block(content, "##", "Change Log")
+            if chg_start != -1:
+                for j in range(chg_start+1, chg_end):
+                    if lines[j].strip().startswith("|") and "---" not in lines[j] and "Timestamp" not in lines[j]:
+                        parts = [p.strip() for p in lines[j].split("|")]
+                        if len(parts) >= 6:
+                            tid = parts[2]
+                            if tid in archived_tasks_per_session[sid] or tid == sid:
+                                record_lines.append(lines[j])
+                                new_lines[j] = ""
+                                
+            record_lines.append("")
+            record_lines.append("## Checkpoint Registry Entries")
+            record_lines.append("| Checkpoint ID | Task ID | Step | Session ID | Files Snapshotted |")
+            record_lines.append("|---|---|---|---|---|")
+            
+            chk_start, chk_end = ASTMemoryMapper.locate_heading_block(content, "##", "Checkpoint Registry")
+            if chk_start != -1:
+                for j in range(chk_start+1, chk_end):
+                    if lines[j].strip().startswith("|") and "---" not in lines[j] and "Checkpoint ID" not in lines[j]:
+                        parts = [p.strip() for p in lines[j].split("|")]
+                        if len(parts) >= 6:
+                            csid = parts[4]
+                            if csid == sid:
+                                record_lines.append(lines[j])
+                                new_lines[j] = ""
+                                
+            record_lines.append("")
+            record_lines.append("## Task Details")
+            
+            for tid in archived_tasks_per_session[sid]:
+                record_lines.extend(tasks[tid])
+                t_idx = -1
+                for k, nl in enumerate(new_lines):
+                    if nl == f"### {tid}":
+                        t_idx = k
+                        break
+                if t_idx != -1:
+                    while t_idx < len(new_lines) and (new_lines[t_idx] == f"### {tid}" or not re.match(r"^#+\s+", new_lines[t_idx])):
+                        new_lines[t_idx] = ""
+                        t_idx += 1
+                        if t_idx < len(new_lines) and re.match(r"^#+\s+", new_lines[t_idx]):
+                            break
+                            
+            archive_tmp = f".dumbledoer/tmp/{sid}.archive.tmp"
+            archive_md = f".dumbledoer/archive/{sid}.md"
+            with open(archive_tmp, "w", encoding="utf-8") as f:
+                f.write("\n".join(record_lines))
+                
+            os.replace(archive_tmp, archive_md)
+            
+            idx_start, idx_end = ASTMemoryMapper.locate_heading_block(content, "##", "Archive Index")
+            archive_row = f"| {sid} | {datetime.utcnow().isoformat()}Z | .dumbledoer/archive/{sid}.md | {len(archived_tasks_per_session[sid])} | {sess_line.split('|')[5].strip()} |"
+            if idx_start == -1:
+                new_lines.append("")
+                new_lines.append("## Archive Index")
+                new_lines.append("| Session ID | Archived At | Archive File | Tasks Archived | Outcome |")
+                new_lines.append("|---|---|---|---|---|")
+                new_lines.append(archive_row)
+            else:
+                new_lines.insert(idx_end, archive_row)
+                
+            for j in range(sess_start+1, sess_end):
+                if new_lines[j].strip().startswith(f"| {sid} |"):
+                    parts = new_lines[j].split("|")
+                    parts[5] = f" {parts[5].strip()} (archived) "
+                    new_lines[j] = "|".join(parts)
+                    break
+                    
+        final_lines = [l for l in new_lines if l != ""]
+        tmp_mem = ".dumbledoer/tmp/memory.md.tmp"
+        with open(tmp_mem, "w", encoding="utf-8") as f:
+            f.write("\n".join(final_lines))
+        os.replace(tmp_mem, "memory.md")
+        print(f"Archived {len(to_archive)} session(s) → .dumbledoer/archive/ ({len(lines) - len(final_lines)} lines trimmed from memory.md)")
 
 
 async def main_async():
     parser = argparse.ArgumentParser(description="DumbleDoer CLI")
     parser.add_argument(
         "command",
-        choices=["start", "execute", "resume", "report", "rollback", "update-docs", "audit", "iterate"],
+        choices=["start", "execute", "resume", "report", "rollback", "update-docs", "audit", "iterate", "status"],
         help="The dumbledoer command to run"
     )
+    parser.add_argument("--no-gui", action="store_true", help="Disable GUI diff-gate for headless environments")
     args, unknown = parser.parse_known_args()
+    
+    global GUI_DIFF_ENABLED
+    GUI_DIFF_ENABLED = not args.no_gui
+    
+    if GUI_DIFF_ENABLED:
+        try:
+            with open("memory.md", "r", encoding="utf-8") as f:
+                content = f.read()
+            start, end = ASTMemoryMapper.locate_heading_block(content, "##", "Config")
+            if start != -1:
+                config_lines = content.splitlines()[start:end]
+                if any("gui_diff_enabled: false" in line.lower() for line in config_lines):
+                    GUI_DIFF_ENABLED = False
+        except FileNotFoundError:
+            pass
     
     cli = DumbleDoerCLI()
     await cli.run(args.command, unknown)
@@ -2068,6 +1753,81 @@ for filepath in files:
         out_f.close()
 
 print("Extraction and complete agy adaptation successful.")
+
+```
+
+### FILE: fix_rabbit_hole.py
+```py
+import os
+import sys
+
+filepath = "dumbledoer/dumbledoer_cli.py"
+with open(filepath, "r") as f:
+    content = f.read()
+
+# 1. Fix the Pydantic Schema Annotations Bug
+old_wrapper_start = '''        safe_name = tool.name.replace("-", "_").replace("/", "_")
+        mcp_wrapper.__name__ = safe_name if safe_name.startswith(server_name) else f"{server_name}_{safe_name}"'''
+
+new_wrapper_start = '''        safe_name = tool.name.replace("-", "_").replace("/", "_")
+        final_name = safe_name if safe_name.startswith(server_name) else f"{server_name}_{safe_name}"
+        mcp_wrapper.__name__ = final_name
+        mcp_wrapper.__qualname__ = final_name'''
+
+content = content.replace(old_wrapper_start, new_wrapper_start)
+
+old_injection = '''        # --- DYNAMIC SIGNATURE INJECTION ---
+        params = []
+        if hasattr(tool, 'inputSchema') and tool.inputSchema and "properties" in tool.inputSchema:'''
+
+new_injection = '''        # --- DYNAMIC SIGNATURE INJECTION ---
+        params = []
+        annotations = {}
+        if hasattr(tool, 'inputSchema') and tool.inputSchema and "properties" in tool.inputSchema:'''
+
+content = content.replace(old_injection, new_injection)
+
+old_param_append = '''                params.append(inspect.Parameter(
+                    name=prop_name, 
+                    kind=inspect.Parameter.KEYWORD_ONLY, 
+                    annotation=ptype, 
+                    default=default
+                ))
+        
+        mcp_wrapper.__signature__ = inspect.Signature(parameters=params)
+        mcp_wrapper.__doc__ = getattr(tool, 'description', '')'''
+
+new_param_append = '''                annotations[prop_name] = ptype
+                params.append(inspect.Parameter(
+                    name=prop_name, 
+                    kind=inspect.Parameter.KEYWORD_ONLY, 
+                    annotation=ptype, 
+                    default=default
+                ))
+        
+        mcp_wrapper.__signature__ = inspect.Signature(parameters=params)
+        mcp_wrapper.__annotations__ = annotations
+        mcp_wrapper.__doc__ = getattr(tool, 'description', '')'''
+
+content = content.replace(old_param_append, new_param_append)
+
+# 2. Fix the missing .codegraph/ index causing 0 tools to load
+old_connect = '''    async def connect_mcp(self):
+        # Connect to codegraph'''
+
+new_connect = '''    async def connect_mcp(self):
+        if not os.path.exists(".codegraph"):
+            print("Initializing CodeGraph index...", file=sys.stderr)
+            import subprocess
+            await asyncio.to_thread(subprocess.run, ["npx", "--yes", "--package=@colbymchenry/codegraph", "codegraph", "init"], check=False)
+            
+        # Connect to codegraph'''
+
+content = content.replace(old_connect, new_connect)
+
+with open(filepath, "w") as f:
+    f.write(content)
+print("Rabbit hole plugged successfully.")
 
 ```
 
@@ -3882,465 +3642,17 @@ appended at archive time and edited only when a rollback restores an archived ta
 
 ### FILE: memory.md
 ```md
-# DumbleDoer Session State Memory
-
 ## Config
-- budget_limit: 2000000
-- budget_threshold_pct: 80
-- session_count: 1
-- created: 2026-07-02
-- docs_path: docs
-- last_docs_update: null
-- last_docs_update_session: null
-- knowledge_path: knowledge/
-- last_knowledge_docs_sync: never
-- gui_diff_enabled: true
-- sandbox_mode: enabled
-
-## Project Goal
-Implement KISS Human-in-the-Loop & Execution Sandbox. Refactor the core Python orchestrator to make this harness a true SWE partner by injecting an execution sandbox and VS Code diff-gate for human-in-the-loop validation.
-
-## Scope
-- dumbledoer/dumbledoer_cli.py
-- Inject execute_bash tool.
-- Implement VS Code Diff-Gate via write_file_with_review.
-- Fix RTK Subprocess Parsing.
-- Async tool registration using asyncio.to_thread wrappers.
-
-## Budget & Quota Tracking
-| Metric | Value |
-|--------|-------|
-| Token Limit | 2000000 |
-| Tokens Consumed | 999000 |
-| Status | HEALTHY |
+- budget_limit: 100000
+- sandbox_mode: native
 
 ## Task Registry
-| Task ID | Title | Type | Status | Owner | Depends On | Session | Checkpoint |
-|---------|-------|------|--------|-------|------------|---------|------------|
-| T-001 | Implement execute_bash Tool | change | completed | S-20260702-205350 | none | S-20260702-205350 | T-001-step1-S-20260702-205350 |
-| T-002 | Implement VS Code Diff-Gate | change | completed | S-20260702-205350 | T-001 | S-20260702-205350 | T-002-step1-S-20260702-205350 |
-| T-003 | Fix RTK Subprocess Parsing | change | completed | S-20260702-205350 | none | S-20260702-205350 | T-003-step1-S-20260702-205350 |
-| T-004 | Async Wrappers & Tool Registration | change | completed | S-20260702-205350 | T-001, T-002, T-003 | S-20260702-205350 | T-004-step1-S-20260702-205350 |
-| T-005 | Wire Diff History into Audit QA Loop | change | completed | S-20260702-205350 | none | none | none |
-| T-006 | Fix pytest destructive behavior and DeprecationWarning | change | completed | unassigned | T-004 | none | none |
-| T-007 | Introduce gui_diff_enabled Config Option | change | completed | unassigned | none | none | none |
-| T-008 | Add --no-gui flag and global config | change | completed | unassigned | none | none | none |
-| T-009 | Refactor write_file_with_review logic | change | completed | unassigned | T-007, T-008 | none | none |
-| T-010 | Update test suite for new Diff-Gate logic | change | completed | unassigned | T-009 | none | none |
-| T-011 | Create test_pipeline.md in tmp directory | change | completed | — | none | none | none |
-| T-012 | Create vscode_test.md in tmp directory | change | completed | — | none | none | none |
-| T-013 | Create vscode_test.md in tmp directory | change | completed | — | none | none | none |
-| T-014 | Create strict_ui_test.md in tmp directory | change | completed | — | none | none | none |
-| T-015 | Create strict_ui_test2.md in tmp directory | change | completed | — | none | none | none |
-| T-016 | Restore GUI Diff-Gate in write_file_with_review | change | completed | — | none | none | none |
-| T-017 | Add comment to a.txt to test UI | change | completed | — | none | none | none |
-| T-018 | Add simple comment to a.txt to test UI | change | completed | — | none | none | none |
-| T-019 | Add simple comment to a.txt to test the UI | change | completed | — | none | none | none |
-| T-020 | Add UI Test comment to a.txt | change | completed | unassigned | none | S-20260721-000001 | T-020-step1-S-20260721-000001 |
-| T-021 | Modify dummy file b.txt | change | pending | unassigned | none | none | none |
+| Task ID | Description | Component | Status | Priority | Dependencies | Complexity | Assigned Agent |
+|---|---|---|---|---|---|---|---|
+|task-1|Call codegraph_impact tool to search for "test"|test| completed |High|none|Low|TestAgent|
 
-## Task Details
-
-### T-001
-- **Type**: change
-- **Status**: completed
-- **Owner**: S-20260702-205350
-- **Depends On**: none
-- **Assigned Session**: S-20260702-205350
-- **Description**: Create `execute_bash` tool using `subprocess.run(..., shell=True, capture_output=True, text=True, check=True)` returning stdout on success, stderr/stdout on CalledProcessError.
-- **Inputs**: none
-- **Outputs**: dumbledoer/dumbledoer_cli.py
-- **Success Criteria**: `execute_bash` exists and correctly handles subprocess calls and exceptions.
-- **Estimated Effort**: small
-- **Parallelizable**: yes
-- **CodeGraph Impact**: Affects 7 symbols across 1 files: [DumbleDoerCLI (dumbledoer_cli.py), __init__, _init_mcp, start_chat, main, _create_mcp_wrapper, _get_system_instructions]
-- **Checkpoint**: none
-- **Resume Instructions**: Pick up implementing execute_bash in dumbledoer/dumbledoer_cli.py.
-- **Notes**: —
-
-### T-002
-- **Type**: change
-- **Status**: completed
-- **Owner**: S-20260702-205350
-- **Depends On**: T-001
-- **Assigned Session**: S-20260702-205350
-- **Description**: Replace `write_file` with `write_file_with_review` utilizing VS Code as a diff-gate blocking execution.
-- **Inputs**: dumbledoer/dumbledoer_cli.py
-- **Outputs**: dumbledoer/dumbledoer_cli.py
-- **Success Criteria**: `write_file_with_review` creates a tmp file, opens VS Code for diff, waits for user input, and applies atomically on approval.
-- **Estimated Effort**: medium
-- **Parallelizable**: no
-- **CodeGraph Impact**: Affects 3 symbols across 1 files: [write_file (dumbledoer_cli.py), update_memory_registry, __init__]
-- **Checkpoint**: none
-- **Resume Instructions**: Start implementing write_file_with_review logic.
-- **Notes**: —
-
-### T-003
-- **Type**: change
-- **Status**: completed
-- **Owner**: S-20260702-205350
-- **Depends On**: none
-- **Assigned Session**: S-20260702-205350
-- **Description**: Refactor `run_rtk` to use `shlex.split(command)` inside `subprocess.run` list.
-- **Inputs**: dumbledoer/dumbledoer_cli.py
-- **Outputs**: dumbledoer/dumbledoer_cli.py
-- **Success Criteria**: `run_rtk` passes `shlex.split` string to `subprocess.run` array.
-- **Estimated Effort**: small
-- **Parallelizable**: yes
-- **CodeGraph Impact**: Affects 2 symbols across 1 files: [run_rtk, __init__]
-- **Checkpoint**: none
-- **Resume Instructions**: Update run_rtk to use shlex.
-- **Notes**: —
-
-### T-004
-- **Type**: change
-- **Status**: completed
-- **Owner**: S-20260702-205350
-- **Depends On**: T-001, T-002, T-003
-- **Assigned Session**: S-20260702-205350
-- **Description**: Wrap blocking I/O calls using `asyncio.to_thread` for the tools in DumbleDoerCLI to prevent freezing MCP loops. Update `self.local_tools`.
-- **Inputs**: dumbledoer/dumbledoer_cli.py
-- **Outputs**: dumbledoer/dumbledoer_cli.py
-- **Success Criteria**: Blocking tools are properly offloaded from main asyncio event loop.
-- **Estimated Effort**: medium
-- **Parallelizable**: no
-- **CodeGraph Impact**: Affects 7 symbols across 1 files: [DumbleDoerCLI (dumbledoer_cli.py), __init__, _init_mcp, start_chat, main, _create_mcp_wrapper, _get_system_instructions]
-- **Checkpoint**: none
-- **Resume Instructions**: Update tool registration to avoid event loop freezing.
-- **Notes**: —
-
-### T-005
-- **Type**: change
-- **Status**: completed
-- **Owner**: S-20260702-205350
-- **Depends On**: none
-- **Assigned Session**: none
-- **Description**: Update `skills/audit/SKILL.md` to instruct the QA loop to read `.dumbledoer/checkpoints/` JSON files (or `rollbacks/` directory) to determine exactly which lines were modified by the execution wave. This ensures sandbox validation targets the exact changes.
-- **Inputs**: none
-- **Outputs**: skills/audit/SKILL.md
-- **Success Criteria**: The `/audit` skill explicitly contains instructions to read checkpoints/rollbacks and extract precise code diffs before formulating the test strategy.
-- **Estimated Effort**: small
-- **Parallelizable**: yes
-- **CodeGraph Impact**: Affects 1 file: [skills/audit/SKILL.md]
-- **Checkpoint**: none
-- **Resume Instructions**: Pick up editing `skills/audit/SKILL.md`.
-- **Notes**: —
-
-### T-006
-- **Type**: change
-- **Status**: completed
-- **Owner**: unassigned
-- **Depends On**: none
-- **Assigned Session**: none
-- **Description**: Fix `test_state_integrity.py` which destructively deletes the live `memory.md` file during testing. Ensure it uses a mocked file or temporary directory. Additionally, fix `asyncio.iscoroutinefunction` deprecation warning in `dumbledoer/dumbledoer_cli.py`.
-- **Inputs**: none
-- **Outputs**: tests/test_state_integrity.py, dumbledoer/dumbledoer_cli.py
-- **Success Criteria**: Running `pytest` does not delete `memory.md` and produces 0 warnings regarding `iscoroutinefunction`.
-- **Estimated Effort**: small
-- **Parallelizable**: yes
-- **CodeGraph Impact**: Affects 2 files.
-- **Checkpoint**: none
-- **Resume Instructions**: Fix the destructive tests and deprecation warnings.
-- **Notes**: Discovered by /audit QA loop!
-
-### T-007
-- **Type**: change
-- **Status**: completed
-- **Owner**: unassigned
-- **Depends On**: none
-- **Assigned Session**: none
-- **Description**: Add `- gui_diff_enabled: true` to the Config block in `memory.md`.
-- **Inputs**: none
-- **Outputs**: memory.md
-- **Success Criteria**: `gui_diff_enabled: true` exists in the Config block of `memory.md`.
-- **Estimated Effort**: small
-- **Parallelizable**: yes
-- **CodeGraph Impact**: Affects 0 symbols across 1 file.
-- **Checkpoint**: none
-- **Resume Instructions**: Add the config key to memory.md.
-- **Notes**: —
-
-### T-008
-- **Type**: change
-- **Status**: completed
-- **Owner**: unassigned
-- **Depends On**: none
-- **Assigned Session**: none
-- **Description**: In `dumbledoer/dumbledoer_cli.py`, add `--no-gui` flag to `argparse` in `main()`. Introduce a global variable `GUI_DIFF_ENABLED = True`. Parse the `memory.md` Config block to read `gui_diff_enabled`. Set `GUI_DIFF_ENABLED = False` if the config is false OR if `--no-gui` flag is passed.
-- **Inputs**: dumbledoer/dumbledoer_cli.py
-- **Outputs**: dumbledoer/dumbledoer_cli.py
-- **Success Criteria**: Running `python dumbledoer/dumbledoer_cli.py execute --no-gui` parses without errors and correctly sets the override.
-- **Estimated Effort**: small
-- **Parallelizable**: yes
-- **CodeGraph Impact**: Affects 2 symbols across 1 file: [main, DumbleDoerCLI]
-- **Checkpoint**: none
-- **Resume Instructions**: Add argparse flag and global config variable.
-- **Notes**: —
-
-### T-009
-- **Type**: change
-- **Status**: completed
-- **Owner**: unassigned
-- **Depends On**: T-007, T-008
-- **Assigned Session**: none
-- **Description**: In `dumbledoer_cli.py`, update `write_file_with_review` to use `GUI_DIFF_ENABLED`. If True, remove the `Confirm.ask` prompt and automatically launch VS Code (`subprocess.run`), then `Confirm.ask` for atomic apply approval. If False, skip VS Code entirely and immediately display the terminal diff via `rich.syntax`.
-- **Inputs**: dumbledoer/dumbledoer_cli.py
-- **Outputs**: dumbledoer/dumbledoer_cli.py
-- **Success Criteria**: `write_file_with_review` logic clearly forks between automatic GUI diff and terminal fallback based on `GUI_DIFF_ENABLED`.
-- **Estimated Effort**: medium
-- **Parallelizable**: no
-- **CodeGraph Impact**: Affects 1 symbol across 1 file: [write_file_with_review]
-- **Checkpoint**: none
-- **Resume Instructions**: Refactor the diff-gate prompting logic.
-- **Notes**: —
-
-### T-010
-- **Type**: change
-- **Status**: completed
-- **Owner**: unassigned
-- **Depends On**: T-009
-- **Assigned Session**: none
-- **Description**: Update `tests/test_refactors.py` to fix the `Confirm.ask` side effects. Ensure there are tests verifying both `GUI_DIFF_ENABLED` paths (True and False).
-- **Inputs**: tests/test_refactors.py
-- **Outputs**: tests/test_refactors.py
-- **Success Criteria**: `pytest` passes with the updated diff-gate logic.
-- **Estimated Effort**: medium
-- **Parallelizable**: no
-- **CodeGraph Impact**: Affects 2 symbols across 1 file.
-- **Checkpoint**: none
-- **Resume Instructions**: Update test suite to reflect the new prompting logic.
-- **Notes**: —
-
-### T-011
-- **Type**: change
-- **Status**: completed
-- **Owner**: unassigned
-- **Depends On**: none
-- **Assigned Session**: none
-- **Description**: Create a simple markdown file named 'test_pipeline.md' in the .dumbledoer/tmp directory containing the text 'Execution successful.'
-- **Inputs**: none
-- **Outputs**: .dumbledoer/tmp/test_pipeline.md
-- **Success Criteria**: File `.dumbledoer/tmp/test_pipeline.md` exists and its content contains exactly "Execution successful."
-- **Estimated Effort**: small
-- **Parallelizable**: yes
-- **CodeGraph Impact**: Affects 0 symbols across 0 files.
-- **Checkpoint**: none
-- **Resume Instructions**: Create the test_pipeline.md file with the required text.
-- **Notes**: This is just a test.
-
-### T-012
-- **Type**: change
-- **Status**: completed
-- **Owner**: unassigned
-- **Depends On**: none
-- **Assigned Session**: none
-- **Description**: Create a file named 'vscode_test.md' in the .dumbledoer/tmp directory with the text 'Did the UI open?'
-- **Inputs**: none
-- **Outputs**: .dumbledoer/tmp/vscode_test.md
-- **Success Criteria**: File `.dumbledoer/tmp/vscode_test.md` exists and its content contains exactly "Did the UI open?"
-- **Estimated Effort**: small
-- **Parallelizable**: yes
-- **CodeGraph Impact**: Affects 0 symbols across 0 files.
-- **Checkpoint**: none
-- **Resume Instructions**: Create the vscode_test.md file with the required text.
-- **Notes**: This tests the VS Code Diff-Gate UI.
-
-### T-013
-- **Type**: change
-- **Status**: completed
-- **Owner**: unassigned
-- **Depends On**: none
-- **Assigned Session**: none
-- **Description**: Create a file named 'vscode_test.md' in the .dumbledoer/tmp directory with the text 'Did the UI open?'
-- **Inputs**: none
-- **Outputs**: .dumbledoer/tmp/vscode_test.md
-- **Success Criteria**: File `.dumbledoer/tmp/vscode_test.md` exists and its content contains exactly "Did the UI open?"
-- **Estimated Effort**: small
-- **Parallelizable**: yes
-- **CodeGraph Impact**: Affects 0 symbols across 0 files.
-- **Checkpoint**: none
-- **Resume Instructions**: Create the vscode_test.md file with the required text.
-- **Notes**: Testing the VS Code UI flow again after debugging environment variables.
-
-### T-014
-- **Type**: change
-- **Status**: completed
-- **Owner**: unassigned
-- **Depends On**: none
-- **Assigned Session**: none
-- **Description**: Create a file named 'strict_ui_test.md' in .dumbledoer/tmp with the text 'Tool forced.' MUST use write_file_with_review.
-- **Inputs**: none
-- **Outputs**: .dumbledoer/tmp/strict_ui_test.md
-- **Success Criteria**: File `.dumbledoer/tmp/strict_ui_test.md` exists and its content contains exactly "Tool forced."
-- **Estimated Effort**: small
-- **Parallelizable**: yes
-- **CodeGraph Impact**: Affects 0 symbols across 0 files.
-- **Checkpoint**: none
-- **Resume Instructions**: Create the strict_ui_test.md file with the required text.
-- **Notes**: This tests the strict sub-agent directive enforcing the VS Code Diff-Gate.
-
-### T-015
-- **Type**: change
-- **Status**: completed
-- **Owner**: unassigned
-- **Depends On**: none
-- **Assigned Session**: none
-- **Description**: Create a file named 'strict_ui_test2.md' in .dumbledoer/tmp with the text 'Tool forced.' MUST use write_file_with_review.
-- **Inputs**: none
-- **Outputs**: .dumbledoer/tmp/strict_ui_test2.md
-- **Success Criteria**: File `.dumbledoer/tmp/strict_ui_test2.md` exists and its content contains exactly "Tool forced."
-- **Estimated Effort**: small
-- **Parallelizable**: yes
-- **CodeGraph Impact**: Affects 0 symbols across 0 files.
-- **Checkpoint**: none
-- **Resume Instructions**: Create the strict_ui_test2.md file with the required text.
-- **Notes**: This tests the headless auto-apply implementation of the diff-gate.
-
-### T-016
-- **Type**: change
-- **Status**: completed
-- **Owner**: unassigned
-- **Depends On**: none
-- **Assigned Session**: none
-- **Description**: Restore GUI Diff-Gate in `write_file_with_review`. Remove auto-approval. Re-implement `GUI_DIFF_ENABLED` check. If True, use `subprocess.run(['code', '--wait', '--diff', path, tmp_path])`. If False, use rich.syntax. Use `Confirm.ask` to capture human approval.
-- **Inputs**: dumbledoer/dumbledoer_cli.py
-- **Outputs**: dumbledoer/dumbledoer_cli.py
-- **Success Criteria**: `pytest tests/test_refactors.py -k test_write_file_with_review_vscode_success` passes.
-- **Estimated Effort**: medium
-- **Parallelizable**: no
-- **CodeGraph Impact**: Affects 1 symbol across 1 file.
-- **Checkpoint**: none
-- **Resume Instructions**: Rewrite write_file_with_review to restore the diff-gate logic.
-- **Notes**: Reversing the auto-approve hijack.
-
-### T-017
-- **Type**: change
-- **Status**: completed
-- **Owner**: unassigned
-- **Depends On**: none
-- **Assigned Session**: none
-- **Description**: Add a simple comment to the top of `a.txt` to test the UI.
-- **Inputs**: a.txt
-- **Outputs**: a.txt
-- **Success Criteria**: File `a.txt` has a comment added at the top.
-- **Estimated Effort**: small
-- **Parallelizable**: yes
-- **CodeGraph Impact**: Affects 0 symbols across 1 file.
-- **Checkpoint**: none
-- **Resume Instructions**: Edit a.txt to add a comment at the top.
-- **Notes**: Simple UI verification.
-
-### T-018
-- **Type**: change
-- **Status**: completed
-- **Owner**: unassigned
-- **Depends On**: none
-- **Assigned Session**: none
-- **Description**: Add a simple comment to the top of `a.txt` to test the UI.
-- **Inputs**: a.txt
-- **Outputs**: a.txt
-- **Success Criteria**: File `a.txt` starts with a comment (e.g., `# UI Test`) followed by the original content.
-- **Estimated Effort**: small
-- **Parallelizable**: yes
-- **CodeGraph Impact**: Affects 0 symbols across 1 file.
-- **Checkpoint**: none
-- **Resume Instructions**: Edit `a.txt` to insert a comment on the first line.
-- **Notes**: Verifies that simple code edits can trigger the correct UI/Sandbox diff gate.
-
-### T-019
-- **Type**: change
-- **Status**: completed
-- **Owner**: unassigned
-- **Depends On**: none
-- **Assigned Session**: none
-- **Description**: Add a simple comment to the top of `a.txt` just to test the UI.
-- **Inputs**: a.txt
-- **Outputs**: a.txt
-- **Success Criteria**: File `a.txt` starts with a comment (e.g., `# UI Test`) followed by the original content.
-- **Estimated Effort**: small
-- **Parallelizable**: yes
-- **CodeGraph Impact**: Affects 0 symbols across 1 file.
-- **Checkpoint**: none
-- **Resume Instructions**: Edit `a.txt` to insert a comment on the first line.
-- **Notes**: Verifies that simple code edits can trigger the correct UI/Sandbox diff gate.
-
-### T-020
-- **Type**: change
-- **Status**: completed
-- **Owner**: unassigned
-- **Depends On**: none
-- **Assigned Session**: S-20260721-000001
-- **Description**: Add a simple comment reading '# UI Test' to the top of a.txt to verify the diff-gate.
-- **Inputs**: a.txt
-- **Outputs**: a.txt
-- **Success Criteria**: File `a.txt` begins with the exact line `# UI Test`.
-- **Estimated Effort**: small
-- **Parallelizable**: yes
-- **CodeGraph Impact**: Affects 0 symbols across 1 file.
-- **Checkpoint**: T-020-step1-S-20260721-000001
-- **Resume Instructions**: Edit a.txt to add the comment.
-- **Notes**: Verifies that simple code edits can trigger the correct UI/Sandbox diff gate.
-
-## Open Questions
-- none
-
-## Change Log
-| Timestamp | Task ID | File | Change Summary | Status | Rationale |
-|-----------|---------|------|----------------|--------|-----------|
-| 2026-07-21T00:00:01Z | T-020 | a.txt | Add '# UI Test' to the top of a.txt | applied | UI Test Verification |
-| 2026-07-17T15:32:00Z | T-010 | tests/test_refactors.py | Update side_effects for Confirm.ask and test GUI_DIFF_ENABLED override | applied | Test suite compliance |
-| 2026-07-17T15:19:00Z | T-009 | dumbledoer/dumbledoer_cli.py | Remove Confim.ask prompt and read GUI_DIFF_ENABLED for VS Code gate | applied | Session-level optimization |
-| 2026-07-17T15:19:00Z | T-008 | dumbledoer/dumbledoer_cli.py | Parse --no-gui and gui_diff_enabled config | applied | CLI control |
-| 2026-07-17T15:18:00Z | T-007 | memory.md | Add gui_diff_enabled config option | applied | Persistent configuration |
-| 2026-07-17T15:11:00Z | T-006 | tests/test_state_integrity.py | Mocked read/write ops to avoid deleting memory.md | applied | Fix destructive test behavior |
-| 2026-07-17T15:07:00Z | T-006 | dumbledoer/dumbledoer_cli.py | Switched asyncio.iscoroutinefunction to inspect | applied | Fix DeprecationWarning in Python 3.14+ |
-| 2026-07-03T03:23:54.888810Z | T-004 | dumbledoer/dumbledoer_cli.py | Add asyncio.to_thread wrappers to tools | applied | Prevent MCP stdio client starvation |
-| 2026-07-03T03:18:54.198544Z | T-003 | dumbledoer/dumbledoer_cli.py | Fix run_rtk subprocess args with shlex.split | applied | Ensure flags are handled safely |
-| 2026-07-03T03:08:15.927639Z | T-002 | dumbledoer/dumbledoer_cli.py | Replace write_file with diff-gate | applied | Execution sandbox step |
-| 2026-07-02T20:54:30 | T-001 | dumbledoer/dumbledoer_cli.py | Inject execute_bash tool | applied | Add execution sandbox functionality |
-| 2026-07-17T09:00:55 | T-005 | skills/audit/SKILL.md | Added diff-reading instructions to /audit skill | applied | Hyper-target QA testing based on exactly what lines changed |
-| 2026-07-21T19:02:06.985659 | manual-edit | a.txt | Update a.txt via Diff-Gate | planned | User-approved manual write_file_with_review |
-| 2026-07-21T19:00:00.000000 | manual | test | Update test.txt | planned | Dummy planned change for orphan test |
-| 2026-07-21T19:25:05.989893 | manual-edit | b.txt | Update b.txt via Diff-Gate | planned | User-approved manual write_file_with_review |
-| 2026-07-21T19:26:55.291211 | manual-edit | b.txt | Update b.txt via Diff-Gate | planned | User-approved manual write_file_with_review |
-
-## Session Log
-| Session ID | Start Time | End Time | Tasks Claimed | Outcome |
-|------------|------------|----------|---------------|---------|
-| S-20260702-205350 | 2026-07-02T20:53:50 | — | T-001 | active |
-| S-20260721-000001 | 2026-07-21T00:00:01Z | — | T-020 | active |
-
-## Checkpoint Registry
-| Checkpoint ID | Task ID | Step | Session ID | Files Snapshotted |
-|---------------|---------|------|------------|-------------------|
-| T-004-step1-S-20260702-205350 | T-004 | 1 | S-20260702-205350 | dumbledoer/dumbledoer_cli.py |
-| T-003-step1-S-20260702-205350 | T-003 | 1 | S-20260702-205350 | dumbledoer/dumbledoer_cli.py |
-| T-002-step1-S-20260702-205350 | T-002 | 1 | S-20260702-205350 | dumbledoer/dumbledoer_cli.py |
-| T-001-step1-S-20260702-205350 | T-001 | 1 | S-20260702-205350 | dumbledoer/dumbledoer_cli.py |
-| chk_1784682126 | manual-edit | diff-gate | manual | a.txt |
-| T-020-step1-S-20260721-000001 | T-020 | 1 | S-20260721-000001 | a.txt |
-| chk_1784683505 | manual-edit | diff-gate | manual | b.txt |
-| chk_1784683615 | manual-edit | diff-gate | manual | b.txt |
-
-### T-021
-- **Type**: change
-- **Status**: pending
-- **Owner**: unassigned
-- **Depends On**: none
-- **Assigned Session**: none
-- **Description**: Add a comment to dummy file b.txt.
-- **Inputs**: none
-- **Outputs**: b.txt
-- **Success Criteria**: b.txt is modified.
-- **CodeGraph Impact**: Affects 0 symbols across 1 file (b.txt).
-
-## Open Questions
-- none
-
-## Change Log
-| Timestamp | Task ID | Target Path | Summary | Status | Rationale |
-|-----------|---------|-------------|---------|--------|-----------|
-| 2026-07-21T19:00:00.000000 | manual | test | Update test | planned | Dummy planned change for orphan test |
+### task-1
+- **Description**: Call the codegraph_impact tool to search for "test" and print the result. This is just a test to verify the tool runs without KeyError.
 
 ```
 
@@ -4392,6 +3704,91 @@ except OSError as e:
 
 ```
 
+### FILE: patch_global_dumbledoer.py
+```py
+import os
+
+# Target the active plugin file in your agy installation
+plugin_path = os.path.expanduser("~/.gemini/config/plugins/dumbledoer/dumbledoer/dumbledoer_cli.py")
+
+with open(plugin_path, "r") as f:
+    content = f.read()
+
+# Swap the silent failure (check=False) for a strict guard (check=True)
+target = 'await asyncio.to_thread(subprocess.run, ["npx", "--yes", "--package=@colbymchenry/codegraph", "codegraph", "init"], check=False)'
+replacement = 'await asyncio.to_thread(subprocess.run, ["npx", "--yes", "--package=@colbymchenry/codegraph", "codegraph", "init"], check=True)'
+
+if target in content:
+    content = content.replace(target, replacement)
+    with open(plugin_path, "w") as f:
+        f.write(content)
+    print("✅ Plugin successfully patched globally! DumbleDoer will now strictly validate CodeGraph initialization in all repositories.")
+else:
+    print("⚠️ Target string not found. The plugin might already be patched or the file structure changed.")
+
+```
+
+### FILE: patch_sdk.py
+```py
+import os
+
+paths = [
+    os.path.expanduser("~/.gemini/config/plugins/dumbledoer/dumbledoer/dumbledoer_cli.py"),
+    os.path.expanduser("~/Documentos/GitHub/DumbleDoer/dumbledoer/dumbledoer_cli.py")
+]
+
+for p in paths:
+    if not os.path.exists(p):
+        continue
+    with open(p, "r") as f:
+        c = f.read()
+
+    # Strip config from chats.create
+    c = c.replace(
+        'chat_session = self.client.aio.chats.create(model="gemini-2.5-flash", config={"tools": self.gemini_tools})',
+        'chat_session = self.client.aio.chats.create(model="gemini-2.5-flash")'
+    )
+    c = c.replace(
+        'chat_session = self.client.aio.chats.create(model="gemini-2.5-flash", config={"tools": list(self.gemini_tools)})',
+        'chat_session = self.client.aio.chats.create(model="gemini-2.5-flash")'
+    )
+    
+    # Strip config from fallback chat session
+    c = c.replace(
+        'self.chat_session = self.client.aio.chats.create(model="gemini-2.5-flash", config={"tools": self.gemini_tools})',
+        'self.chat_session = self.client.aio.chats.create(model="gemini-2.5-flash")'
+    )
+    c = c.replace(
+        'self.chat_session = self.client.aio.chats.create(model="gemini-2.5-flash", config={"tools": list(self.gemini_tools)})',
+        'self.chat_session = self.client.aio.chats.create(model="gemini-2.5-flash")'
+    )
+
+    # Add config directly to send_message via Late Binding
+    if 'send_message(prompt_payload)' in c:
+        c = c.replace(
+            'send_message(prompt_payload)',
+            'send_message(prompt_payload, config={"tools": list(self.gemini_tools)})'
+        )
+        
+    if 'send_message(f"Execute {command} with {args}")' in c:
+        c = c.replace(
+            'send_message(f"Execute {command} with {args}")',
+            'send_message(f"Execute {command} with {args}", config={"tools": list(self.gemini_tools)})'
+        )
+
+    # Fail-safe: ensure .codegraph exists so the npx server never panics
+    if 'if not os.path.exists(".codegraph"):' in c and 'os.makedirs(".codegraph"' not in c:
+        c = c.replace(
+            'if not os.path.exists(".codegraph"):',
+            'if not os.path.exists(".codegraph"):\n            os.makedirs(".codegraph", exist_ok=True)'
+        )
+
+    with open(p, "w") as f:
+        f.write(c)
+    print("Successfully patched: " + p)
+
+```
+
 ### FILE: plugin.json
 ```json
 {
@@ -4406,6 +3803,47 @@ except OSError as e:
     }
   }
 }
+
+```
+
+### FILE: refactor.py
+```py
+import os
+import glob
+import json
+
+# Objective 1: Relative Pathing in JSON Commands
+commands_dir = "commands"
+if os.path.exists(commands_dir):
+    for json_file in glob.glob(os.path.join(commands_dir, "*.json")):
+        with open(json_file, 'r', encoding='utf-8') as f:
+            data = f.read()
+        
+        new_data = data.replace('"~/.gemini/config/plugins/dumbledoer/run_dumbledoer.sh"', '"./run_dumbledoer.sh"')
+        
+        if data != new_data:
+            with open(json_file, 'w', encoding='utf-8') as f:
+                f.write(new_data)
+            print(f"Updated {json_file}")
+
+# Objective 2: Purge "Kandalf" Ghost Strings
+dirs_to_traverse = ["tests", "docs"]
+for d in dirs_to_traverse:
+    if os.path.exists(d):
+        for root, _, files in os.walk(d):
+            for file in files:
+                filepath = os.path.join(root, file)
+                try:
+                    with open(filepath, 'r', encoding='utf-8') as f:
+                        content = f.read()
+                except (UnicodeDecodeError, IsADirectoryError):
+                    continue
+                
+                new_content = content.replace(".kandalf", ".dumbledoer").replace("/kandalf:", "/dumbledoer:")
+                if content != new_content:
+                    with open(filepath, 'w', encoding='utf-8') as f:
+                        f.write(new_content)
+                    print(f"Refactored {filepath}")
 
 ```
 
@@ -4451,6 +3889,7 @@ exec "$PLUGIN_DIR/.venv/bin/python" "$PLUGIN_DIR/dumbledoer/dumbledoer_cli.py" "
 ### FILE: skills/audit/SKILL.md
 ```md
 > [!IMPORTANT] EXECUTION DIRECTIVE: When the user invokes this command, you MUST immediately execute the corresponding JSON tool defined in the commands/ directory. Do not explain the command to the user. Do not ask the user to run it in their terminal. Execute the tool call silently and report the output.
+> FALLBACK PROTOCOL: If the JSON tool call fails or cannot be resolved, you MUST use the Bash tool to execute the command directly via ~/.gemini/config/plugins/dumbledoer/run_dumbledoer.sh <command_name>. Under NO circumstances are you allowed to invoke python3 directly or use pip install. You must rely exclusively on the run_dumbledoer.sh wrapper.
 
 ---
 name: audit
@@ -4593,6 +4032,7 @@ Code/commits/PRs: write normal. "stop caveman" or "normal mode": revert. Level p
 ### FILE: skills/execute/SKILL.md
 ```md
 > [!IMPORTANT] EXECUTION DIRECTIVE: When the user invokes this command, you MUST immediately execute the corresponding JSON tool defined in the commands/ directory. Do not explain the command to the user. Do not ask the user to run it in their terminal. Execute the tool call silently and report the output.
+> FALLBACK PROTOCOL: If the JSON tool call fails or cannot be resolved, you MUST use the Bash tool to execute the command directly via ~/.gemini/config/plugins/dumbledoer/run_dumbledoer.sh <command_name>. Under NO circumstances are you allowed to invoke python3 directly or use pip install. You must rely exclusively on the run_dumbledoer.sh wrapper.
 
 ---
 name: execute
@@ -4608,6 +4048,7 @@ This command is handled natively by the Python orchestrator. It reads the `memor
 ### FILE: skills/iterate/SKILL.md
 ```md
 > [!IMPORTANT] EXECUTION DIRECTIVE: When the user invokes this command, you MUST immediately execute the corresponding JSON tool defined in the commands/ directory. Do not explain the command to the user. Do not ask the user to run it in their terminal. Execute the tool call silently and report the output.
+> FALLBACK PROTOCOL: If the JSON tool call fails or cannot be resolved, you MUST use the Bash tool to execute the command directly via ~/.gemini/config/plugins/dumbledoer/run_dumbledoer.sh <command_name>. Under NO circumstances are you allowed to invoke python3 directly or use pip install. You must rely exclusively on the run_dumbledoer.sh wrapper.
 
 ---
 name: iterate
@@ -5074,6 +4515,7 @@ tags:
 ### FILE: skills/report/SKILL.md
 ```md
 > [!IMPORTANT] EXECUTION DIRECTIVE: When the user invokes this command, you MUST immediately execute the corresponding JSON tool defined in the commands/ directory. Do not explain the command to the user. Do not ask the user to run it in their terminal. Execute the tool call silently and report the output.
+> FALLBACK PROTOCOL: If the JSON tool call fails or cannot be resolved, you MUST use the Bash tool to execute the command directly via ~/.gemini/config/plugins/dumbledoer/run_dumbledoer.sh <command_name>. Under NO circumstances are you allowed to invoke python3 directly or use pip install. You must rely exclusively on the run_dumbledoer.sh wrapper.
 
 ---
 name: report
@@ -5267,6 +4709,7 @@ registry is absent.
 ```md
 > [!IMPORTANT] DELEGATION POLICY: DO NOT EXECUTE NATIVELY
 > You are the Orchestrator. You are forbidden from executing the logic in this skill using internal AGY tools. You MUST invoke the DumbleDoer CLI plugin commands defined in commands/ (e.g., /dumbledoer:execute) to ensure the execution sandbox, VS Code Diff-Gate, and checkpoint protocols are strictly enforced.
+> FALLBACK PROTOCOL: If the JSON tool call fails or cannot be resolved, you MUST use the Bash tool to execute the command directly via ~/.gemini/config/plugins/dumbledoer/run_dumbledoer.sh <command_name>. Under NO circumstances are you allowed to invoke python3 directly or use pip install. You must rely exclusively on the run_dumbledoer.sh wrapper.
 
 ---
 name: resume
@@ -5450,6 +4893,7 @@ check (load `dumbledoer/lib/archive-protocol.md` lazily and run the trigger).
 ### FILE: skills/rollback/SKILL.md
 ```md
 > [!IMPORTANT] EXECUTION DIRECTIVE: When the user invokes this command, you MUST immediately execute the corresponding JSON tool defined in the commands/ directory. Do not explain the command to the user. Do not ask the user to run it in their terminal. Execute the tool call silently and report the output.
+> FALLBACK PROTOCOL: If the JSON tool call fails or cannot be resolved, you MUST use the Bash tool to execute the command directly via ~/.gemini/config/plugins/dumbledoer/run_dumbledoer.sh <command_name>. Under NO circumstances are you allowed to invoke python3 directly or use pip install. You must rely exclusively on the run_dumbledoer.sh wrapper.
 
 ---
 name: rollback
@@ -5575,6 +5019,7 @@ If user says no or cancel: exit with no changes.
 ### FILE: skills/start/SKILL.md
 ```md
 > [!IMPORTANT] EXECUTION DIRECTIVE: When the user invokes this command, you MUST immediately execute the corresponding JSON tool defined in the commands/ directory. Do not explain the command to the user. Do not ask the user to run it in their terminal. Execute the tool call silently and report the output.
+> FALLBACK PROTOCOL: If the JSON tool call fails or cannot be resolved, you MUST use the Bash tool to execute the command directly via ~/.gemini/config/plugins/dumbledoer/run_dumbledoer.sh <command_name>. Under NO circumstances are you allowed to invoke python3 directly or use pip install. You must rely exclusively on the run_dumbledoer.sh wrapper.
 
 ---
 name: start
@@ -5917,6 +5362,7 @@ When all selected tasks are complete (or user stops the session):
 ### FILE: skills/status/SKILL.md
 ```md
 > [!IMPORTANT] EXECUTION DIRECTIVE: When the user invokes this command, you MUST immediately execute the corresponding JSON tool defined in the commands/ directory. Do not explain the command to the user. Do not ask the user to run it in their terminal. Execute the tool call silently and report the output.
+> FALLBACK PROTOCOL: If the JSON tool call fails or cannot be resolved, you MUST use the Bash tool to execute the command directly via ~/.gemini/config/plugins/dumbledoer/run_dumbledoer.sh <command_name>. Under NO circumstances are you allowed to invoke python3 directly or use pip install. You must rely exclusively on the run_dumbledoer.sh wrapper.
 
 ---
 name: status
@@ -6019,6 +5465,7 @@ If `--verbose`: after the Task Registry table, append the full Task Details bloc
 ```md
 > [!IMPORTANT] DELEGATION POLICY: DO NOT EXECUTE NATIVELY
 > You are the Orchestrator. You are forbidden from executing the logic in this skill using internal AGY tools. You MUST invoke the DumbleDoer CLI plugin commands defined in commands/ (e.g., /dumbledoer:execute) to ensure the execution sandbox, VS Code Diff-Gate, and checkpoint protocols are strictly enforced.
+> FALLBACK PROTOCOL: If the JSON tool call fails or cannot be resolved, you MUST use the Bash tool to execute the command directly via ~/.gemini/config/plugins/dumbledoer/run_dumbledoer.sh <command_name>. Under NO circumstances are you allowed to invoke python3 directly or use pip install. You must rely exclusively on the run_dumbledoer.sh wrapper.
 
 ---
 name: update-docs
@@ -6514,6 +5961,56 @@ print(len(data.splitlines()))
 
 ```
 
+### FILE: test_mapping.py
+```py
+import inspect
+from dumbledoer.dumbledoer_cli import DumbleDoerCLI
+
+class MockTool:
+    def __init__(self):
+        self.name = "codegraph/impact"
+        self.description = "Test"
+        self.inputSchema = {
+            "properties": {
+                "query": {"type": "string"},
+                "limit": {"type": "integer"}
+            },
+            "required": ["query"]
+        }
+
+cli = DumbleDoerCLI.__new__(DumbleDoerCLI)
+cli.mcp_sessions = {}
+wrapper = cli._create_mcp_wrapper("codegraph", MockTool())
+print("Name:", wrapper.__name__)
+print("Signature:", inspect.signature(wrapper))
+
+```
+
+### FILE: test_mapping2.py
+```py
+import inspect
+from dumbledoer.dumbledoer_cli import DumbleDoerCLI
+
+class MockTool:
+    def __init__(self):
+        self.name = "impact"
+        self.description = "Test"
+        self.inputSchema = {
+            "properties": {
+                "query": {"type": "string"},
+                "limit": {"type": "integer"}
+            },
+            "required": ["query"]
+        }
+
+cli = DumbleDoerCLI.__new__(DumbleDoerCLI)
+cli.mcp_sessions = {}
+wrapper = cli._create_mcp_wrapper("codegraph", MockTool())
+print("Name:", wrapper.__name__)
+print("Signature:", inspect.signature(wrapper))
+
+```
+
 ### FILE: test_perm.txt
 ```txt
 
@@ -6584,6 +6081,403 @@ def test_locate_heading_block_irregular_whitespace():
 
 ```
 
+### FILE: tests/test_chaos_validation.py
+```py
+import asyncio
+import os
+import pytest
+import shutil
+import json
+from unittest.mock import patch, MagicMock, AsyncMock
+
+from dumbledoer.dumbledoer_cli import (
+    write_file_with_review, 
+    TaskRegistryState, 
+    execute_bash, 
+    update_memory_registry,
+    DumbleDoerCLI,
+    BudgetExhaustedException,
+    run_rtk
+)
+
+@pytest.fixture(autouse=True)
+def mock_env():
+    with patch.dict(os.environ, {"GEMINI_API_KEY": "dummy_key"}):
+        yield
+
+@pytest.mark.asyncio
+async def test_suite_1_swarm_batch_gate(tmp_path):
+    """Test Suite 1: Swarm Batch-Gate & Isolation Validation"""
+    original_cwd = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        with open("memory.md", "w") as f:
+            f.write("## Change Log\n| Timestamp | Task ID | Target Path | Action | Status | Rationale |\n| --- | --- | --- | --- | --- | --- |\n\n## Checkpoint Registry\n| Checkpoint ID | Task ID | Step | Session ID | Files Snapshotted |\n| --- | --- | --- | --- | --- |\n")
+        # Create dummy target files and tasks
+        for i in range(5):
+            with open(f"file_{i}.txt", "w") as f:
+                f.write(f"old content {i}")
+                
+        # Mock TaskRegistryState to load dummy tasks
+        state = TaskRegistryState()
+        dummy_tasks = {
+            f"T-00{i}": {"id": f"T-00{i}", "status": "in-progress", "deps": [], "title": "test", "desc": "test"}
+            for i in range(5)
+        }
+        state.save_tasks(dummy_tasks)
+        
+        cli = DumbleDoerCLI()
+        
+        # Run 5 tasks in parallel
+        with patch("dumbledoer.dumbledoer_cli.subprocess.run") as mock_run:
+            results = await asyncio.gather(*[
+                write_file_with_review(f"file_{i}.txt", f"new content {i}")
+                for i in range(5)
+            ])
+            # Assert no blocking subprocess run called during staging
+            mock_run.assert_not_called()
+            
+        import glob
+        tmp_files = glob.glob(".dumbledoer/tmp/*.tmp")
+        assert len(tmp_files) == 5
+        
+        # We mock the Prompt.ask to simulate "S", then "file_1.txt"
+        with patch("rich.prompt.Prompt.ask", side_effect=["S", "file_1.txt"]), \
+             patch("dumbledoer.dumbledoer_cli.subprocess.run") as mock_code:
+            await cli.batch_diff_review(tmp_files)
+            
+            # Assert exactly one batched VS Code diff window is presented
+            mock_code.assert_called_once()
+            args = mock_code.call_args[0][0]
+            assert args[0] == "code"
+            assert args[1] == "--wait"
+            assert len(args) == 2 + 5  # 5 tmp files
+            
+        # Assert 4 approved files atomically renamed, 1 rejected file rolled back (or tmp discarded)
+        assert os.path.exists("file_0.txt")
+        assert os.path.exists("file_2.txt")
+        assert os.path.exists("file_3.txt")
+        assert os.path.exists("file_4.txt")
+        
+        with open("file_0.txt", "r") as f: assert f.read() == "new content 0"
+        with open("file_1.txt", "r") as f: assert f.read() == "old content 1"  # Rejected, should be old content
+        
+    finally:
+        os.chdir(original_cwd)
+
+@pytest.mark.asyncio
+async def test_suite_2_state_integrity(tmp_path):
+    """Test Suite 2: State Integrity Stress Test"""
+    original_cwd = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        with open("memory.md", "w") as f:
+            f.write("- sandbox_mode: native\n\nTARGET_BLOCK\n")
+            
+        async def writer(i):
+            return await update_memory_registry("TARGET_BLOCK", f"TARGET_BLOCK\n{i}")
+            
+        async def reader():
+            res = await execute_bash("echo test")
+            return res
+                
+        with patch("dumbledoer.dumbledoer_cli.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(stdout="ok", returncode=0)
+            writers = [writer(i) for i in range(150)]
+            readers = [reader() for i in range(50)]
+            
+            await asyncio.gather(*writers, *readers)
+            
+            assert mock_run.call_count == 50
+            for call in mock_run.call_args_list:
+                args = call[0][0]
+                assert "target-repo-img" in args, f"Corrupted read: args were {args}"
+    finally:
+        os.chdir(original_cwd)
+
+@pytest.mark.asyncio
+async def test_suite_3_rtk_threshold(tmp_path):
+    """Test Suite 3: RTK Threshold Trigger"""
+    original_cwd = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        with open("memory.md", "w") as f:
+            f.write("## Config\n- sandbox_mode: native\n\n")
+            
+        cli = DumbleDoerCLI()
+        cli.gemini_tools = []
+        mock_chat = AsyncMock()
+        
+        mock_chat.send_message.side_effect = [
+            BudgetExhaustedException("Budget Exhausted"), 
+            MagicMock(text="success")
+        ]
+        cli.client = MagicMock()
+        cli.client.aio.chats.create.return_value = mock_chat
+        
+        with patch("dumbledoer.dumbledoer_cli.run_rtk", new_callable=AsyncMock) as mock_rtk, \
+             patch.object(cli, "_graceful_shutdown", new_callable=AsyncMock) as mock_shutdown:
+             
+            mock_rtk.return_value = "Saved 1000 tokens"
+            
+            await cli.execute_task("T-001", "test")
+            
+            mock_rtk.assert_called_once_with("gain")
+            mock_shutdown.assert_not_called()
+            
+            mock_chat.send_message.side_effect = [
+                BudgetExhaustedException("Budget Exhausted"),
+                BudgetExhaustedException("Budget Exhausted")
+            ]
+            await cli.execute_task("T-002", "test")
+            assert mock_rtk.call_count == 2
+            mock_shutdown.assert_called_once_with("T-002")
+    finally:
+        os.chdir(original_cwd)
+
+def test_suite_4_string_escape_resilience(tmp_path):
+    """Test Suite 4: String Escape Resilience"""
+    original_cwd = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        complex_desc = '''This is a test description.
+        It has multiple lines.
+        ```python
+        # Here is a comment
+        def foo():
+            return {"json": "payload", "escaped": "\\n\\t"}
+        ```
+        And some more text here.
+        '''
+        
+        state = TaskRegistryState()
+        state.save_tasks({
+            "T-999": {
+                "id": "T-999",
+                "desc": complex_desc,
+                "title": "Complex task",
+                "status": "pending",
+                "deps": []
+            }
+        })
+        
+        cli = DumbleDoerCLI()
+        waves = cli.get_pending_waves()
+        
+        assert len(waves) == 1
+        assert len(waves[0]) == 1
+        task = waves[0][0]
+        
+        assert task["id"] == "T-999"
+        assert task["desc"] == complex_desc
+    finally:
+        os.chdir(original_cwd)
+
+@pytest.mark.asyncio
+async def test_suite_1b_headless_diff_validation(tmp_path):
+    """Test Suite 1b: Headless Diff Validation"""
+    original_cwd = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        with open("memory.md", "w") as f:
+            f.write("## Change Log\n| Timestamp | Task ID | Target Path | Action | Status | Rationale |\n| --- | --- | --- | --- | --- | --- |\n\n## Checkpoint Registry\n| Checkpoint ID | Task ID | Step | Session ID | Files Snapshotted |\n| --- | --- | --- | --- | --- |\n")
+            
+        with open("file_1.txt", "w") as f:
+            f.write("old 1\n")
+        with open("1234_file_1.txt.tmp", "w") as f:
+            f.write("new 1\n")
+            
+        with open("file_2.txt", "w") as f:
+            f.write("old 2\n")
+        with open("5678_file_2.txt.tmp", "w") as f:
+            f.write("new 2\n")
+            
+        tmp_files = [
+            os.path.abspath("1234_file_1.txt.tmp"),
+            os.path.abspath("5678_file_2.txt.tmp")
+        ]
+        
+        cli = DumbleDoerCLI()
+        
+        with patch("dumbledoer.dumbledoer_cli.GUI_DIFF_ENABLED", False, create=True), \
+             patch("rich.console.Console.print") as mock_print, \
+             patch("dumbledoer.dumbledoer_cli.subprocess.run") as mock_run, \
+             patch("rich.prompt.Prompt.ask", return_value="Y"):
+             
+            await cli.batch_diff_review(tmp_files)
+            
+            mock_run.assert_not_called()
+            
+            from rich.syntax import Syntax
+            syntax_calls = [
+                call.args[0] 
+                for call in mock_print.call_args_list 
+                if call.args and isinstance(call.args[0], Syntax)
+            ]
+            
+            assert len(syntax_calls) == 2
+            
+            diffs = [syn.code for syn in syntax_calls]
+            
+            assert any("-old 1" in d and "+new 1" in d for d in diffs)
+            assert any("-old 2" in d and "+new 2" in d for d in diffs)
+            
+    finally:
+        os.chdir(original_cwd)
+
+```
+
+### FILE: tests/test_mapping.py
+```py
+import os
+from unittest.mock import patch, MagicMock
+
+from dumbledoer.dumbledoer_cli import DumbleDoerCLI
+
+@patch.dict(os.environ, {"GEMINI_API_KEY": "dummy_key"})
+def test_mcp_wrapper_sanitizes_slashes():
+    cli = DumbleDoerCLI()
+    cli.mcp_sessions = {"codegraph": MagicMock()}
+    
+    dummy_tool = MagicMock()
+    dummy_tool.name = "codegraph/impact"
+    dummy_tool.inputSchema = {
+        "properties": {
+            "query": {"type": "string"},
+            "limit": {"type": "integer"}
+        }
+    }
+    
+    wrapper = cli._create_mcp_wrapper("codegraph", dummy_tool)
+    assert wrapper.__name__ == "codegraph_impact", f"Expected codegraph_impact, got {wrapper.__name__}"
+    assert wrapper.__qualname__ == "codegraph_impact", f"Expected codegraph_impact, got {wrapper.__qualname__}"
+    
+    assert hasattr(wrapper, "__annotations__"), "Wrapper is missing __annotations__"
+    assert "query" in wrapper.__annotations__
+    assert wrapper.__annotations__["query"] == str
+    assert "limit" in wrapper.__annotations__
+    assert wrapper.__annotations__["limit"] == int
+
+```
+
+### FILE: tests/test_mapping2.py
+```py
+import os
+from unittest.mock import patch, MagicMock
+
+from dumbledoer.dumbledoer_cli import DumbleDoerCLI
+
+@patch.dict(os.environ, {"GEMINI_API_KEY": "dummy_key"})
+def test_mcp_wrapper_sanitizes_dashes():
+    cli = DumbleDoerCLI()
+    cli.mcp_sessions = {"codegraph": MagicMock()}
+    
+    dummy_tool = MagicMock()
+    dummy_tool.name = "codegraph-search"
+    
+    wrapper = cli._create_mcp_wrapper("codegraph", dummy_tool)
+    assert wrapper.__name__ == "codegraph_search", f"Expected codegraph_search, got {wrapper.__name__}"
+
+```
+
+### FILE: tests/test_qa_harness.py
+```py
+import pytest
+import asyncio
+import os
+import shutil
+from unittest.mock import patch
+
+from dumbledoer.dumbledoer_cli import TaskRegistryState, execute_bash, DumbleDoerCLI
+
+@pytest.fixture(autouse=True)
+def setup_memory_md():
+    initial_content = """# DumbleDoer Memory
+## Config
+- sandbox_mode: native
+
+## Task Registry
+| Task ID | Description | Status |
+|---|---|---|
+| T-1 | Test | pending |
+
+## Change Log
+| Timestamp | Checkpoint ID | Task ID | Target Path | Action | Status | Rationale |
+|---|---|---|---|---|---|---|
+| 2026-07-22T00:00:00Z | C-1 | T-1 | file1.txt | modify | planned | Test |
+| 2026-07-22T00:00:00Z | C-2 | T-1 | file2.txt | modify | planned | Test |
+| 2026-07-22T00:00:00Z | C-3 | T-1 | file3.txt | modify | planned | Test |
+"""
+    with open("memory.md", "w", encoding="utf-8") as f:
+        f.write(initial_content)
+    
+    os.makedirs(".dumbledoer/tmp", exist_ok=True)
+    os.makedirs(".dumbledoer/rollbacks", exist_ok=True)
+    
+    yield
+    
+    if os.path.exists("memory.md"):
+        os.remove("memory.md")
+    if os.path.exists(".dumbledoer"):
+        shutil.rmtree(".dumbledoer")
+    for f in ["file1.txt", "file2.txt", "file3.txt"]:
+        if os.path.exists(f):
+            os.remove(f)
+
+@pytest.mark.asyncio
+async def test_suite_1_ledger_sync_lock():
+    state = TaskRegistryState()
+    
+    async def sync_task(i):
+        await asyncio.to_thread(state._sync_to_markdown, {f"T-1": {"status": f"completed-{i}"}})
+        
+    async def bash_task(i):
+        await execute_bash("echo 'ok'")
+        
+    tasks = []
+    for i in range(100):
+        tasks.append(sync_task(i))
+    for i in range(50):
+        tasks.append(bash_task(i))
+        
+    await asyncio.gather(*tasks)
+    
+    with open("memory.md", "r", encoding="utf-8") as f:
+        content = f.read()
+    
+    assert "## Task Registry" in content
+    assert "## Config" in content
+    assert content.count("## Change Log") == 1
+
+@pytest.mark.asyncio
+async def test_suite_2_orphan_recovery():
+    for i in range(1, 4):
+        with open(f".dumbledoer/tmp/C-{i}_file{i}.txt.tmp", "w") as f:
+            f.write("new content")
+        with open(f"file{i}.txt", "w") as f:
+            f.write("old content")
+        with open(f".dumbledoer/rollbacks/C-{i}_file{i}.bak", "w") as f:
+            f.write("old content")
+
+    cli = DumbleDoerCLI()
+    
+    with patch("subprocess.run"):
+        with patch("rich.prompt.Prompt.ask", side_effect=["S", "file2.txt"]):
+            await cli.batch_diff_review([
+                ".dumbledoer/tmp/C-1_file1.txt.tmp",
+                ".dumbledoer/tmp/C-2_file2.txt.tmp",
+                ".dumbledoer/tmp/C-3_file3.txt.tmp"
+            ])
+            
+    with open("memory.md", "r", encoding="utf-8") as f:
+        content = f.read()
+    
+    assert "| C-2 | T-1 | file2.txt | modify | rolled-back |" in content
+    assert "| C-1 | T-1 | file1.txt | modify | applied |" in content
+    assert "| C-3 | T-1 | file3.txt | modify | applied |" in content
+
+```
+
 ### FILE: tests/test_refactors.py
 ```py
 import pytest
@@ -6627,14 +6521,16 @@ async def test_execute_bash_docker():
         )
         assert result == "Docker execution success"
 
-def test_checkpoint_manager_atomic_rename():
+@pytest.mark.asyncio
+async def test_checkpoint_manager_atomic_rename():
     manager = CheckpointManager()
     
     with patch("os.replace") as mock_replace:
-        manager.atomic_rename_to_target("file.tmp", "file.txt")
+        await manager.atomic_rename_to_target("file.tmp", "file.txt")
         mock_replace.assert_called_once_with("file.tmp", "file.txt")
 
-def test_checkpoint_manager_write_rollback_copy():
+@pytest.mark.asyncio
+async def test_checkpoint_manager_write_rollback_copy():
     manager = CheckpointManager()
     
     with patch("os.path.exists") as mock_exists, \
@@ -6643,13 +6539,13 @@ def test_checkpoint_manager_write_rollback_copy():
         
         # Scenario 1: rollback_path exists, should return immediately
         mock_exists.side_effect = lambda path: path == "rollback.bak"
-        manager.write_rollback_copy("target.txt", "rollback.bak")
+        await manager.write_rollback_copy("target.txt", "rollback.bak")
         mock_copy.assert_not_called()
         
         # Scenario 2: rollback_path does not exist, target_path exists
         mock_copy.reset_mock()
         mock_exists.side_effect = lambda path: path == "target.txt"
-        manager.write_rollback_copy("target.txt", "rollback.bak")
+        await manager.write_rollback_copy("target.txt", "rollback.bak")
         mock_makedirs.assert_called_once_with("", exist_ok=True)
         mock_copy.assert_called_once_with("target.txt", "rollback.bak")
 

@@ -2,7 +2,7 @@
   "name": "audit",
   "description": "QA Harness Loop: Evaluates completed tasks against their success criteria and autonomously generates fix tasks if bugs are found.",
   "execute": {
-    "command": "~/.gemini/config/plugins/dumbledoer/run_dumbledoer.sh",
+    "command": "./run_dumbledoer.sh",
     "args": ["audit"]
   }
 }

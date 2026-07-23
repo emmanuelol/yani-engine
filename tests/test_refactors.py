@@ -39,14 +39,16 @@ async def test_execute_bash_docker():
         )
         assert result == "Docker execution success"
 
-def test_checkpoint_manager_atomic_rename():
+@pytest.mark.asyncio
+async def test_checkpoint_manager_atomic_rename():
     manager = CheckpointManager()
     
     with patch("os.replace") as mock_replace:
-        manager.atomic_rename_to_target("file.tmp", "file.txt")
+        await manager.atomic_rename_to_target("file.tmp", "file.txt")
         mock_replace.assert_called_once_with("file.tmp", "file.txt")
 
-def test_checkpoint_manager_write_rollback_copy():
+@pytest.mark.asyncio
+async def test_checkpoint_manager_write_rollback_copy():
     manager = CheckpointManager()
     
     with patch("os.path.exists") as mock_exists, \
@@ -55,12 +57,12 @@ def test_checkpoint_manager_write_rollback_copy():
         
         # Scenario 1: rollback_path exists, should return immediately
         mock_exists.side_effect = lambda path: path == "rollback.bak"
-        manager.write_rollback_copy("target.txt", "rollback.bak")
+        await manager.write_rollback_copy("target.txt", "rollback.bak")
         mock_copy.assert_not_called()
         
         # Scenario 2: rollback_path does not exist, target_path exists
         mock_copy.reset_mock()
         mock_exists.side_effect = lambda path: path == "target.txt"
-        manager.write_rollback_copy("target.txt", "rollback.bak")
+        await manager.write_rollback_copy("target.txt", "rollback.bak")
         mock_makedirs.assert_called_once_with("", exist_ok=True)
         mock_copy.assert_called_once_with("target.txt", "rollback.bak")

@@ -10,9 +10,9 @@ import re
 from contextlib import AsyncExitStack
 import shutil
 import difflib
-from filelock import FileLock
+from filelock import FileLock, Timeout
 
-REGISTRY_LOCK = FileLock("memory.md.lock", timeout=10)
+REGISTRY_LOCK = FileLock("memory.md.lock", timeout=60)
 # GUI_DIFF_ENABLED will be set dynamically in main_async
 from google import genai
 from mcp.client.session import ClientSession
@@ -50,10 +50,16 @@ class ASTMemoryMapper:
         start_idx = -1
         end_idx = -1
         target_pattern = re.compile(rf"^{re.escape(heading_level)}\s+{re.escape(title)}\s*$", re.IGNORECASE)
+        in_code_block = False
+        
         for i, line in enumerate(lines):
-            if target_pattern.match(line.strip()):
+            stripped = line.strip()
+            if stripped.startswith("```"):
+                in_code_block = not in_code_block
+            if not in_code_block and target_pattern.match(stripped):
                 start_idx = i
                 break
+                
         if start_idx != -1:
             end_idx = len(lines)
             in_code_block = False
@@ -61,8 +67,7 @@ class ASTMemoryMapper:
                 stripped = lines[j].strip()
                 if stripped.startswith("```"):
                     in_code_block = not in_code_block
-                    
-                if not in_code_block and re.match(r"^#{1,6}\s+", lines[j]):
+                if not in_code_block and re.match(r"^#{1,6}\s+", stripped):
                     end_idx = j
                     break
         return start_idx, end_idx
@@ -95,11 +100,12 @@ async def execute_bash(command: str, sandbox_mode: str = None) -> str:
     def _read_mode():
         mode = "dumbledoer-base"
         try:
-            with open("memory.md", "r", encoding="utf-8") as f:
-                for line in f:
-                    if line.strip().startswith("- sandbox_mode:"):
-                        mode = line.split(":", 1)[1].strip()
-                        break
+            with REGISTRY_LOCK:
+                with open("memory.md", "r", encoding="utf-8") as f:
+                    for line in f:
+                        if line.strip().startswith("- sandbox_mode:"):
+                            mode = line.split(":", 1)[1].strip()
+                            break
         except Exception:
             pass
         return mode
@@ -108,12 +114,16 @@ async def execute_bash(command: str, sandbox_mode: str = None) -> str:
         sandbox_mode = await asyncio.to_thread(_read_mode)
 
     try:
+        import platform
+        user_args = [] if platform.system() == "Windows" else ["--user", f"{os.getuid()}:{os.getgid()}"]
+        
         if sandbox_mode == "docker-compose":
             args = ["docker", "compose", "exec", "-T", "app", "bash", "-c", command]
-        elif sandbox_mode == "native":
-            args = ["docker", "run", "--rm", "--user", f"{os.getuid()}:{os.getgid()}", "-v", f"{os.getcwd()}:/workspace", "-w", "/workspace", "target-repo-img", "bash", "-c", command]
         else:
-            args = ["docker", "run", "--rm", "--user", f"{os.getuid()}:{os.getgid()}", "-v", f"{os.getcwd()}:/workspace", "-w", "/workspace", "dumbledoer-base:latest", "bash", "-c", command]
+            args = ["docker", "run", "--rm"] + user_args + [
+                "-v", f"{os.getcwd()}:/workspace", "-w", "/workspace", 
+                "dumbledoer-base:latest", "bash", "-c", command
+            ]
             
         result = await asyncio.to_thread(subprocess.run, args, capture_output=True, text=True, check=True)
         return result.stdout
@@ -140,31 +150,37 @@ def _write_file(path: str, content: str) -> str:
     except Exception as e:
         return f"Error writing file {path}: {e}"
 
+import filelock
+
 async def update_memory_registry(target: str, replacement: str) -> str:
-    """Updates the memory.md file by performing a synchronous search and replace to prevent concurrency data loss. Pass the EXACT block of text to be replaced as `target`, and the new block of text as `replacement`. This operation happens under a file lock to guarantee atomic modifications."""
+    """Updates the memory.md file securely with exponential backoff on lock timeouts."""
     def _do_update():
-        with REGISTRY_LOCK:
-            try:
-                with open("memory.md", "r") as f:
-                    current_content = f.read()
+        with FileLock("memory.md.lock", timeout=60):
+            with open("memory.md", "r", encoding="utf-8") as f:
+                current_content = f.read()
+            
+            if target not in current_content:
+                return "Error: Target block not found in memory.md. Stale state or invalid target string."
                 
-                if target not in current_content:
-                    return f"Error: Target block not found in memory.md. Stale state or invalid target string."
-                    
-                new_content = current_content.replace(target, replacement, 1)
+            new_content = current_content.replace(target, replacement, 1)
+            
+            if "- sandbox_mode:" not in new_content:
+                return "Error updating memory registry: Constraint failed, missing '- sandbox_mode:' in Config block after replacement."
                 
-                if "- sandbox_mode:" not in new_content:
-                    return "Error updating memory registry: Constraint failed, missing '- sandbox_mode:' in Config block after replacement."
-                    
-                _write_file("memory.md", new_content)
-                return "Successfully updated memory.md via atomic search and replace."
-            except Exception as inner_e:
-                return f"Inner exception updating memory.md: {inner_e}"
-                
-    try:
-        return await asyncio.to_thread(_do_update)
-    except Exception as e:
-        return f"Error updating memory registry: {e}"
+            os.makedirs(os.path.dirname(os.path.abspath("memory.md")), exist_ok=True)
+            with open("memory.md", "w", encoding="utf-8") as f:
+                f.write(new_content)
+            return "Successfully updated memory.md via atomic search and replace."
+
+    for attempt in range(5):
+        try:
+            return await asyncio.to_thread(_do_update)
+        except filelock.Timeout:
+            await asyncio.sleep(2 ** attempt)
+        except Exception as e:
+            return f"Error updating memory registry: {e}"
+            
+    return "Error: Failed to acquire memory.md.lock after 5 attempts due to high concurrency load."
 
 async def run_rtk(command: str) -> str:
     rtk_bin = shutil.which("rtk")
@@ -175,16 +191,113 @@ async def run_rtk(command: str) -> str:
         elif os.path.exists("./bin/rtk"):
             rtk_bin = "./bin/rtk"
         else:
-            return "Error: RTK binary not found in standard paths."
+            raise RuntimeError("Error: RTK binary not found in standard paths.")
 
     try:
         args = [rtk_bin] + shlex.split(command)
         result = await asyncio.to_thread(subprocess.run, args, capture_output=True, text=True, check=True)
         return result.stdout
     except subprocess.CalledProcessError as e:
-        return f"Error ({e.returncode}):\nSTDOUT: {e.stdout}\nSTDERR: {e.stderr}"
+        raise RuntimeError(f"Error ({e.returncode}):\nSTDOUT: {e.stdout}\nSTDERR: {e.stderr}")
     except Exception as e:
-        return f"Exception executing rtk command: {e}"
+        raise RuntimeError(f"Exception executing rtk command: {e}")
+
+class TaskRegistryState:
+    def __init__(self):
+        self.json_path = ".dumbledoer/task_registry.json"
+        self.md_path = "memory.md"
+        os.makedirs(os.path.dirname(self.json_path), exist_ok=True)
+        
+    def load_tasks(self) -> dict:
+        with REGISTRY_LOCK:
+            if os.path.exists(self.json_path):
+                import json
+                try:
+                    with open(self.json_path, "r") as f:
+                        return json.load(f)
+                except Exception:
+                    pass
+                    
+            tasks = {}
+            try:
+                with open(self.md_path, "r", encoding="utf-8") as f:
+                    content = f.read()
+                start_idx, end_idx = ASTMemoryMapper.locate_heading_block(content, "##", "Task Registry")
+                if start_idx != -1:
+                    lines = content.splitlines()[start_idx+1:end_idx]
+                    for line in lines:
+                        if not line.strip().startswith("|"): continue
+                        parts = [p.strip() for p in line.split("|")]
+                        if len(parts) >= 9 and parts[1] != "Task ID" and not parts[1].startswith("---"):
+                            task_id = parts[1].strip()
+                            
+                            desc_start, desc_end = ASTMemoryMapper.locate_heading_block(content, "###", task_id)
+                            description = parts[2].strip()
+                            if desc_start != -1:
+                                desc_lines = content.splitlines()[desc_start+1:desc_end]
+                                for dline in desc_lines:
+                                    if dline.startswith("- **Description**:"):
+                                        description = dline.split("- **Description**:")[1].strip()
+                                        break
+                                        
+                            tasks[task_id] = {
+                                "id": task_id,
+                                "desc": description,
+                                "title": parts[2].strip(),
+                                "status": parts[4].strip(),
+                                "deps": [d.strip() for d in parts[6].split(",")] if parts[6].strip() != "none" else [],
+                                "original_line": line
+                            }
+            except Exception:
+                pass
+            self.save_tasks(tasks)
+            return tasks
+
+    def save_tasks(self, tasks: dict):
+        import json
+        with open(self.json_path, "w") as f:
+            json.dump(tasks, f, indent=2)
+        self._sync_to_markdown(tasks)
+        
+    async def update_task_status(self, task_id: str, new_status: str):
+        def _do_update():
+            with REGISTRY_LOCK:
+                tasks = self.load_tasks()
+                if task_id in tasks:
+                    tasks[task_id]["status"] = new_status
+                    self.save_tasks(tasks)
+        await asyncio.to_thread(_do_update)
+
+    def _sync_to_markdown(self, tasks: dict):
+        with REGISTRY_LOCK:
+            try:
+                with open(self.md_path, "r", encoding="utf-8") as f:
+                    content = f.read()
+                start_idx, end_idx = ASTMemoryMapper.locate_heading_block(content, "##", "Task Registry")
+                if start_idx == -1: return
+                
+                lines = content.splitlines()
+                new_block = []
+                for line in lines[start_idx+1:end_idx]:
+                    if not line.strip().startswith("|") or "---" in line or "Task ID" in line:
+                        new_block.append(line)
+                    else:
+                        parts = [p.strip() for p in line.split("|")]
+                        if len(parts) >= 9:
+                            tid = parts[1].strip()
+                            if tid in tasks:
+                                parts[4] = f" {tasks[tid]['status']} "
+                                new_block.append("|".join(parts))
+                            else:
+                                new_block.append(line)
+                        else:
+                            new_block.append(line)
+                            
+                new_content = "\n".join(lines[:start_idx+1] + new_block + lines[end_idx:])
+                with open(self.md_path, "w", encoding="utf-8") as f:
+                    f.write(new_content)
+            except Exception:
+                pass
 
 async def write_file_with_review(path: str, content: str) -> str:
     """Writes content to a file via a VS Code Diff-Gate for user approval."""
@@ -192,8 +305,8 @@ async def write_file_with_review(path: str, content: str) -> str:
         tmp_dir = ".dumbledoer/tmp"
         os.makedirs(tmp_dir, exist_ok=True)
         import uuid
-        filename = os.path.basename(path)
-        tmp_path = os.path.join(tmp_dir, f"{uuid.uuid4().hex}_{filename}.tmp")
+        encoded_path = path.replace("/", "__")
+        tmp_path = os.path.join(tmp_dir, f"{uuid.uuid4().hex}_{encoded_path}.tmp")
         
         import time
         from datetime import datetime
@@ -202,204 +315,189 @@ async def write_file_with_review(path: str, content: str) -> str:
         metadata = {
             "Timestamp": datetime.now().isoformat(),
             "Task ID": "manual-edit",
-            "Change Summary": f"Update {filename} via Diff-Gate",
+            "Change Summary": f"Update {os.path.basename(path)} via Diff-Gate",
             "Rationale": "User-approved manual write_file_with_review",
             "Checkpoint ID": chk_id,
             "Session ID": "manual",
             "Step": "diff-gate",
             "Files Snapshotted": path
         }
-        rollback_path = os.path.join(".dumbledoer", "rollbacks", f"{chk_id}_{filename}.bak")
+        rollback_path = os.path.join(".dumbledoer", "rollbacks", f"{chk_id}_{encoded_path}.bak")
         checkpoint_path = os.path.join(".dumbledoer", "checkpoints", f"{chk_id}.json")
         
-        manager.write_rollback_copy(path, rollback_path)
-        manager.log_planned_change(path, metadata)
-        manager.write_checkpoint_json(checkpoint_path, metadata)
+        await manager.write_rollback_copy(path, rollback_path)
+        await manager.log_planned_change(path, metadata)
+        await manager.write_checkpoint_json(checkpoint_path, metadata)
         
         with open(tmp_path, "w") as f:
             f.write(content)
             
-        has_code = shutil.which("code") is not None
-
-        if GUI_DIFF_ENABLED and has_code:
-            print(f"Review proposed changes for {path} in VS Code.", file=sys.stderr)
-            if os.path.exists(path):
-                await asyncio.to_thread(subprocess.run, ["code", "--wait", "--diff", path, tmp_path], check=True)
-            else:
-                await asyncio.to_thread(subprocess.run, ["code", "--wait", tmp_path], check=True)
-        else:
-            if os.path.exists(path):
-                with open(path, "r") as f:
-                    old_content = f.readlines()
-                new_content = content.splitlines(keepends=True)
-                diff = "".join(difflib.unified_diff(old_content, new_content, fromfile=path, tofile=tmp_path))
-                if diff:
-                    from rich.console import Console
-                    from rich.syntax import Syntax
-                    console = Console()
-                    console.print(Syntax(diff, "diff", theme="monokai"))
-            else:
-                print(f"Creating new file {path}. Content preview:\n{content}")
-            
-        from rich.prompt import Confirm
-        approval = await asyncio.to_thread(Confirm.ask, f"Approve changes to {path}?")
-        if approval:
-            os.replace(tmp_path, path)
-            return f"Successfully wrote to {path} (Approved by user)"
-        else:
-            return f"Error: Changes to {path} were rejected by the user."
+        return f"Successfully staged changes for {path} (Pending wave review)"
     except Exception as e:
         return f"Error in write_file_with_review for {path}: {e}"
 
 class CheckpointManager:
-    def write_rollback_copy(self, target_path: str, rollback_path: str):
-        if os.path.exists(rollback_path):
-            return
-        if os.path.exists(target_path):
-            os.makedirs(os.path.dirname(rollback_path), exist_ok=True)
-            shutil.copy2(target_path, rollback_path)
+    async def write_rollback_copy(self, target_path: str, rollback_path: str):
+        def _do_write():
+            if os.path.exists(rollback_path):
+                return
+            if os.path.exists(target_path):
+                os.makedirs(os.path.dirname(rollback_path), exist_ok=True)
+                shutil.copy2(target_path, rollback_path)
+        await asyncio.to_thread(_do_write)
             
-    def log_planned_change(self, target_path: str, metadata: dict):
+    async def log_planned_change(self, target_path: str, metadata: dict):
         timestamp = metadata.get("Timestamp", "")
         task_id = metadata.get("Task ID", "")
         summary = metadata.get("Change Summary", "")
         rationale = metadata.get("Rationale", "")
         row = f"| {timestamp} | {task_id} | {target_path} | {summary} | planned | {rationale} |"
-        with REGISTRY_LOCK:
-            ASTMemoryMapper.append_to_markdown_table("memory.md", "Change Log", row)
+        def _do_log():
+            with REGISTRY_LOCK:
+                ASTMemoryMapper.append_to_markdown_table("memory.md", "Change Log", row)
+        await asyncio.to_thread(_do_log)
         
-    def write_checkpoint_json(self, checkpoint_path: str, metadata: dict):
-        os.makedirs(os.path.dirname(checkpoint_path), exist_ok=True)
-        with open(checkpoint_path, "w") as f:
-            import json
-            json.dump(metadata, f, indent=2)
+    async def write_checkpoint_json(self, checkpoint_path: str, metadata: dict):
+        def _do_write():
+            os.makedirs(os.path.dirname(checkpoint_path), exist_ok=True)
+            with open(checkpoint_path, "w") as f:
+                import json
+                json.dump(metadata, f, indent=2)
+                
+            checkpoint_id = metadata.get("Checkpoint ID", "")
+            task_id = metadata.get("Task ID", "")
+            step = metadata.get("Step", "")
+            session_id = metadata.get("Session ID", "")
+            files_snapshotted = metadata.get("Files Snapshotted", "")
+            row = f"| {checkpoint_id} | {task_id} | {step} | {session_id} | {files_snapshotted} |"
+            with REGISTRY_LOCK:
+                ASTMemoryMapper.append_to_markdown_table("memory.md", "Checkpoint Registry", row)
+        await asyncio.to_thread(_do_write)
             
-        checkpoint_id = metadata.get("Checkpoint ID", "")
-        task_id = metadata.get("Task ID", "")
-        step = metadata.get("Step", "")
-        session_id = metadata.get("Session ID", "")
-        files_snapshotted = metadata.get("Files Snapshotted", "")
-        row = f"| {checkpoint_id} | {task_id} | {step} | {session_id} | {files_snapshotted} |"
-        with REGISTRY_LOCK:
-            ASTMemoryMapper.append_to_markdown_table("memory.md", "Checkpoint Registry", row)
+    async def stage_tmp_write(self, tmp_path: str, content: str):
+        def _do_write():
+            os.makedirs(os.path.dirname(tmp_path), exist_ok=True)
+            with open(tmp_path, "w") as f:
+                f.write(content)
+        await asyncio.to_thread(_do_write)
             
-    def stage_tmp_write(self, tmp_path: str, content: str):
-        os.makedirs(os.path.dirname(tmp_path), exist_ok=True)
-        with open(tmp_path, "w") as f:
-            f.write(content)
-            
-    def atomic_rename_to_target(self, tmp_path: str, target_path: str):
-        os.replace(tmp_path, target_path)
+    async def atomic_rename_to_target(self, tmp_path: str, target_path: str):
+        def _do_rename():
+            os.replace(tmp_path, target_path)
+        await asyncio.to_thread(_do_rename)
         
-    def log_applied_change(self, target_path: str, metadata: dict):
+    async def log_applied_change(self, target_path: str, metadata: dict):
         timestamp = metadata.get("Timestamp", "")
         task_id = metadata.get("Task ID", "")
         summary = metadata.get("Change Summary", "")
         rationale = metadata.get("Rationale", "")
         row = f"| {timestamp} | {task_id} | {target_path} | {summary} | applied | {rationale} |"
-        with REGISTRY_LOCK:
-            ASTMemoryMapper.append_to_markdown_table("memory.md", "Change Log", row)
+        def _do_log():
+            with REGISTRY_LOCK:
+                ASTMemoryMapper.append_to_markdown_table("memory.md", "Change Log", row)
+        await asyncio.to_thread(_do_log)
 
 class OrphanRecoveryScanner:
     def run(self):
-        tmp_dir = ".dumbledoer/tmp"
-        chk_dir = ".dumbledoer/checkpoints"
-        bak_dir = ".dumbledoer/rollbacks"
-        os.makedirs(tmp_dir, exist_ok=True)
-        os.makedirs(chk_dir, exist_ok=True)
-        os.makedirs(bak_dir, exist_ok=True)
-            
-        change_log = []
-        content = ""
-        try:
-            with open("memory.md", "r", encoding="utf-8") as f:
-                content = f.read()
-            start_idx, end_idx = ASTMemoryMapper.locate_heading_block(content, "##", "Change Log")
-            if start_idx != -1:
-                lines = content.splitlines()[start_idx+1:end_idx]
-                for line in lines:
-                    if line.strip().startswith("|") and "---" not in line and "Timestamp" not in line:
-                        parts = [p.strip() for p in line.split("|")]
-                        if len(parts) >= 7:
-                            # | Timestamp | Checkpoint ID | Task ID | Target Path | Action | Status | Rationale |
-                            change_log.append({
-                                "chk_id": parts[2],
-                                "target": parts[4],
-                                "status": parts[6],
-                                "line_text": line,
-                            })
-        except FileNotFoundError:
-            pass
-
-        import glob
-        import filecmp
-        from rich.prompt import Confirm
-        from rich.console import Console
-        console = Console()
-        
-        valid_chks = {c["chk_id"] for c in change_log}
-        planned_chks = {c["chk_id"]: c for c in change_log if c["status"] == "planned"}
-        
-        # O3: Discard orphaned .json checkpoints
-        for chk_file in glob.glob(os.path.join(chk_dir, "*.json")):
-            basename = os.path.basename(chk_file)
-            chk_id = basename.replace(".json", "")
-            if chk_id not in valid_chks:
-                os.remove(chk_file)
-                console.print(f"[yellow]O3: Discarded orphaned checkpoint {chk_file}[/yellow]")
+        with REGISTRY_LOCK:
+            tmp_dir = ".dumbledoer/tmp"
+            chk_dir = ".dumbledoer/checkpoints"
+            bak_dir = ".dumbledoer/rollbacks"
+            os.makedirs(tmp_dir, exist_ok=True)
+            os.makedirs(chk_dir, exist_ok=True)
+            os.makedirs(bak_dir, exist_ok=True)
                 
-        # O5: Discard orphaned .bak rollbacks
-        for bak_file in glob.glob(os.path.join(bak_dir, "*.bak")):
-            basename = os.path.basename(bak_file)
-            chk_id = basename.split("_")[0] if "_" in basename else basename.replace(".bak", "")
-            if chk_id not in valid_chks:
-                os.remove(bak_file)
-                console.print(f"[yellow]O5: Discarded orphaned rollback {bak_file}[/yellow]")
-                
-        # O4: Evaluate planned Change Log entries and update memory.md
-        new_content = content
-        for chk_id, entry in planned_chks.items():
-            target = entry["target"]
-            bak_files = glob.glob(os.path.join(bak_dir, f"{chk_id}_*.bak"))
-            if bak_files and os.path.exists(target):
-                bak_file = bak_files[0]
-                if filecmp.cmp(target, bak_file, shallow=False):
-                    new_status = "rolled-back"
-                else:
-                    new_status = "applied"
-                new_line = entry["line_text"].replace("| planned |", f"| {new_status} |")
-                new_content = new_content.replace(entry["line_text"], new_line)
-                console.print(f"[green]O4: Resolved planned change {chk_id} as {new_status}[/green]")
-        
-        if new_content != content:
-            with open("memory.md", "w", encoding="utf-8") as f:
-                f.write(new_content)
-        
-        # O1/O2: Handle .tmp files (using basename mapping since UUID is present)
-        for file in glob.glob(os.path.join(tmp_dir, "*.tmp")):
+            change_log = []
+            content = ""
             try:
-                # Find corresponding target by matching filename ends
-                basename = os.path.basename(file)
-                actual_filename = basename.split("_", 1)[1] if "_" in basename else basename
-                actual_filename = actual_filename.replace(".tmp", "")
-                
-                matched_target = None
-                for c in change_log:
-                    if c["status"] == "planned" and os.path.basename(c["target"]) == actual_filename:
-                        matched_target = c["target"]
-                        break
-                        
-                if matched_target:
-                    if Confirm.ask(f"Found orphaned planned change for [bold]{matched_target}[/bold] (File: {file}). Apply it?"):
-                        os.replace(file, matched_target)
-                        console.print(f"[green]Applied {file} to {matched_target}[/green]")
+                with open("memory.md", "r", encoding="utf-8") as f:
+                    content = f.read()
+                start_idx, end_idx = ASTMemoryMapper.locate_heading_block(content, "##", "Change Log")
+                if start_idx != -1:
+                    lines = content.splitlines()[start_idx+1:end_idx]
+                    for line in lines:
+                        if line.strip().startswith("|") and "---" not in line and "Timestamp" not in line:
+                            parts = [p.strip() for p in line.split("|")]
+                            if len(parts) >= 7:
+                                # | Timestamp | Checkpoint ID | Task ID | Target Path | Action | Status | Rationale |
+                                change_log.append({
+                                    "chk_id": parts[2],
+                                    "target": parts[4],
+                                    "status": parts[6],
+                                    "line_text": line,
+                                })
+            except FileNotFoundError:
+                pass
+    
+            import glob
+            import filecmp
+            from rich.prompt import Confirm
+            from rich.console import Console
+            console = Console()
+            
+            valid_chks = {c["chk_id"] for c in change_log}
+            planned_chks = {c["chk_id"]: c for c in change_log if c["status"] == "planned"}
+            
+            # O3: Discard orphaned .json checkpoints
+            for chk_file in glob.glob(os.path.join(chk_dir, "*.json")):
+                basename = os.path.basename(chk_file)
+                chk_id = basename.replace(".json", "")
+                if chk_id not in valid_chks:
+                    os.remove(chk_file)
+                    console.print(f"[yellow]O3: Discarded orphaned checkpoint {chk_file}[/yellow]")
+                    
+            # O5: Discard orphaned .bak rollbacks
+            for bak_file in glob.glob(os.path.join(bak_dir, "*.bak")):
+                basename = os.path.basename(bak_file)
+                chk_id = basename.split("_")[0] if "_" in basename else basename.replace(".bak", "")
+                if chk_id not in valid_chks:
+                    os.remove(bak_file)
+                    console.print(f"[yellow]O5: Discarded orphaned rollback {bak_file}[/yellow]")
+                    
+            # O4: Evaluate planned Change Log entries and update memory.md
+            new_content = content
+            for chk_id, entry in planned_chks.items():
+                target = entry["target"]
+                bak_files = glob.glob(os.path.join(bak_dir, f"{chk_id}_*.bak"))
+                if bak_files and os.path.exists(target):
+                    bak_file = bak_files[0]
+                    if filecmp.cmp(target, bak_file, shallow=False):
+                        new_status = "rolled-back"
+                    else:
+                        new_status = "applied"
+                    new_line = entry["line_text"].replace("| planned |", f"| {new_status} |")
+                    new_content = new_content.replace(entry["line_text"], new_line)
+                    console.print(f"[green]O4: Resolved planned change {chk_id} as {new_status}[/green]")
+            
+            if new_content != content:
+                with open("memory.md", "w", encoding="utf-8") as f:
+                    f.write(new_content)
+            
+            # O1/O2: Handle .tmp files (using basename mapping since UUID is present)
+            for file in glob.glob(os.path.join(tmp_dir, "*.tmp")):
+                try:
+                    # Find corresponding target by decoding the path
+                    basename = os.path.basename(file)
+                    actual_filename = basename.split("_", 1)[1] if "_" in basename else basename
+                    actual_filename = actual_filename.replace(".tmp", "").replace("__", "/")
+                    
+                    matched_target = None
+                    for c in change_log:
+                        if c["status"] == "planned" and c["target"] == actual_filename:
+                            matched_target = c["target"]
+                            break
+                            
+                    if matched_target:
+                        if Confirm.ask(f"Found orphaned planned change for [bold]{matched_target}[/bold] (File: {file}). Apply it?"):
+                            os.replace(file, matched_target)
+                            console.print(f"[green]Applied {file} to {matched_target}[/green]")
+                        else:
+                            os.remove(file)
+                            console.print(f"[yellow]Discarded {file}[/yellow]")
                     else:
                         os.remove(file)
-                        console.print(f"[yellow]Discarded {file}[/yellow]")
-                else:
-                    os.remove(file)
-            except Exception as e:
-                console.print(f"[red]Error recovering {file}: {e}[/red]")
+                except Exception as e:
+                    console.print(f"[red]Error recovering {file}: {e}[/red]")
 
 class DumbleDoerCLI:
     def __init__(self):
@@ -413,7 +511,7 @@ class DumbleDoerCLI:
         self.exit_stack = AsyncExitStack()
         self.mcp_sessions = {}
         self.local_tools = [read_file, write_file_with_review, execute_bash, update_memory_registry, run_rtk]
-        self.gemini_tools = self.local_tools
+        self.gemini_tools = list(self.local_tools)
 
     def _create_mcp_wrapper(self, server_name: str, tool):
         async def mcp_wrapper(**kwargs):
@@ -421,11 +519,18 @@ class DumbleDoerCLI:
             result = await session.call_tool(tool.name, arguments=kwargs)
             return "\n".join([x.text for x in result.content if hasattr(x, 'text')])
         
-        safe_name = tool.name.replace("-", "_")
-        mcp_wrapper.__name__ = safe_name if safe_name.startswith(server_name) else f"{server_name}_{safe_name}"
+        # 1. Strip slashes and hyphens for Gemini compatibility
+        safe_name = tool.name.replace("-", "_").replace("/", "_")
+        final_name = safe_name if safe_name.startswith(server_name) else f"{server_name}_{safe_name}"
+        
+        # 2. Hard-bind both name attributes so the SDK caching doesn't overwrite it
+        mcp_wrapper.__name__ = final_name
+        mcp_wrapper.__qualname__ = final_name
         
         # --- DYNAMIC SIGNATURE INJECTION ---
         params = []
+        annotations = {} # 3. Initialize explicit Pydantic annotations dict
+        
         if hasattr(tool, 'inputSchema') and tool.inputSchema and "properties" in tool.inputSchema:
             for prop_name, prop_schema in tool.inputSchema["properties"].items():
                 ptype = str
@@ -436,22 +541,33 @@ class DumbleDoerCLI:
                 
                 is_req = prop_name in tool.inputSchema.get("required", [])
                 default = inspect.Parameter.empty if is_req else None
+                
+                # 4. Map the type to the annotations dictionary
+                annotations[prop_name] = ptype
+                
                 params.append(inspect.Parameter(
                     name=prop_name, 
-                    kind=inspect.Parameter.POSITIONAL_OR_KEYWORD, 
+                    kind=inspect.Parameter.KEYWORD_ONLY, 
                     annotation=ptype, 
                     default=default
                 ))
         
         mcp_wrapper.__signature__ = inspect.Signature(parameters=params)
+        mcp_wrapper.__annotations__ = annotations # 5. Inject into the wrapper
         mcp_wrapper.__doc__ = getattr(tool, 'description', '')
         return mcp_wrapper
 
     async def connect_mcp(self):
+        if not os.path.exists(".codegraph"):
+            os.makedirs(".codegraph", exist_ok=True)
+            print("Initializing CodeGraph index...", file=sys.stderr)
+            import subprocess
+            await asyncio.to_thread(subprocess.run, ["npx", "--yes", "--package=@colbymchenry/codegraph", "codegraph", "init"], check=False)
+            
         # Connect to codegraph
         codegraph_params = StdioServerParameters(
             command="npx",
-            args=["-y", "--package=@colbymchenry/codegraph", "codegraph", "serve", "--mcp"]
+            args=["--yes", "--quiet", "--package=@colbymchenry/codegraph", "codegraph", "serve", "--mcp"]
         )
         codegraph_transport, codegraph_stream = await self.exit_stack.enter_async_context(stdio_client(codegraph_params))
         codegraph_session = await self.exit_stack.enter_async_context(ClientSession(codegraph_transport, codegraph_stream))
@@ -478,25 +594,26 @@ class DumbleDoerCLI:
         print("CRITICAL: Budget Exhausted. Initiating Graceful Shutdown Sequence...")
         def _shutdown():
             with REGISTRY_LOCK:
-                try:
-                    with open("memory.md", "r", encoding="utf-8") as f:
-                        content = f.read()
+                with open("memory.md", "r", encoding="utf-8") as f:
+                    content = f.read()
+                
+                if task_id:
+                    content = content.replace(f"| {task_id} | in-progress", f"| {task_id} | interrupted")
+                
+                summary = f"## Session Handoff Summary\n- Outcome: interrupted-budget\n"
+                if task_id:
+                    summary += f"- Interrupted Task: {task_id}\n"
+                summary += "- Recommended Next Scope: Resume interrupted tasks\n"
+                
+                start_idx, end_idx = ASTMemoryMapper.locate_heading_block(content, "##", "Session Handoff Summary")
+                if start_idx != -1:
+                    lines = content.splitlines()
+                    content = "\n".join(lines[:start_idx] + [summary.strip()] + lines[end_idx:])
+                else:
+                    content += f"\n\n{summary}"
                     
-                    if task_id:
-                        content = content.replace(f"| {task_id} | in-progress", f"| {task_id} | interrupted")
-                    
-                    summary = f"\n\n## Session Handoff Summary\n- Outcome: interrupted-budget\n"
-                    if task_id:
-                        summary += f"- Interrupted Task: {task_id}\n"
-                    summary += "- Recommended Next Scope: Resume interrupted tasks\n"
-                    
-                    if "## Session Handoff Summary" not in content:
-                        content += summary
-                        
-                    with open("memory.md", "w", encoding="utf-8") as f:
-                        f.write(content)
-                except Exception as e:
-                    print(f"Error during graceful shutdown: {e}")
+                with open("memory.md", "w", encoding="utf-8") as f:
+                    f.write(content)
                     
         await asyncio.to_thread(_shutdown)
         print("Graceful Shutdown Sequence Complete. State preserved in memory.md.")
@@ -514,7 +631,7 @@ class DumbleDoerCLI:
 
     async def execute_task(self, task_id: str, description: str):
         print(f"Executing task {task_id}: {description}")
-        chat_session = self.client.aio.chats.create(model="gemini-2.5-flash", config={"tools": self.gemini_tools})
+        chat_session = self.client.aio.chats.create(model="gemini-2.5-flash")
         system_instructions = await self._get_system_instructions()
         prompt_payload = f"""{system_instructions}
 
@@ -527,51 +644,24 @@ Mandatory rules:
 4. Log your codegraph_impact result to memory.md task {task_id} CodeGraph Impact field.
 5. Do not modify any file listed in another in-progress task's Outputs."""
         try:
-            response = await chat_session.send_message(prompt_payload)
+            response = await chat_session.send_message(prompt_payload, config={"tools": list(self.gemini_tools)})
             print(f"Task {task_id} completed: {response.text}")
+            await TaskRegistryState().update_task_status(task_id, "completed")
         except BudgetExhaustedException:
-            await self._graceful_shutdown(task_id)
+            try:
+                rtk_out = await run_rtk("gain")
+                response = await chat_session.send_message(prompt_payload, config={"tools": list(self.gemini_tools)})
+                print(f"Task {task_id} completed: {response.text}")
+                await TaskRegistryState().update_task_status(task_id, "completed")
+            except (BudgetExhaustedException, RuntimeError) as e:
+                print(f"Task failed or budget threshold blocked retry: {e}")
+                await self._graceful_shutdown(task_id)
 
     def get_pending_waves(self) -> list[list[dict]]:
-        try:
-            with open("memory.md", "r", encoding="utf-8") as f:
-                content = f.read()
-        except FileNotFoundError:
-            return []
-            
-        start_idx, end_idx = ASTMemoryMapper.locate_heading_block(content, "##", "Task Registry")
-        if start_idx == -1:
-            return []
-            
-        lines = content.splitlines()[start_idx+1:end_idx]
+        state = TaskRegistryState()
+        tasks_dict = state.load_tasks()
+        tasks = list(tasks_dict.values())
         
-        tasks = []
-        for line in lines:
-            if not line.strip().startswith("|"):
-                continue
-            parts = [p.strip() for p in line.split("|")]
-            if len(parts) >= 9 and parts[1] != "Task ID" and not parts[1].startswith("---"):
-                task_id = parts[1]
-                title = parts[2]
-                status = parts[4]
-                depends_on = parts[6]
-                
-                desc_start, desc_end = ASTMemoryMapper.locate_heading_block(content, "###", task_id)
-                description = title
-                if desc_start != -1:
-                    desc_lines = content.splitlines()[desc_start+1:desc_end]
-                    for dline in desc_lines:
-                        if dline.startswith("- **Description**:"):
-                            description = dline.split("- **Description**:")[1].strip()
-                            break
-
-                tasks.append({
-                    "id": task_id,
-                    "desc": description,
-                    "status": status,
-                    "deps": [d.strip() for d in depends_on.split(",")] if depends_on != "none" else []
-                })
-
         pending_tasks = {t['id']: t for t in tasks if t['status'] == 'pending'}
         completed_task_ids = {t['id'] for t in tasks if t['status'] == 'completed'}
         
@@ -597,6 +687,93 @@ Mandatory rules:
                 completed_task_ids.add(t['id'])
                 
         return waves
+        
+    async def batch_diff_review(self, wave_tmp_files: list):
+        if not wave_tmp_files: return
+        import subprocess, shutil, sys, os
+        has_code = shutil.which("code") is not None
+        if GUI_DIFF_ENABLED and has_code:
+            print("Review proposed changes for the wave in VS Code.", file=sys.stderr)
+            args = ["code", "--wait"] + wave_tmp_files
+            await asyncio.to_thread(subprocess.run, args, check=False)
+        else:
+            import difflib
+            from rich.syntax import Syntax
+            from rich.console import Console
+            console_diff = Console()
+            for tmp_path in wave_tmp_files:
+                basename = os.path.basename(tmp_path)
+                actual_filename = basename.split("_", 1)[1] if "_" in basename else basename
+                actual_filename = actual_filename.replace(".tmp", "").replace("__", "/")
+                
+                original_text = ""
+                if os.path.exists(actual_filename):
+                    with open(actual_filename, "r") as f:
+                        original_text = f.read()
+                        
+                with open(tmp_path, "r") as f:
+                    new_text = f.read()
+                    
+                diff = list(difflib.unified_diff(
+                    original_text.splitlines(keepends=True),
+                    new_text.splitlines(keepends=True),
+                    fromfile=f"a/{actual_filename}",
+                    tofile=f"b/{actual_filename}"
+                ))
+                if diff:
+                    diff_text = "".join(diff)
+                    syntax = Syntax(diff_text, "diff", theme="monokai")
+                    console_diff.print(f"\n[bold cyan]Diff for {actual_filename}:[/bold cyan]")
+                    console_diff.print(syntax)
+            
+        from rich.prompt import Prompt
+        from rich.console import Console
+        console = Console()
+        choice = Prompt.ask("Approve wave changes? [Y(all)/N(none)/S(select)]", choices=["Y", "N", "S"], default="Y")
+        rejected_files = set()
+        if choice == "S":
+            sel = Prompt.ask("Enter filenames to reject (comma separated)")
+            rejected_files = {s.strip() for s in sel.split(",") if s.strip()}
+        elif choice == "N":
+            rejected_files = {os.path.basename(f) for f in wave_tmp_files}
+            
+        state = TaskRegistryState()
+        for tmp_path in wave_tmp_files:
+            basename = os.path.basename(tmp_path)
+            actual_filename = basename.split("_", 1)[1] if "_" in basename else basename
+            actual_filename = actual_filename.replace(".tmp", "").replace("__", "/")
+            
+            target_path = actual_filename
+            task_id = None
+            try:
+                with open("memory.md", "r", encoding="utf-8") as f:
+                    content = f.read()
+                start_idx, end_idx = ASTMemoryMapper.locate_heading_block(content, "##", "Change Log")
+                if start_idx != -1:
+                    for line in content.splitlines()[start_idx+1:end_idx]:
+                        parts = [p.strip() for p in line.split("|")]
+                        if len(parts) >= 6 and parts[5].strip() == "planned" and parts[3].strip() == actual_filename:
+                            target_path = parts[3].strip()
+                            task_id = parts[2].strip()
+                            break
+            except Exception:
+                pass
+
+            if actual_filename in rejected_files or basename in rejected_files:
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+                console.print(f"[yellow]Rejected changes for {actual_filename}[/yellow]")
+                if task_id:
+                    await state.update_task_status(task_id, "pending")
+            else:
+                if os.path.exists(tmp_path):
+                    os.replace(tmp_path, target_path)
+                console.print(f"[green]Approved changes for {actual_filename}[/green]")
+
+        if rejected_files:
+            await asyncio.to_thread(OrphanRecoveryScanner().run)
+
+
 
     async def run(self, command: str, args: list):
         print(f"DumbleDoer running command: {command}")
@@ -611,14 +788,20 @@ Mandatory rules:
                     print("No pending tasks to execute.")
                 for i, wave in enumerate(waves):
                     print(f"Starting execution wave {i+1} with {len(wave)} tasks...")
+                    import glob
+                    before_tmps = set(glob.glob(".dumbledoer/tmp/*.tmp"))
                     try:
                         await asyncio.gather(*[self.execute_task(t['id'], t['desc']) for t in wave])
                     except BudgetExhaustedException:
                         await self._graceful_shutdown()
                         break
+                    after_tmps = set(glob.glob(".dumbledoer/tmp/*.tmp"))
+                    wave_tmps = list(after_tmps - before_tmps)
+                    if wave_tmps:
+                        await self.batch_diff_review(wave_tmps)
             else:
-                self.chat_session = self.client.aio.chats.create(model="gemini-2.5-flash", config={"tools": self.gemini_tools})
-                response = await self.chat_session.send_message(f"Execute {command} with {args}")
+                self.chat_session = self.client.aio.chats.create(model="gemini-2.5-flash")
+                response = await self.chat_session.send_message(f"Execute {command} with {args}", config={"tools": list(self.gemini_tools)})
                 print(response.text)
         finally:
             self._archive_stale_sessions()
@@ -676,14 +859,19 @@ Mandatory rules:
         current_task = None
         current_lines = []
         
+        in_code_block = False
         for idx, line in enumerate(lines):
-            if re.match(r"^###\s+(T-\d+)", line):
+            stripped = line.strip()
+            if stripped.startswith("```"):
+                in_code_block = not in_code_block
+                
+            if not in_code_block and re.match(r"^###\s+(T-\d+)", line):
                 if current_task:
                     tasks[current_task] = current_lines
                 current_task = re.match(r"^###\s+(T-\d+)", line).group(1)
                 current_lines = [line]
             elif current_task:
-                if re.match(r"^#+\s+", line):
+                if not in_code_block and re.match(r"^#+\s+", line):
                     tasks[current_task] = current_lines
                     current_task = None
                 else:
