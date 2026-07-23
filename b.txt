@@ -1,3 +1,0 @@
-# This is a comment for b.txt
-# This is an additional comment.
-2

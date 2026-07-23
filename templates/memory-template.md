@@ -20,8 +20,9 @@
 |---|---|---|
 
 ## Task Registry
-| Task ID | Type | Description | Status | Owner | Effort | Dependencies | CodeGraph Impact |
-|---|---|---|---|---|---|---|---|
+
+| Task ID | Title | Type | Status | Owner | Depends On | Session | Checkpoint |
+|---------|-------|------|--------|-------|------------|---------|------------|
 
 ## Edge Case Coverage
 | Edge Case ID (EC-NNN) | Component | Description | Disposition (addressed/dismissed/already-covered) | Task IDs | User Reason |

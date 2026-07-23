@@ -1,0 +1,2 @@
+[console_scripts]
+dumbledoer = dumbledoer_cli:main

@@ -1,0 +1,22 @@
+Metadata-Version: 2.4
+Name: dumbledoer
+Version: 0.1.0
+Summary: Agent engineering harness and autonomous workflow.
+Author: Emmanuel
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+Requires-Dist: google-genai>=2.8.0
+Requires-Dist: mcp
+Requires-Dist: python-dotenv
+Requires-Dist: rich
+Requires-Dist: typer
+
+# DumbleDoer
+
+DumbleDoer is an agentic engineering harness and autonomous workflow powered by Gemini.
+
+## Installation
+Run `bash install.sh` to initialize the project and dependencies.
+
+## Usage
+Run the CLI using `dumbledoer` or execute `python dumbledoer_cli.py`.

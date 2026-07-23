@@ -1,0 +1,9 @@
+README.md
+dumbledoer_cli.py
+pyproject.toml
+dumbledoer.egg-info/PKG-INFO
+dumbledoer.egg-info/SOURCES.txt
+dumbledoer.egg-info/dependency_links.txt
+dumbledoer.egg-info/entry_points.txt
+dumbledoer.egg-info/requires.txt
+dumbledoer.egg-info/top_level.txt

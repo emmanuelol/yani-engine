@@ -1,0 +1,10 @@
+{
+  "task-1": {
+    "id": "task-1",
+    "desc": "Call the codegraph_impact tool to search for \"test\" and print the result. This is just a test to verify the tool runs without KeyError.",
+    "title": "Call codegraph_impact tool to search for \"test\"",
+    "status": "completed",
+    "deps": [],
+    "original_line": "| task-1 | Call codegraph_impact tool to search for \"test\" | test | pending | High | none | Low | TestAgent |"
+  }
+}

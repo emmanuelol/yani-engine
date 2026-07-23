@@ -10,7 +10,8 @@ import re
 from contextlib import AsyncExitStack
 import shutil
 import difflib
-from filelock import FileLock, Timeout
+from filelock import FileLock
+import filelock
 
 REGISTRY_LOCK = FileLock("memory.md.lock", timeout=60)
 # GUI_DIFF_ENABLED will be set dynamically in main_async
@@ -150,7 +151,6 @@ def _write_file(path: str, content: str) -> str:
     except Exception as e:
         return f"Error writing file {path}: {e}"
 
-import filelock
 
 async def update_memory_registry(target: str, replacement: str) -> str:
     """Updates the memory.md file securely with exponential backoff on lock timeouts."""
@@ -226,26 +226,39 @@ class TaskRegistryState:
                 if start_idx != -1:
                     lines = content.splitlines()[start_idx+1:end_idx]
                     for line in lines:
-                        if not line.strip().startswith("|"): continue
                         parts = [p.strip() for p in line.split("|")]
-                        if len(parts) >= 9 and parts[1] != "Task ID" and not parts[1].startswith("---"):
+                        if len(parts) >= 5 and "Task ID" not in parts[1] and not parts[1].strip().startswith("---"):
                             task_id = parts[1].strip()
                             
                             desc_start, desc_end = ASTMemoryMapper.locate_heading_block(content, "###", task_id)
-                            description = parts[2].strip()
+                            description = parts[2].strip() if len(parts) > 2 else ""
+                            target_files = []
+                            
                             if desc_start != -1:
                                 desc_lines = content.splitlines()[desc_start+1:desc_end]
                                 for dline in desc_lines:
                                     if dline.startswith("- **Description**:"):
                                         description = dline.split("- **Description**:")[1].strip()
-                                        break
+                                    if dline.startswith("- **Outputs**:"):
+                                        raw_outputs = dline.split("- **Outputs**:")[1].strip()
+                                        if raw_outputs.lower() not in ["none", "—", "-", ""]:
+                                            target_files = [f.strip() for f in raw_outputs.replace("[", "").replace("]", "").split(",")]
                                         
+                            status_col = parts[4].strip() if len(parts) > 4 else "pending"
+                            
+                            deps_str = ""
+                            for p in parts:
+                                if "T-" in p and p.strip() != task_id:
+                                    deps_str += p + ","
+                            deps = [d.strip() for d in deps_str.split(",") if "T-" in d]
+
                             tasks[task_id] = {
                                 "id": task_id,
                                 "desc": description,
-                                "title": parts[2].strip(),
-                                "status": parts[4].strip(),
-                                "deps": [d.strip() for d in parts[6].split(",")] if parts[6].strip() != "none" else [],
+                                "title": parts[2].strip() if len(parts) > 2 else task_id,
+                                "status": status_col,
+                                "deps": deps,
+                                "outputs": target_files,
                                 "original_line": line
                             }
             except Exception:
@@ -279,19 +292,16 @@ class TaskRegistryState:
                 lines = content.splitlines()
                 new_block = []
                 for line in lines[start_idx+1:end_idx]:
-                    if not line.strip().startswith("|") or "---" in line or "Task ID" in line:
-                        new_block.append(line)
-                    else:
-                        parts = [p.strip() for p in line.split("|")]
-                        if len(parts) >= 9:
-                            tid = parts[1].strip()
-                            if tid in tasks:
-                                parts[4] = f" {tasks[tid]['status']} "
-                                new_block.append("|".join(parts))
-                            else:
-                                new_block.append(line)
+                    parts = [p.strip() for p in line.split("|")]
+                    if len(parts) >= 5 and "Task ID" not in parts[1] and not parts[1].strip().startswith("---"):
+                        tid = parts[1].strip()
+                        if tid in tasks:
+                            parts[4] = f" {tasks[tid]['status']} "
+                            new_block.append("|".join(parts))
                         else:
                             new_block.append(line)
+                    else:
+                        new_block.append(line)
                             
                 new_content = "\n".join(lines[:start_idx+1] + new_block + lines[end_idx:])
                 with open(self.md_path, "w", encoding="utf-8") as f:
@@ -473,7 +483,7 @@ class OrphanRecoveryScanner:
                 with open("memory.md", "w", encoding="utf-8") as f:
                     f.write(new_content)
             
-            # O1/O2: Handle .tmp files (using basename mapping since UUID is present)
+            # O1/O2: Handle .tmp files
             for file in glob.glob(os.path.join(tmp_dir, "*.tmp")):
                 try:
                     # Find corresponding target by decoding the path
@@ -562,7 +572,7 @@ class DumbleDoerCLI:
             os.makedirs(".codegraph", exist_ok=True)
             print("Initializing CodeGraph index...", file=sys.stderr)
             import subprocess
-            await asyncio.to_thread(subprocess.run, ["npx", "--yes", "--package=@colbymchenry/codegraph", "codegraph", "init"], check=False)
+            await asyncio.to_thread(subprocess.run, ["npx", "--yes", "--package=@colbymchenry/codegraph", "codegraph", "init"], check=True)
             
         # Connect to codegraph
         codegraph_params = StdioServerParameters(
@@ -589,6 +599,23 @@ class DumbleDoerCLI:
         for tool in c7_tools.tools:
             self.gemini_tools.append(self._create_mcp_wrapper("context7", tool))
         self.mcp_sessions["context7"] = context7_session
+
+        # --- DYNAMIC FALLBACK INJECTION ---
+        # Prevent SDK KeyErrors if MCP servers degrade and drop critical tools
+        existing_tools = [getattr(t, "__name__", "") for t in self.gemini_tools]
+        
+        for missing_tool in ["codegraph_impact", "codegraph_search", "codegraph_callers", "codegraph_affected", "codegraph_context", "codegraph_node"]:
+            if missing_tool not in existing_tools:
+                # Late binding requires a factory to capture the name correctly in the closure
+                def create_dummy(name):
+                    async def dummy_fallback(query: str = "", target: str = "", symbol: str = "", depth: int = 3, **kwargs) -> str:
+                        return f"[{name} Degraded] Tool not available from MCP server."
+                    dummy_fallback.__name__ = name
+                    dummy_fallback.__qualname__ = name
+                    dummy_fallback.__doc__ = f"Fallback dummy for {name}."
+                    return dummy_fallback
+                
+                self.gemini_tools.append(create_dummy(missing_tool))
 
     async def _graceful_shutdown(self, task_id: str = None):
         print("CRITICAL: Budget Exhausted. Initiating Graceful Shutdown Sequence...")
@@ -618,7 +645,7 @@ class DumbleDoerCLI:
         await asyncio.to_thread(_shutdown)
         print("Graceful Shutdown Sequence Complete. State preserved in memory.md.")
 
-    async def _get_system_instructions(self):
+    async def _get_system_instructions(self, command: str = None):
         instructions = [
             "# MISSION",
             "You are DumbleDoer, an Agent Engineering Harness. Your goal is to systematically analyze, improve, and validate agent projects.",
@@ -627,6 +654,11 @@ class DumbleDoerCLI:
             await self.local_tools[0](os.path.join(self.plugin_root, "lib", "compression-policy.md")) or "",
             await self.local_tools[0]("memory.md") or "No memory.md found. Start a new project."
         ]
+        if command and command != "execute":
+            skill_path = os.path.join(self.plugin_root, "skills", command, "SKILL.md")
+            skill_content = await self.local_tools[0](skill_path)
+            if skill_content and not skill_content.startswith("Error"):
+                instructions.append(f"# COMMAND SPECIFIC INSTRUCTIONS ({command})\n{skill_content}")
         return "\n\n".join(instructions)
 
     async def execute_task(self, task_id: str, description: str):
@@ -662,15 +694,20 @@ Mandatory rules:
         tasks_dict = state.load_tasks()
         tasks = list(tasks_dict.values())
         
-        pending_tasks = {t['id']: t for t in tasks if t['status'] == 'pending'}
-        completed_task_ids = {t['id'] for t in tasks if t['status'] == 'completed'}
+        pending_tasks = {t['id']: t for t in tasks if "pending" in t['status']}
+        completed_task_ids = {t['id'] for t in tasks if "completed" in t['status']}
         
         waves = []
         while pending_tasks:
             current_wave = []
+            claimed_files_in_wave = set()
+            
             for t_id, t in list(pending_tasks.items()):
                 if all(d in completed_task_ids for d in t['deps']):
-                    current_wave.append(t)
+                    task_files = set(t.get('outputs', []))
+                    if not task_files or not task_files.intersection(claimed_files_in_wave):
+                        current_wave.append(t)
+                        claimed_files_in_wave.update(task_files)
             
             if not current_wave:
                 if pending_tasks:
@@ -773,8 +810,6 @@ Mandatory rules:
         if rejected_files:
             await asyncio.to_thread(OrphanRecoveryScanner().run)
 
-
-
     async def run(self, command: str, args: list):
         print(f"DumbleDoer running command: {command}")
         if command == "resume":
@@ -801,7 +836,9 @@ Mandatory rules:
                         await self.batch_diff_review(wave_tmps)
             else:
                 self.chat_session = self.client.aio.chats.create(model="gemini-2.5-flash")
-                response = await self.chat_session.send_message(f"Execute {command} with {args}", config={"tools": list(self.gemini_tools)})
+                sys_inst = await self._get_system_instructions(command)
+                payload = f"{sys_inst}\n\nUSER DIRECTIVE: Execute the `{command}` command with arguments {args}. Follow your COMMAND SPECIFIC INSTRUCTIONS strictly. Do not ask for user input if a tool can accomplish the task."
+                response = await self.chat_session.send_message(payload, config={"tools": list(self.gemini_tools)})
                 print(response.text)
         finally:
             self._archive_stale_sessions()
@@ -865,10 +902,10 @@ Mandatory rules:
             if stripped.startswith("```"):
                 in_code_block = not in_code_block
                 
-            if not in_code_block and re.match(r"^###\s+(T-\d+)", line):
+            if not in_code_block and re.match(r"^###\s+(T-[\w\-]+)", line):
                 if current_task:
                     tasks[current_task] = current_lines
-                current_task = re.match(r"^###\s+(T-\d+)", line).group(1)
+                current_task = re.match(r"^###\s+(T-[\w\-]+)", line).group(1)
                 current_lines = [line]
             elif current_task:
                 if not in_code_block and re.match(r"^#+\s+", line):
@@ -961,8 +998,9 @@ Mandatory rules:
                             
             archive_tmp = f".dumbledoer/tmp/{sid}.archive.tmp"
             archive_md = f".dumbledoer/archive/{sid}.md"
-            with open(archive_tmp, "w", encoding="utf-8") as f:
-                f.write("\n".join(record_lines))
+            with REGISTRY_LOCK:
+                with open(archive_tmp, "w", encoding="utf-8") as f:
+                    f.write("\n".join(record_lines))
                 
             os.replace(archive_tmp, archive_md)
             
@@ -986,8 +1024,9 @@ Mandatory rules:
                     
         final_lines = [l for l in new_lines if l != ""]
         tmp_mem = ".dumbledoer/tmp/memory.md.tmp"
-        with open(tmp_mem, "w", encoding="utf-8") as f:
-            f.write("\n".join(final_lines))
+        with REGISTRY_LOCK:
+            with open(tmp_mem, "w", encoding="utf-8") as f:
+                f.write("\n".join(final_lines))
         os.replace(tmp_mem, "memory.md")
         print(f"Archived {len(to_archive)} session(s) → .dumbledoer/archive/ ({len(lines) - len(final_lines)} lines trimmed from memory.md)")
 

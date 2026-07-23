@@ -2,7 +2,7 @@
   "name": "report",
   "description": "Generates a quantitative Markdown report detailing structural impact and token optimization.",
   "execute": {
-    "command": "./run_dumbledoer.sh",
+    "command": "~/.gemini/config/plugins/dumbledoer/run_dumbledoer.sh",
     "args": ["report"]
   }
 }
