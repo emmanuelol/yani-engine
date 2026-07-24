@@ -113,3 +113,17 @@ You can interact with DumbleDoer using the following slash commands within `agy`
 
 * **/dumbledoer update-docs**
   Syncs your project's documentation with the current codebase utilizing CodeGraph structural analysis to ensure everything is up to date.
+
+---
+
+## 🗺️ Roadmap: Next Stage (The Unified CLI)
+
+Our ultimate vision for DumbleDoer is to seamlessly fuse the conversational UX of traditional chatbots (like Kandalf/Antigravity) with DumbleDoer's powerful, parallel execution factory into a single, unified standalone CLI application.
+
+### The Fused Architecture
+
+1. **The Unified Entrypoint**: The main entry point will become a persistent conversational loop. You are dropped into a stateful, interactive interface where you can chat, brainstorm, and plan architecture with full access to Context7 and CodeGraph MCP servers.
+2. **The Tooling Handoff**: Instead of the LLM sequentially and slowly editing code directly in the chat, it will use a new internal tool: `dispatch_execution_wave(tasks)`.
+3. **The Parallel Factory Takes Over**: The moment a plan is agreed upon, the chat loop pauses. DumbleDoer natively activates its headless parallel execution engine—building the dependency graph, firing off concurrent LLM API calls, and generating the files simultaneously.
+4. **Interactive Terminal Diff-Gate**: The terminal-native diff UI presents the changes for review instantly.
+5. **Context Flush and Return**: Once the wave is merged and audited by the native QA harness loop, the chat history context is flushed to prevent context bloat, and control is returned to the chat loop for your next command.
