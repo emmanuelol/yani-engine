@@ -1,3 +1,5 @@
+import sys
+import sys
 import os
 import sys
 import inspect
@@ -13,8 +15,11 @@ import difflib
 from filelock import FileLock
 import filelock
 
-REGISTRY_LOCK = FileLock("memory.md.lock", timeout=60)
+_REGISTRY_LOCK = __import__('threading').RLock()
+def get_registry_lock():
+    return _REGISTRY_LOCK
 # GUI_DIFF_ENABLED will be set dynamically in main_async
+GUI_DIFF_ENABLED = True
 from google import genai
 from mcp.client.session import ClientSession
 from mcp.client.stdio import stdio_client, StdioServerParameters
@@ -31,18 +36,26 @@ class DependencyGraphError(Exception):
 class BudgetManager:
     def __init__(self, config_text: str):
         self.estimated_tokens = 0
-        self.threshold = 100000
+        self.budget_limit = 100000
+        self.threshold_pct = 80
+        
         for line in config_text.splitlines():
             line = line.strip()
             if line.startswith("- budget_limit:"):
-                try:
-                    self.threshold = int(line.split(":")[1].strip())
-                except ValueError:
-                    pass
+                try: self.budget_limit = int(line.split(":")[1].strip())
+                except ValueError: pass
+            elif line.startswith("- budget_threshold_pct:"):
+                try: self.threshold_pct = int(line.split(":")[1].strip())
+                except ValueError: pass
+                
+        self.shutdown_threshold = int(self.budget_limit * (self.threshold_pct / 100.0))
                     
+    def add_tokens(self, count: int):
+        self.estimated_tokens += count
+        
     def check_and_harvest(self):
-        if self.estimated_tokens > self.threshold:
-            raise BudgetExhaustedException("Budget exhausted")
+        if self.estimated_tokens >= self.shutdown_threshold:
+            raise BudgetExhaustedException(f"Budget exhausted: {self.estimated_tokens} >= {self.shutdown_threshold}")
 
 class ASTMemoryMapper:
     @staticmethod
@@ -101,7 +114,7 @@ async def execute_bash(command: str, sandbox_mode: str = None) -> str:
     def _read_mode():
         mode = "dumbledoer-base"
         try:
-            with REGISTRY_LOCK:
+            with get_registry_lock():
                 with open("memory.md", "r", encoding="utf-8") as f:
                     for line in f:
                         if line.strip().startswith("- sandbox_mode:"):
@@ -118,8 +131,44 @@ async def execute_bash(command: str, sandbox_mode: str = None) -> str:
         import platform
         user_args = [] if platform.system() == "Windows" else ["--user", f"{os.getuid()}:{os.getgid()}"]
         
-        if sandbox_mode == "docker-compose":
-            args = ["docker", "compose", "exec", "-T", "app", "bash", "-c", command]
+        if sandbox_mode == "native":
+            args = ["bash", "-c", command]
+        elif sandbox_mode.startswith("compose:") or sandbox_mode == "compose":
+            service_name = None
+            if ":" in sandbox_mode:
+                service_name = sandbox_mode.split(":", 1)[1].strip()
+            
+            # Find compose file
+            compose_file = None
+            for f in ["docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml"]:
+                if os.path.exists(f):
+                    compose_file = f
+                    break
+                    
+            if not compose_file:
+                return "Error: sandbox_mode is compose but no docker-compose.yml found in repository."
+                
+            if not service_name:
+                import re
+                try:
+                    with open(compose_file, "r", encoding="utf-8") as f:
+                        content = f.read()
+                    match = re.search(r'^services:\s*\n\s+([a-zA-Z0-9_-]+):', content, re.MULTILINE)
+                    if match:
+                        service_name = match.group(1)
+                    else:
+                        return f"Error: Could not automatically detect a service in {compose_file}. Specify it explicitly via `sandbox_mode: compose:<service>`"
+                except Exception as e:
+                    return f"Error reading compose file: {e}"
+            
+            args = ["docker", "compose", "-f", compose_file, "run", "--rm", service_name, "bash", "-c", command]
+            
+        elif sandbox_mode.startswith("docker:"):
+            image_name = sandbox_mode.split(":", 1)[1].strip()
+            args = ["docker", "run", "--rm"] + user_args + [
+                "-v", f"{os.getcwd()}:/workspace", "-w", "/workspace", 
+                image_name, "bash", "-c", command
+            ]
         else:
             args = ["docker", "run", "--rm"] + user_args + [
                 "-v", f"{os.getcwd()}:/workspace", "-w", "/workspace", 
@@ -209,15 +258,7 @@ class TaskRegistryState:
         os.makedirs(os.path.dirname(self.json_path), exist_ok=True)
         
     def load_tasks(self) -> dict:
-        with REGISTRY_LOCK:
-            if os.path.exists(self.json_path):
-                import json
-                try:
-                    with open(self.json_path, "r") as f:
-                        return json.load(f)
-                except Exception:
-                    pass
-                    
+        with get_registry_lock():
             tasks = {}
             try:
                 with open(self.md_path, "r", encoding="utf-8") as f:
@@ -227,11 +268,22 @@ class TaskRegistryState:
                     lines = content.splitlines()[start_idx+1:end_idx]
                     for line in lines:
                         parts = [p.strip() for p in line.split("|")]
-                        if len(parts) >= 5 and "Task ID" not in parts[1] and not parts[1].strip().startswith("---"):
-                            task_id = parts[1].strip()
+
+                        header_line = next((l for l in content.splitlines()[start_idx:end_idx] if "Task ID" in l), None)
+                        if header_line:
+                            headers = [h.strip() for h in header_line.split("|") if h.strip()]
+                            id_idx = headers.index("Task ID") + 1 if "Task ID" in headers else 1
+                            stat_idx = headers.index("Status") + 1 if "Status" in headers else 4
+                            title_idx = headers.index("Title") + 1 if "Title" in headers else 2
+                            dep_idx = headers.index("Depends On") + 1 if "Depends On" in headers else 6
+                        else:
+                            id_idx, stat_idx, title_idx, dep_idx = 1, 4, 2, 6
+
+                        if len(parts) > max(id_idx, stat_idx) and "Task ID" not in parts[id_idx] and not parts[id_idx].strip().startswith("---"):
+                            task_id = parts[id_idx].strip()
                             
                             desc_start, desc_end = ASTMemoryMapper.locate_heading_block(content, "###", task_id)
-                            description = parts[2].strip() if len(parts) > 2 else ""
+                            description = parts[title_idx].strip() if len(parts) > title_idx else ""
                             target_files = []
                             
                             if desc_start != -1:
@@ -244,7 +296,7 @@ class TaskRegistryState:
                                         if raw_outputs.lower() not in ["none", "—", "-", ""]:
                                             target_files = [f.strip() for f in raw_outputs.replace("[", "").replace("]", "").split(",")]
                                         
-                            status_col = parts[4].strip() if len(parts) > 4 else "pending"
+                            status_col = parts[stat_idx].strip() if len(parts) > stat_idx else "pending"
                             
                             deps_str = ""
                             for p in parts:
@@ -255,7 +307,7 @@ class TaskRegistryState:
                             tasks[task_id] = {
                                 "id": task_id,
                                 "desc": description,
-                                "title": parts[2].strip() if len(parts) > 2 else task_id,
+                                "title": parts[title_idx].strip() if len(parts) > title_idx else task_id,
                                 "status": status_col,
                                 "deps": deps,
                                 "outputs": target_files,
@@ -267,14 +319,11 @@ class TaskRegistryState:
             return tasks
 
     def save_tasks(self, tasks: dict):
-        import json
-        with open(self.json_path, "w") as f:
-            json.dump(tasks, f, indent=2)
         self._sync_to_markdown(tasks)
         
     async def update_task_status(self, task_id: str, new_status: str):
         def _do_update():
-            with REGISTRY_LOCK:
+            with get_registry_lock():
                 tasks = self.load_tasks()
                 if task_id in tasks:
                     tasks[task_id]["status"] = new_status
@@ -282,7 +331,7 @@ class TaskRegistryState:
         await asyncio.to_thread(_do_update)
 
     def _sync_to_markdown(self, tasks: dict):
-        with REGISTRY_LOCK:
+        with get_registry_lock():
             try:
                 with open(self.md_path, "r", encoding="utf-8") as f:
                     content = f.read()
@@ -296,7 +345,11 @@ class TaskRegistryState:
                     if len(parts) >= 5 and "Task ID" not in parts[1] and not parts[1].strip().startswith("---"):
                         tid = parts[1].strip()
                         if tid in tasks:
-                            parts[4] = f" {tasks[tid]['status']} "
+                            stat_idx = next((i for i, h in enumerate([h.strip() for h in content.splitlines()[start_idx].split("|") if h.strip()]) if h == "Status"), 3) + 1
+                            if len(parts) > stat_idx:
+                                parts[stat_idx] = f" {tasks[tid]['status']} "
+                            else:
+                                parts[4] = f" {tasks[tid]['status']} "
                             new_block.append("|".join(parts))
                         else:
                             new_block.append(line)
@@ -312,6 +365,20 @@ class TaskRegistryState:
 async def write_file_with_review(path: str, content: str) -> str:
     """Writes content to a file via a VS Code Diff-Gate for user approval."""
     try:
+        try:
+            import subprocess
+            impact_proc = await asyncio.to_thread(
+                subprocess.run, 
+                ["npx", "--yes", "--package=@colbymchenry/codegraph", "codegraph", "impact", path], 
+                capture_output=True, text=True
+            )
+            import re
+            match = re.search(r"—\s*(\d+)\s+affected symbol", impact_proc.stdout if hasattr(impact_proc, 'stdout') else str(impact_proc))
+            if match and int(match.group(1)) > 20:
+                return f"Error: CodeGraph impact threshold exceeded ({match.group(1)} symbols > 20). Write blocked to prevent system instability."
+        except Exception as e:
+            pass
+
         tmp_dir = ".dumbledoer/tmp"
         os.makedirs(tmp_dir, exist_ok=True)
         import uuid
@@ -363,7 +430,7 @@ class CheckpointManager:
         rationale = metadata.get("Rationale", "")
         row = f"| {timestamp} | {task_id} | {target_path} | {summary} | planned | {rationale} |"
         def _do_log():
-            with REGISTRY_LOCK:
+            with get_registry_lock():
                 ASTMemoryMapper.append_to_markdown_table("memory.md", "Change Log", row)
         await asyncio.to_thread(_do_log)
         
@@ -380,7 +447,7 @@ class CheckpointManager:
             session_id = metadata.get("Session ID", "")
             files_snapshotted = metadata.get("Files Snapshotted", "")
             row = f"| {checkpoint_id} | {task_id} | {step} | {session_id} | {files_snapshotted} |"
-            with REGISTRY_LOCK:
+            with get_registry_lock():
                 ASTMemoryMapper.append_to_markdown_table("memory.md", "Checkpoint Registry", row)
         await asyncio.to_thread(_do_write)
             
@@ -403,13 +470,13 @@ class CheckpointManager:
         rationale = metadata.get("Rationale", "")
         row = f"| {timestamp} | {task_id} | {target_path} | {summary} | applied | {rationale} |"
         def _do_log():
-            with REGISTRY_LOCK:
+            with get_registry_lock():
                 ASTMemoryMapper.append_to_markdown_table("memory.md", "Change Log", row)
         await asyncio.to_thread(_do_log)
 
 class OrphanRecoveryScanner:
     def run(self):
-        with REGISTRY_LOCK:
+        with get_registry_lock():
             tmp_dir = ".dumbledoer/tmp"
             chk_dir = ".dumbledoer/checkpoints"
             bak_dir = ".dumbledoer/rollbacks"
@@ -509,10 +576,37 @@ class OrphanRecoveryScanner:
                 except Exception as e:
                     console.print(f"[red]Error recovering {file}: {e}[/red]")
 
+
+async def add_task(task_id: str, title: str, task_type: str = "change", deps: str = "none", description: str = "", outputs: str = "none") -> str:
+    """Registers a new atomic task to the memory.md Task Registry and Task Details."""
+    def _write():
+        with get_registry_lock():
+            try:
+                # 1. Append to Task Registry
+                row = f"| {task_id} | {title} | {task_type} | pending | — | {deps} | — | none |"
+                ASTMemoryMapper.append_to_markdown_table("memory.md", "Task Registry", row)
+                
+                # 2. Append to Task Details
+                with open("memory.md", "r", encoding="utf-8") as f:
+                    content = f.read()
+                
+                details = f"\n### {task_id}: {title}\n- **Type**: {task_type}\n- **Status**: pending\n- **Owner**: —\n- **Depends On**: {deps}\n- **Assigned Session**: —\n- **Description**: {description}\n- **Inputs**: none\n- **Outputs**: {outputs}\n- **Success Criteria**: TBD\n- **Estimated Effort**: small\n- **Parallelizable**: yes\n- **CodeGraph Impact**: —\n- **Checkpoint**: none\n- **Resume Instructions**: none\n- **Notes**: —\n"
+                
+                start_idx, end_idx = ASTMemoryMapper.locate_heading_block(content, "##", "Task Details")
+                if start_idx != -1:
+                    lines = content.splitlines()
+                    lines.insert(end_idx, details)
+                    with open("memory.md", "w", encoding="utf-8") as f:
+                        f.write("\n".join(lines) + "\n")
+                return f"Successfully registered task {task_id}."
+            except Exception as e:
+                return f"Error adding task: {e}"
+    return await asyncio.to_thread(_write)
+
 class DumbleDoerCLI:
     def __init__(self):
         self.plugin_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-        load_dotenv(dotenv_path=os.path.join(os.getcwd(), '.env'), override=True)
+        load_dotenv(dotenv_path=os.path.join(os.getcwd(), '.env'), override=False)
         api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
         if not api_key:
             print("Error: GEMINI_API_KEY or GOOGLE_API_KEY not found in environment or local .env file.", file=sys.stderr)
@@ -520,14 +614,25 @@ class DumbleDoerCLI:
         self.client = genai.Client(api_key=api_key)
         self.exit_stack = AsyncExitStack()
         self.mcp_sessions = {}
-        self.local_tools = [read_file, write_file_with_review, execute_bash, update_memory_registry, run_rtk]
+        self.mcp_locks = {}
+        self.local_tools = [read_file, write_file_with_review, execute_bash, update_memory_registry, run_rtk, add_task]
         self.gemini_tools = list(self.local_tools)
+        
+        # Initialize BudgetManager
+        try:
+            with get_registry_lock():
+                with open("memory.md", "r", encoding="utf-8") as f:
+                    self.budget_manager = BudgetManager(f.read())
+        except Exception:
+            self.budget_manager = BudgetManager("")
 
     def _create_mcp_wrapper(self, server_name: str, tool):
         async def mcp_wrapper(**kwargs):
-            session = self.mcp_sessions[server_name]
-            result = await session.call_tool(tool.name, arguments=kwargs)
-            return "\n".join([x.text for x in result.content if hasattr(x, 'text')])
+            lock = self.mcp_locks.setdefault(server_name, asyncio.Lock())
+            async with lock:
+                session = self.mcp_sessions[server_name]
+                result = await session.call_tool(tool.name, arguments=kwargs)
+                return "\n".join([x.text for x in result.content if hasattr(x, 'text')])
         
         # 1. Strip slashes and hyphens for Gemini compatibility
         safe_name = tool.name.replace("-", "_").replace("/", "_")
@@ -564,7 +669,13 @@ class DumbleDoerCLI:
         
         mcp_wrapper.__signature__ = inspect.Signature(parameters=params)
         mcp_wrapper.__annotations__ = annotations # 5. Inject into the wrapper
-        mcp_wrapper.__doc__ = getattr(tool, 'description', '')
+        
+        # Enterprise-grade safeguard: Limit tool descriptions to prevent token window exhaustion
+        doc_str = getattr(tool, 'description', '')
+        if doc_str and len(doc_str) > 1024:
+            doc_str = doc_str[:1021] + "..."
+        mcp_wrapper.__doc__ = doc_str
+        
         return mcp_wrapper
 
     async def connect_mcp(self):
@@ -575,30 +686,52 @@ class DumbleDoerCLI:
             await asyncio.to_thread(subprocess.run, ["npx", "--yes", "--package=@colbymchenry/codegraph", "codegraph", "init"], check=True)
             
         # Connect to codegraph
-        codegraph_params = StdioServerParameters(
-            command="npx",
-            args=["--yes", "--quiet", "--package=@colbymchenry/codegraph", "codegraph", "serve", "--mcp"]
-        )
-        codegraph_transport, codegraph_stream = await self.exit_stack.enter_async_context(stdio_client(codegraph_params))
-        codegraph_session = await self.exit_stack.enter_async_context(ClientSession(codegraph_transport, codegraph_stream))
-        await codegraph_session.initialize()
-        cg_tools = await codegraph_session.list_tools()
-        for tool in cg_tools.tools:
-            self.gemini_tools.append(self._create_mcp_wrapper("codegraph", tool))
-        self.mcp_sessions["codegraph"] = codegraph_session
+        try:
+            codegraph_params = StdioServerParameters(
+                command="npx",
+                args=["--yes", "--quiet", "--package=@colbymchenry/codegraph", "codegraph", "serve", "--mcp"]
+            )
+            codegraph_transport, codegraph_stream = await self.exit_stack.enter_async_context(stdio_client(codegraph_params))
+            codegraph_session = await self.exit_stack.enter_async_context(ClientSession(codegraph_transport, codegraph_stream))
+            await codegraph_session.initialize()
+            cg_tools = await codegraph_session.list_tools()
+            
+            # Enterprise-grade safeguard: limit tools per server
+            tools_to_add = cg_tools.tools
+            if len(tools_to_add) > 50:
+                print(f"Warning: codegraph MCP provided {len(tools_to_add)} tools. Truncating to 50 to prevent context bloat.", file=sys.stderr)
+                tools_to_add = tools_to_add[:50]
+                
+            for tool in tools_to_add:
+                self.gemini_tools.append(self._create_mcp_wrapper("codegraph", tool))
+            self.mcp_sessions["codegraph"] = codegraph_session
+        except Exception as e:
+            import sys
+            print(f"CodeGraph MCP degraded: {e}", file=sys.stderr)
 
         # Connect to context7
-        context7_params = StdioServerParameters(
-            command="npx",
-            args=["--yes", "--quiet", "@upstash/context7-mcp"]
-        )
-        context7_transport, context7_stream = await self.exit_stack.enter_async_context(stdio_client(context7_params))
-        context7_session = await self.exit_stack.enter_async_context(ClientSession(context7_transport, context7_stream))
-        await context7_session.initialize()
-        c7_tools = await context7_session.list_tools()
-        for tool in c7_tools.tools:
-            self.gemini_tools.append(self._create_mcp_wrapper("context7", tool))
-        self.mcp_sessions["context7"] = context7_session
+        try:
+            context7_params = StdioServerParameters(
+                command="npx",
+                args=["--yes", "--quiet", "@upstash/context7-mcp"]
+            )
+            context7_transport, context7_stream = await self.exit_stack.enter_async_context(stdio_client(context7_params))
+            context7_session = await self.exit_stack.enter_async_context(ClientSession(context7_transport, context7_stream))
+            await context7_session.initialize()
+            c7_tools = await context7_session.list_tools()
+            
+            # Enterprise-grade safeguard: limit tools per server
+            tools_to_add = c7_tools.tools
+            if len(tools_to_add) > 50:
+                print(f"Warning: context7 MCP provided {len(tools_to_add)} tools. Truncating to 50 to prevent context bloat.", file=sys.stderr)
+                tools_to_add = tools_to_add[:50]
+                
+            for tool in tools_to_add:
+                self.gemini_tools.append(self._create_mcp_wrapper("context7", tool))
+            self.mcp_sessions["context7"] = context7_session
+        except Exception as e:
+            import sys
+            print(f"Context7 MCP degraded: {e}", file=sys.stderr)
 
         # --- DYNAMIC FALLBACK INJECTION ---
         # Prevent SDK KeyErrors if MCP servers degrade and drop critical tools
@@ -609,7 +742,7 @@ class DumbleDoerCLI:
                 # Late binding requires a factory to capture the name correctly in the closure
                 def create_dummy(name):
                     async def dummy_fallback(query: str = "", target: str = "", symbol: str = "", depth: int = 3, **kwargs) -> str:
-                        return f"[{name} Degraded] Tool not available from MCP server."
+                        raise RuntimeError(f"[{name} Degraded] Tool not available from MCP server. Hard aborting to prevent hallucination.")
                     dummy_fallback.__name__ = name
                     dummy_fallback.__qualname__ = name
                     dummy_fallback.__doc__ = f"Fallback dummy for {name}."
@@ -620,12 +753,12 @@ class DumbleDoerCLI:
     async def _graceful_shutdown(self, task_id: str = None):
         print("CRITICAL: Budget Exhausted. Initiating Graceful Shutdown Sequence...")
         def _shutdown():
-            with REGISTRY_LOCK:
+            with get_registry_lock():
                 with open("memory.md", "r", encoding="utf-8") as f:
                     content = f.read()
                 
                 if task_id:
-                    content = content.replace(f"| {task_id} | in-progress", f"| {task_id} | interrupted")
+                    content = content.replace(f"| {task_id} | in_progress", f"| {task_id} | interrupted")
                 
                 summary = f"## Session Handoff Summary\n- Outcome: interrupted-budget\n"
                 if task_id:
@@ -655,15 +788,58 @@ class DumbleDoerCLI:
             await self.local_tools[0]("memory.md") or "No memory.md found. Start a new project."
         ]
         if command and command != "execute":
-            skill_path = os.path.join(self.plugin_root, "skills", command, "SKILL.md")
+            skill_path = os.path.join(self.plugin_root, "skills", command, "INSTRUCTIONS.md")
             skill_content = await self.local_tools[0](skill_path)
             if skill_content and not skill_content.startswith("Error"):
                 instructions.append(f"# COMMAND SPECIFIC INSTRUCTIONS ({command})\n{skill_content}")
         return "\n\n".join(instructions)
 
+
+
+    async def _run_with_tools(self, chat_session, initial_payload):
+        response = await chat_session.send_message(initial_payload)
+        while response.function_calls:
+            from google.genai.types import Part
+            parts = []
+            for call in response.function_calls:
+                tool_name = call.name
+                tool_func = None
+                for t in self.gemini_tools:
+                    if getattr(t, "__name__", "") == tool_name:
+                        tool_func = t
+                        break
+                
+                if tool_func:
+                    try:
+                        args = dict(call.args) if call.args else {}
+                        print(f"Executing tool: {tool_name}")
+                        import asyncio
+                        if asyncio.iscoroutinefunction(tool_func):
+                            result = await tool_func(**args)
+                        else:
+                            result = tool_func(**args)
+                        parts.append(Part.from_function_response(
+                            name=tool_name,
+                            response={"result": str(result)}
+                        ))
+                    except Exception as e:
+                        print(f"Tool {tool_name} failed: {e}")
+                        parts.append(Part.from_function_response(
+                            name=tool_name,
+                            response={"error": str(e)}
+                        ))
+                else:
+                    print(f"Tool {tool_name} not found")
+                    parts.append(Part.from_function_response(
+                        name=tool_name,
+                        response={"error": "Tool not found"}
+                    ))
+            response = await chat_session.send_message(parts)
+        return response
+
     async def execute_task(self, task_id: str, description: str):
         print(f"Executing task {task_id}: {description}")
-        chat_session = self.client.aio.chats.create(model="gemini-2.5-flash")
+        chat_session = self.client.aio.chats.create(model=getattr(self, "model", "gemini-3.6-flash"), config={"tools": list(self.gemini_tools), "automatic_function_calling": {"disable": True}})
         system_instructions = await self._get_system_instructions()
         prompt_payload = f"""{system_instructions}
 
@@ -674,17 +850,20 @@ Mandatory rules:
 2. Follow the 10-step data flow for change tasks exactly.
 3. Follow {os.path.join(self.plugin_root, 'lib', 'checkpoint-protocol.md')} for every file write.
 4. Log your codegraph_impact result to memory.md task {task_id} CodeGraph Impact field.
-5. Do not modify any file listed in another in-progress task's Outputs."""
+5. Do not modify any file listed in another in_progress task's Outputs."""
         try:
-            response = await chat_session.send_message(prompt_payload, config={"tools": list(self.gemini_tools)})
+            response = await self._run_with_tools(chat_session, prompt_payload)
+            if hasattr(response, 'usage_metadata') and response.usage_metadata:
+                self.budget_manager.add_tokens(getattr(response.usage_metadata, 'total_token_count', 0))
+            self.budget_manager.check_and_harvest()
             print(f"Task {task_id} completed: {response.text}")
-            await TaskRegistryState().update_task_status(task_id, "completed")
+            await TaskRegistryState().update_task_status(task_id, "awaiting-review")
         except BudgetExhaustedException:
             try:
                 rtk_out = await run_rtk("gain")
-                response = await chat_session.send_message(prompt_payload, config={"tools": list(self.gemini_tools)})
+                response = await self._run_with_tools(chat_session, prompt_payload)
                 print(f"Task {task_id} completed: {response.text}")
-                await TaskRegistryState().update_task_status(task_id, "completed")
+                await TaskRegistryState().update_task_status(task_id, "awaiting-review")
             except (BudgetExhaustedException, RuntimeError) as e:
                 print(f"Task failed or budget threshold blocked retry: {e}")
                 await self._graceful_shutdown(task_id)
@@ -806,17 +985,39 @@ Mandatory rules:
                 if os.path.exists(tmp_path):
                     os.replace(tmp_path, target_path)
                 console.print(f"[green]Approved changes for {actual_filename}[/green]")
+                if task_id:
+                    await state.update_task_status(task_id, "completed")
 
         if rejected_files:
             await asyncio.to_thread(OrphanRecoveryScanner().run)
 
-    async def run(self, command: str, args: list):
+    async def run(self, command: str, args: list, model: str = "gemini-3.6-flash"):
+        self.model = model
         print(f"DumbleDoer running command: {command}")
         if command == "resume":
             OrphanRecoveryScanner().run()
             # we can fall through to normal execution if it resumes agent logic, or just run the scanner
         await self.connect_mcp()
         try:
+            if command == "rollback":
+                if not args:
+                    print("Error: must provide a task ID (e.g., T-001)")
+                    return
+                task_id = args[0]
+                bak_dir = f".dumbledoer/rollbacks/{task_id}"
+                if not os.path.exists(bak_dir):
+                    print(f"Error: No rollbacks found for {task_id}")
+                    return
+                for root, _, files in os.walk(bak_dir):
+                    for file in files:
+                        bak_path = os.path.join(root, file)
+                        rel_path = bak_path.replace(bak_dir + "/", "").replace("__colon__", ":").replace("__", "/")
+                        os.replace(bak_path, rel_path)
+                        print(f"Restored {rel_path}")
+                await TaskRegistryState().update_task_status(task_id, "pending")
+                print(f"Task {task_id} rolled back to pending.")
+                return
+    
             if command == "execute":
                 waves = self.get_pending_waves()
                 if not waves:
@@ -835,11 +1036,14 @@ Mandatory rules:
                     if wave_tmps:
                         await self.batch_diff_review(wave_tmps)
             else:
-                self.chat_session = self.client.aio.chats.create(model="gemini-2.5-flash")
+                self.chat_session = self.client.aio.chats.create(model=getattr(self, "model", "gemini-3.6-flash"), config={"tools": list(self.gemini_tools), "automatic_function_calling": {"disable": True}})
                 sys_inst = await self._get_system_instructions(command)
                 payload = f"{sys_inst}\n\nUSER DIRECTIVE: Execute the `{command}` command with arguments {args}. Follow your COMMAND SPECIFIC INSTRUCTIONS strictly. Do not ask for user input if a tool can accomplish the task."
-                response = await self.chat_session.send_message(payload, config={"tools": list(self.gemini_tools)})
+                response = await self._run_with_tools(self.chat_session, payload)
+                if response.function_calls:
+                    print("Function Calls that were not handled:", response.function_calls)
                 print(response.text)
+
         finally:
             self._archive_stale_sessions()
             await self.exit_stack.aclose()
@@ -998,7 +1202,7 @@ Mandatory rules:
                             
             archive_tmp = f".dumbledoer/tmp/{sid}.archive.tmp"
             archive_md = f".dumbledoer/archive/{sid}.md"
-            with REGISTRY_LOCK:
+            with get_registry_lock():
                 with open(archive_tmp, "w", encoding="utf-8") as f:
                     f.write("\n".join(record_lines))
                 
@@ -1024,7 +1228,7 @@ Mandatory rules:
                     
         final_lines = [l for l in new_lines if l != ""]
         tmp_mem = ".dumbledoer/tmp/memory.md.tmp"
-        with REGISTRY_LOCK:
+        with get_registry_lock():
             with open(tmp_mem, "w", encoding="utf-8") as f:
                 f.write("\n".join(final_lines))
         os.replace(tmp_mem, "memory.md")
@@ -1038,6 +1242,7 @@ async def main_async():
         choices=["start", "execute", "resume", "report", "rollback", "update-docs", "audit", "iterate", "status"],
         help="The dumbledoer command to run"
     )
+    parser.add_argument("--model", default=os.getenv("AGY_MODEL", "gemini-3.6-flash"), help="Model override")
     parser.add_argument("--no-gui", action="store_true", help="Disable GUI diff-gate for headless environments")
     args, unknown = parser.parse_known_args()
     
@@ -1057,7 +1262,7 @@ async def main_async():
             pass
     
     cli = DumbleDoerCLI()
-    await cli.run(args.command, unknown)
+    await cli.run(args.command, unknown, model=args.model)
 
 def main():
     try:

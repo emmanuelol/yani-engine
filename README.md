@@ -87,6 +87,11 @@ DumbleDoer integrates deeply into your development lifecycle with a suite of nat
 
 DumbleDoer is smart. The `hooks/on-workspace-load.md` script triggers automatically whenever `agy` loads a directory containing a `memory.md` file. The agent will immediately read the memory file, adopt the DumbleDoer persona, and summarize the current engineering task.
 
+### 🧠 Core Architecture Highlights
+
+* **Manual Execution Loop:** Unlike standard clients relying on fragile SDK auto-calling loops that often drop complex native commands, DumbleDoer uses a custom, manual `_run_with_tools` execution engine. This guarantees that internal `async` tools (like `execute_bash` or dynamically generated `mcp_wrapper` calls) are correctly routed, awaited, and validated in an unbroken execution loop.
+* **Total Instruction Isolation:** The logic dictating the behavior of inner agents is completely decoupled into `INSTRUCTIONS.md` files for each skill. This prevents Antigravity's outer context window from leaking into the inner sub-agents, preserving strict boundary execution without hallucination.
+
 ### Command Registry
 
 You can interact with DumbleDoer using the following slash commands within `agy`:
