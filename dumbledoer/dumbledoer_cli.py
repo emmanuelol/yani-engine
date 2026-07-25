@@ -297,12 +297,8 @@ class TaskRegistryState:
                                             target_files = [f.strip() for f in raw_outputs.replace("[", "").replace("]", "").split(",")]
                                         
                             status_col = parts[stat_idx].strip() if len(parts) > stat_idx else "pending"
-                            
-                            deps_str = ""
-                            for p in parts:
-                                if "T-" in p and p.strip() != task_id:
-                                    deps_str += p + ","
-                            deps = [d.strip() for d in deps_str.split(",") if "T-" in d]
+                            deps_str = parts[dep_idx].strip() if len(parts) > dep_idx else ""
+                            deps = [d.strip() for d in deps_str.split(",") if "T-" in d and d.strip() != task_id]
 
                             tasks[task_id] = {
                                 "id": task_id,
@@ -742,7 +738,7 @@ class DumbleDoerCLI:
                 # Late binding requires a factory to capture the name correctly in the closure
                 def create_dummy(name):
                     async def dummy_fallback(query: str = "", target: str = "", symbol: str = "", depth: int = 3, **kwargs) -> str:
-                        raise RuntimeError(f"[{name} Degraded] Tool not available from MCP server. Hard aborting to prevent hallucination.")
+                        return f"Error: [{name} Degraded] Tool not available from MCP server. Please use alternative tools like grep_search or read_file instead."
                     dummy_fallback.__name__ = name
                     dummy_fallback.__qualname__ = name
                     dummy_fallback.__doc__ = f"Fallback dummy for {name}."
@@ -796,8 +792,33 @@ class DumbleDoerCLI:
 
 
 
-    async def _run_with_tools(self, chat_session, initial_payload):
-        response = await chat_session.send_message(initial_payload)
+    async def _send_message_with_backoff(self, chat_session, payload):
+        import random
+        import re
+        max_retries = 8
+        base_delay = 15
+        for attempt in range(max_retries):
+            try:
+                return await chat_session.send_message(payload)
+            except Exception as e:
+                error_str = str(e)
+                if "429" in error_str or "RESOURCE_EXHAUSTED" in error_str or "Quota exceeded" in error_str:
+                    if attempt == max_retries - 1:
+                        raise
+                    match = re.search(r"retry in (\d+)s", error_str)
+                    if match:
+                        delay = int(match.group(1)) + random.uniform(2, 5)
+                    else:
+                        delay = base_delay * (1.5 ** attempt) + random.uniform(0, 5)
+                    print(f"API Rate Limit (429) hit. Task pausing for {delay:.1f}s before retry {attempt+1}/{max_retries}...")
+                    import asyncio
+                    await asyncio.sleep(delay)
+                else:
+                    raise
+        raise RuntimeError("Max retries exceeded for API rate limit")
+
+    async def _run_with_tools(self, chat_session, initial_payload, status=None):
+        response = await self._send_message_with_backoff(chat_session, initial_payload)
         while response.function_calls:
             from google.genai.types import Part
             parts = []
@@ -812,9 +833,14 @@ class DumbleDoerCLI:
                 if tool_func:
                     try:
                         args = dict(call.args) if call.args else {}
-                        print(f"Executing tool: {tool_name}")
-                        import asyncio
-                        if asyncio.iscoroutinefunction(tool_func):
+                        msg = f"Executing tool: {tool_name}"
+                        if status:
+                            status.update(f"[bold yellow]{msg}...")
+                        else:
+                            print(msg)
+                        
+                        import inspect
+                        if inspect.iscoroutinefunction(tool_func):
                             result = await tool_func(**args)
                         else:
                             result = tool_func(**args)
@@ -823,18 +849,23 @@ class DumbleDoerCLI:
                             response={"result": str(result)}
                         ))
                     except Exception as e:
-                        print(f"Tool {tool_name} failed: {e}")
+                        msg = f"Tool {tool_name} failed: {e}"
+                        if not status: print(msg)
                         parts.append(Part.from_function_response(
                             name=tool_name,
                             response={"error": str(e)}
                         ))
                 else:
-                    print(f"Tool {tool_name} not found")
+                    msg = f"Tool {tool_name} not found"
+                    if not status: print(msg)
                     parts.append(Part.from_function_response(
                         name=tool_name,
                         response={"error": "Tool not found"}
                     ))
-            response = await chat_session.send_message(parts)
+            
+            if status:
+                status.update("[bold cyan]Agent analyzing tool results...")
+            response = await self._send_message_with_backoff(chat_session, parts)
         return response
 
     async def execute_task(self, task_id: str, description: str):
@@ -887,15 +918,15 @@ Mandatory rules:
                     if not task_files or not task_files.intersection(claimed_files_in_wave):
                         current_wave.append(t)
                         claimed_files_in_wave.update(task_files)
-            
+                        
             if not current_wave:
                 if pending_tasks:
                     blocked = []
                     for t_id, t in pending_tasks.items():
                         unfulfilled = [d for d in t['deps'] if d not in completed_task_ids]
                         blocked.append(f"{t_id} (missing: {', '.join(unfulfilled)})")
-                    raise DependencyGraphError(f"Dependency graph cannot resolve. Blocked tasks: {'; '.join(blocked)}")
-                break
+                    print(f"Warning: Cannot schedule remaining pending tasks. They are blocked by uncompleted dependencies: {'; '.join(blocked)}")
+                    break
                 
             waves.append(current_wave)
             for t in current_wave:
@@ -909,10 +940,51 @@ Mandatory rules:
         import subprocess, shutil, sys, os
         has_code = shutil.which("code") is not None
         if GUI_DIFF_ENABLED and has_code:
-            print("Review proposed changes for the wave in VS Code.", file=sys.stderr)
-            args = ["code", "--wait"] + wave_tmp_files
-            await asyncio.to_thread(subprocess.run, args, check=False)
-        else:
+            print("Opening proposed changes in VS Code for review...", file=sys.stderr)
+            
+            # Read memory.md to map target to task ID
+            task_mapping = {}
+            if os.path.exists("memory.md"):
+                with open("memory.md", "r") as f:
+                    for line in f:
+                        parts = [p.strip() for p in line.split("|")]
+                        if len(parts) >= 5 and parts[4] == "planned":
+                            task_id, target = parts[2], parts[3]
+                            task_mapping[target] = task_id
+
+            for tmp_path in wave_tmp_files:
+                basename = os.path.basename(tmp_path)
+                actual_filename = basename.split("_", 1)[1] if "_" in basename else basename
+                actual_filename = actual_filename.replace(".tmp", "").replace("__", "/")
+                
+                # Check for rollback backup first to guarantee accurate diffs
+                rollback_path = None
+                task_id = task_mapping.get(actual_filename)
+                if task_id:
+                    encoded_path = actual_filename.replace("/", "__")
+                    possible_rollback = os.path.join(".dumbledoer", "rollbacks", task_id, encoded_path)
+                    if os.path.exists(possible_rollback):
+                        rollback_path = possible_rollback
+                
+                # Try fallback global rollback format if task-specific isn't found
+                if not rollback_path:
+                    import glob
+                    encoded_path = actual_filename.replace("/", "__")
+                    matches = glob.glob(f".dumbledoer/rollbacks/*_{encoded_path}.bak")
+                    if matches:
+                        rollback_path = matches[0]
+
+                if rollback_path:
+                    args = ["code", "--wait", "--diff", rollback_path, tmp_path]
+                elif os.path.exists(actual_filename):
+                    args = ["code", "--wait", "--diff", actual_filename, tmp_path]
+                else:
+                    args = ["code", "--wait", tmp_path]
+                print(f"Opening diff in VS Code: {' '.join(args)}")
+                await asyncio.to_thread(subprocess.run, args, check=False)
+        
+        # Always show terminal diff for fallback/quick review
+        if True:
             import difflib
             from rich.syntax import Syntax
             from rich.console import Console
@@ -923,10 +995,38 @@ Mandatory rules:
                 actual_filename = actual_filename.replace(".tmp", "").replace("__", "/")
                 
                 original_text = ""
-                if os.path.exists(actual_filename):
+                
+                # Check for rollback backup first to guarantee accurate diffs
+                rollback_path = None
+                task_id = None
+                if os.path.exists("memory.md"):
+                    with open("memory.md", "r") as mem:
+                        for line in mem:
+                            parts = [p.strip() for p in line.split("|")]
+                            if len(parts) >= 5 and parts[4] == "planned" and parts[3] == actual_filename:
+                                task_id = parts[2]
+                                break
+                                
+                if task_id:
+                    encoded_path = actual_filename.replace("/", "__")
+                    possible_rollback = os.path.join(".dumbledoer", "rollbacks", task_id, encoded_path)
+                    if os.path.exists(possible_rollback):
+                        rollback_path = possible_rollback
+                                
+                if not rollback_path:
+                    import glob
+                    encoded_path = actual_filename.replace("/", "__")
+                    matches = glob.glob(f".dumbledoer/rollbacks/*_{encoded_path}.bak")
+                    if matches:
+                        rollback_path = matches[0]
+
+                if rollback_path:
+                    with open(rollback_path, "r") as f:
+                        original_text = f.read()
+                elif os.path.exists(actual_filename):
                     with open(actual_filename, "r") as f:
                         original_text = f.read()
-                        
+
                 with open(tmp_path, "r") as f:
                     new_text = f.read()
                     
@@ -945,7 +1045,11 @@ Mandatory rules:
         from rich.prompt import Prompt
         from rich.console import Console
         console = Console()
-        choice = Prompt.ask("Approve wave changes? [Y(all)/N(none)/S(select)]", choices=["Y", "N", "S"], default="Y")
+        if GUI_DIFF_ENABLED:
+            choice = Prompt.ask("Approve wave changes? [Y(all)/N(none)/S(select)]", choices=["Y", "N", "S"], default="Y")
+        else:
+            console.print("[green]Auto-approving wave changes (run with -v to review)[/green]")
+            choice = "Y"
         rejected_files = set()
         if choice == "S":
             sel = Prompt.ask("Enter filenames to reject (comma separated)")
@@ -983,6 +1087,9 @@ Mandatory rules:
                     await state.update_task_status(task_id, "pending")
             else:
                 if os.path.exists(tmp_path):
+                    target_dir = os.path.dirname(target_path)
+                    if target_dir:
+                        os.makedirs(target_dir, exist_ok=True)
                     os.replace(tmp_path, target_path)
                 console.print(f"[green]Approved changes for {actual_filename}[/green]")
                 if task_id:
@@ -997,7 +1104,10 @@ Mandatory rules:
         if command == "resume":
             OrphanRecoveryScanner().run()
             # we can fall through to normal execution if it resumes agent logic, or just run the scanner
-        await self.connect_mcp()
+        
+        # Skip MCP initialization for commands that do not need structural code analysis or semantic search
+        if command not in ("status", "rollback"):
+            await self.connect_mcp()
         try:
             if command == "rollback":
                 if not args:
@@ -1019,15 +1129,58 @@ Mandatory rules:
                 return
     
             if command == "execute":
+                import glob
+                existing_tmps = set(glob.glob(".dumbledoer/tmp/*.tmp"))
+                if existing_tmps:
+                    print(f"Found {len(existing_tmps)} unreviewed files from a previous run. Starting review...")
+                    await self.batch_diff_review(list(existing_tmps))
+                
                 waves = self.get_pending_waves()
                 if not waves:
                     print("No pending tasks to execute.")
+                # Fetch max_parallel_tasks from memory.md
+                max_parallel = 0
+                try:
+                    with get_registry_lock():
+                        with open("memory.md", "r", encoding="utf-8") as f:
+                            content = f.read()
+                        config_start, config_end = ASTMemoryMapper.locate_heading_block(content, "##", "Config")
+                        if config_start != -1:
+                            for line in content.splitlines()[config_start:config_end]:
+                                if "- max_parallel_tasks:" in line:
+                                    max_parallel = int(line.split(":")[1].strip())
+                except Exception:
+                    pass
+
                 for i, wave in enumerate(waves):
                     print(f"Starting execution wave {i+1} with {len(wave)} tasks...")
-                    import glob
                     before_tmps = set(glob.glob(".dumbledoer/tmp/*.tmp"))
                     try:
-                        await asyncio.gather(*[self.execute_task(t['id'], t['desc']) for t in wave])
+                        from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
+                        from rich.console import Console
+                        with Progress(
+                            SpinnerColumn(),
+                            TextColumn("[progress.description]{task.description}"),
+                            BarColumn(),
+                            TaskProgressColumn(),
+                            console=Console(force_terminal=True),
+                        ) as progress:
+                            wave_task = progress.add_task(f"[cyan]Executing Wave {i+1}/{len(waves)}...", total=len(wave))
+                            
+                            if max_parallel > 0:
+                                sem = asyncio.Semaphore(max_parallel)
+                                async def run_with_sem(t):
+                                    async with sem:
+                                        res = await self.execute_task(t['id'], t['desc'])
+                                        progress.advance(wave_task)
+                                        return res
+                                await asyncio.gather(*[run_with_sem(t) for t in wave])
+                            else:
+                                async def run_task(t):
+                                    res = await self.execute_task(t['id'], t['desc'])
+                                    progress.advance(wave_task)
+                                    return res
+                                await asyncio.gather(*[run_task(t) for t in wave])
                     except BudgetExhaustedException:
                         await self._graceful_shutdown()
                         break
@@ -1039,7 +1192,10 @@ Mandatory rules:
                 self.chat_session = self.client.aio.chats.create(model=getattr(self, "model", "gemini-3.6-flash"), config={"tools": list(self.gemini_tools), "automatic_function_calling": {"disable": True}})
                 sys_inst = await self._get_system_instructions(command)
                 payload = f"{sys_inst}\n\nUSER DIRECTIVE: Execute the `{command}` command with arguments {args}. Follow your COMMAND SPECIFIC INSTRUCTIONS strictly. Do not ask for user input if a tool can accomplish the task."
-                response = await self._run_with_tools(self.chat_session, payload)
+                from rich.console import Console
+                console = Console()
+                with console.status(f"[bold cyan]Running {command} agent...", spinner="dots") as status:
+                    response = await self._run_with_tools(self.chat_session, payload, status=status)
                 if response.function_calls:
                     print("Function Calls that were not handled:", response.function_calls)
                 print(response.text)
@@ -1243,11 +1399,11 @@ async def main_async():
         help="The dumbledoer command to run"
     )
     parser.add_argument("--model", default=os.getenv("AGY_MODEL", "gemini-3.6-flash"), help="Model override")
-    parser.add_argument("--no-gui", action="store_true", help="Disable GUI diff-gate for headless environments")
+    parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose mode (e.g. GUI diff-gate in VS Code)")
     args, unknown = parser.parse_known_args()
     
     global GUI_DIFF_ENABLED
-    GUI_DIFF_ENABLED = not args.no_gui
+    GUI_DIFF_ENABLED = args.verbose
     
     if GUI_DIFF_ENABLED:
         try:

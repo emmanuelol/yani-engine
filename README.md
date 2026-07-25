@@ -100,7 +100,7 @@ You can interact with DumbleDoer using the following slash commands within `agy`
   Ingests documentation, conducts a Discovery Q&A, performs edge-case detection, and registers an atomic task plan in the `memory.md` file.
 
 * **/dumbledoer execute**
-  Executes the registered tasks in dependency order. It utilizes concurrent Gemini calls where there are no overlapping output files. If token bloat is detected, it invokes RTK to clean the workspace.
+  Executes the registered tasks in dependency order. It utilizes concurrent Gemini calls where there are no overlapping output files. Changes are automatically approved by default unless you pass the `-v` (verbose) flag for manual Diff-Gate review. Rich progress bars visualize task advancement directly in the terminal. If token bloat is detected, it invokes RTK to clean the workspace.
 
 * **/dumbledoer resume**
   Detects interrupted tasks or stale locks, offering you options to safely resume from a checkpoint, roll back, or defer the task.
