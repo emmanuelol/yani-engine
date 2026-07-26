@@ -1,7 +1,5 @@
 import sys
-import sys
 import os
-import sys
 import inspect
 import asyncio
 from dotenv import load_dotenv
@@ -204,12 +202,17 @@ def _write_file(path: str, content: str) -> str:
 async def update_memory_registry(target: str, replacement: str) -> str:
     """Updates the memory.md file securely with exponential backoff on lock timeouts."""
     def _do_update():
-        with FileLock("memory.md.lock", timeout=60):
+        with get_registry_lock():
+          with FileLock("memory.md.lock", timeout=60):
             with open("memory.md", "r", encoding="utf-8") as f:
                 current_content = f.read()
             
             if target not in current_content:
                 return "Error: Target block not found in memory.md. Stale state or invalid target string."
+
+            occurrences = current_content.count(target)
+            if occurrences > 1:
+                return f"Error: Target string matches {occurrences} locations in memory.md. Provide a more specific target to avoid ambiguous replacement."
                 
             new_content = current_content.replace(target, replacement, 1)
             
@@ -309,8 +312,8 @@ class TaskRegistryState:
                                 "outputs": target_files,
                                 "original_line": line
                             }
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"Warning: Failed to load tasks from memory.md: {e}", file=sys.stderr)
             self.save_tasks(tasks)
             return tasks
 
@@ -335,13 +338,21 @@ class TaskRegistryState:
                 if start_idx == -1: return
                 
                 lines = content.splitlines()
+
+                # Find actual table header line (contains "Task ID"), not the section heading
+                header_line = next((l for l in lines[start_idx+1:end_idx] if "|" in l and "Task ID" in l), None)
+                if header_line:
+                    headers = [h.strip() for h in header_line.split("|") if h.strip()]
+                    stat_idx = headers.index("Status") + 1 if "Status" in headers else 4
+                else:
+                    stat_idx = 4
+
                 new_block = []
                 for line in lines[start_idx+1:end_idx]:
                     parts = [p.strip() for p in line.split("|")]
                     if len(parts) >= 5 and "Task ID" not in parts[1] and not parts[1].strip().startswith("---"):
                         tid = parts[1].strip()
                         if tid in tasks:
-                            stat_idx = next((i for i, h in enumerate([h.strip() for h in content.splitlines()[start_idx].split("|") if h.strip()]) if h == "Status"), 3) + 1
                             if len(parts) > stat_idx:
                                 parts[stat_idx] = f" {tasks[tid]['status']} "
                             else:
@@ -355,11 +366,11 @@ class TaskRegistryState:
                 new_content = "\n".join(lines[:start_idx+1] + new_block + lines[end_idx:])
                 with open(self.md_path, "w", encoding="utf-8") as f:
                     f.write(new_content)
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"Warning: Failed to sync task registry to markdown: {e}", file=sys.stderr)
 
 async def write_file_with_review(path: str, content: str) -> str:
-    """Writes content to a file via a VS Code Diff-Gate for user approval."""
+    """Writes content to a file immediately (for valid test runs), with rollback copy and shadow .tmp for diff review."""
     try:
         try:
             import subprocess
@@ -402,10 +413,16 @@ async def write_file_with_review(path: str, content: str) -> str:
         await manager.log_planned_change(path, metadata)
         await manager.write_checkpoint_json(checkpoint_path, metadata)
         
+        # Write directly to target path so execute_bash/pytest tests run against actual new code
+        os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(content)
+
+        # Also write shadow .tmp copy for batch_diff_review workflow
         with open(tmp_path, "w") as f:
             f.write(content)
             
-        return f"Successfully staged changes for {path} (Pending wave review)"
+        return f"Successfully applied changes to {path} (Rollback: {rollback_path}, Review: {tmp_path})"
     except Exception as e:
         return f"Error in write_file_with_review for {path}: {e}"
 
@@ -548,6 +565,10 @@ class OrphanRecoveryScanner:
             
             # O1/O2: Handle .tmp files
             for file in glob.glob(os.path.join(tmp_dir, "*.tmp")):
+                # Safety guard: skip recently-created files that may belong to active concurrent tasks
+                import time
+                if time.time() - os.path.getmtime(file) < 60:
+                    continue
                 try:
                     # Find corresponding target by decoding the path
                     basename = os.path.basename(file)
@@ -613,6 +634,21 @@ class DumbleDoerCLI:
         self.mcp_locks = {}
         self.local_tools = [read_file, write_file_with_review, execute_bash, update_memory_registry, run_rtk, add_task]
         self.gemini_tools = list(self.local_tools)
+
+    # Dynamic tool filtering per command to reduce token consumption
+    COMMAND_TOOL_WHITELIST = {
+        "iterate": {"add_task", "read_file", "codegraph_search"},
+        "status":  {"read_file"},
+        "rollback": {"read_file", "execute_bash"},
+        "report":  {"read_file", "execute_bash", "update_memory_registry"},
+        "audit":   {"read_file", "execute_bash", "codegraph_callers", "codegraph_affected"},
+    }
+
+    def _get_tools_for_command(self, command: str):
+        allowed = self.COMMAND_TOOL_WHITELIST.get(command)
+        if not allowed:
+            return self.gemini_tools
+        return [t for t in self.gemini_tools if getattr(t, "__name__", "") in allowed]
         
         # Initialize BudgetManager
         try:
@@ -738,7 +774,7 @@ class DumbleDoerCLI:
                 # Late binding requires a factory to capture the name correctly in the closure
                 def create_dummy(name):
                     async def dummy_fallback(query: str = "", target: str = "", symbol: str = "", depth: int = 3, **kwargs) -> str:
-                        return f"Error: [{name} Degraded] Tool not available from MCP server. Please use alternative tools like grep_search or read_file instead."
+                        return f"Error: [{name} Degraded] Tool not available. DO NOT retry this tool — use read_file or execute_bash instead."
                     dummy_fallback.__name__ = name
                     dummy_fallback.__qualname__ = name
                     dummy_fallback.__doc__ = f"Fallback dummy for {name}."
@@ -774,14 +810,36 @@ class DumbleDoerCLI:
         await asyncio.to_thread(_shutdown)
         print("Graceful Shutdown Sequence Complete. State preserved in memory.md.")
 
+    async def _get_sliced_memory(self, sections: list) -> str:
+        """Extracts only specified sections from memory.md to minimize token consumption."""
+        content = await self.local_tools[0]("memory.md")
+        if not content or content.startswith("Error"):
+            return "Memory state unavailable."
+        sliced = []
+        capture = False
+        for line in content.splitlines():
+            if any(line.strip().startswith(f"## {s}") for s in sections):
+                capture = True
+            elif line.strip().startswith("## ") and capture:
+                capture = False
+            if capture:
+                sliced.append(line)
+        return "\n".join(sliced) if sliced else content
+
     async def _get_system_instructions(self, command: str = None):
+        # For iterate, only inject Goal/Scope/Task Registry to save ~30k tokens
+        if command == "iterate":
+            memory_content = await self._get_sliced_memory(["Project Goal", "Scope", "Task Registry"])
+        else:
+            memory_content = await self.local_tools[0]("memory.md") or "No memory.md found. Start a new project."
+
         instructions = [
             "# MISSION",
             "You are DumbleDoer, an Agent Engineering Harness. Your goal is to systematically analyze, improve, and validate agent projects.",
             await self.local_tools[0](os.path.join(self.plugin_root, "SYSTEM_INSTRUCTIONS.md")) or "Core rules not found.",
             await self.local_tools[0](os.path.join(self.plugin_root, "lib", "common-preamble.md")) or "",
             await self.local_tools[0](os.path.join(self.plugin_root, "lib", "compression-policy.md")) or "",
-            await self.local_tools[0]("memory.md") or "No memory.md found. Start a new project."
+            memory_content
         ]
         if command and command != "execute":
             skill_path = os.path.join(self.plugin_root, "skills", command, "INSTRUCTIONS.md")
@@ -797,6 +855,8 @@ class DumbleDoerCLI:
         import re
         max_retries = 8
         base_delay = 15
+        total_elapsed = 0
+        max_total_wait = 120  # Hard cap: 2 minutes total backoff
         for attempt in range(max_retries):
             try:
                 return await chat_session.send_message(payload)
@@ -810,8 +870,10 @@ class DumbleDoerCLI:
                         delay = int(match.group(1)) + random.uniform(2, 5)
                     else:
                         delay = base_delay * (1.5 ** attempt) + random.uniform(0, 5)
+                    if total_elapsed + delay > max_total_wait:
+                        raise RuntimeError(f"Rate limit backoff exceeded {max_total_wait}s total wait ({total_elapsed:.0f}s elapsed)")
                     print(f"API Rate Limit (429) hit. Task pausing for {delay:.1f}s before retry {attempt+1}/{max_retries}...")
-                    import asyncio
+                    total_elapsed += delay
                     await asyncio.sleep(delay)
                 else:
                     raise
@@ -819,6 +881,7 @@ class DumbleDoerCLI:
 
     async def _run_with_tools(self, chat_session, initial_payload, status=None):
         response = await self._send_message_with_backoff(chat_session, initial_payload)
+        degraded_consecutive = 0  # Track consecutive degraded tool calls to prevent infinite loops
         while response.function_calls:
             from google.genai.types import Part
             parts = []
@@ -844,6 +907,19 @@ class DumbleDoerCLI:
                             result = await tool_func(**args)
                         else:
                             result = tool_func(**args)
+
+                        # Track consecutive degraded tool responses
+                        if isinstance(result, str) and "Degraded] Tool not available" in result:
+                            degraded_consecutive += 1
+                            if degraded_consecutive >= 3:
+                                parts.append(Part.from_function_response(
+                                    name=tool_name,
+                                    response={"error": f"STOP: {tool_name} is degraded. All codegraph tools are unavailable this session. Use read_file and execute_bash only."}
+                                ))
+                                continue
+                        else:
+                            degraded_consecutive = 0
+
                         parts.append(Part.from_function_response(
                             name=tool_name,
                             response={"result": str(result)}
@@ -866,11 +942,20 @@ class DumbleDoerCLI:
             if status:
                 status.update("[bold cyan]Agent analyzing tool results...")
             response = await self._send_message_with_backoff(chat_session, parts)
+
+            # Mid-loop budget check to prevent unbounded token consumption
+            if hasattr(response, 'usage_metadata') and response.usage_metadata:
+                self.budget_manager.add_tokens(getattr(response.usage_metadata, 'total_token_count', 0))
+            try:
+                self.budget_manager.check_and_harvest()
+            except BudgetExhaustedException:
+                print("Budget threshold reached during tool loop. Stopping execution.", file=sys.stderr)
+                raise
         return response
 
     async def execute_task(self, task_id: str, description: str):
         print(f"Executing task {task_id}: {description}")
-        chat_session = self.client.aio.chats.create(model=getattr(self, "model", "gemini-3.6-flash"), config={"tools": list(self.gemini_tools), "automatic_function_calling": {"disable": True}})
+        chat_session = self.client.aio.chats.create(model=getattr(self, "model", "gemini-2.5-flash"), config={"tools": list(self.gemini_tools), "automatic_function_calling": {"disable": True}})
         system_instructions = await self._get_system_instructions()
         prompt_payload = f"""{system_instructions}
 
@@ -1080,17 +1165,26 @@ Mandatory rules:
                 pass
 
             if actual_filename in rejected_files or basename in rejected_files:
+                # Option B: File was already written to disk, so restore from rollback backup
+                rollback_restored = False
                 if os.path.exists(tmp_path):
                     os.remove(tmp_path)
-                console.print(f"[yellow]Rejected changes for {actual_filename}[/yellow]")
+                # Find and restore from rollback backup
+                import glob as _glob
+                encoded_path = actual_filename.replace("/", "__")
+                rollback_matches = _glob.glob(f".dumbledoer/rollbacks/*_{encoded_path}.bak")
+                if rollback_matches:
+                    os.replace(rollback_matches[0], target_path)
+                    rollback_restored = True
+                    console.print(f"[yellow]Rejected and rolled back changes for {actual_filename}[/yellow]")
+                else:
+                    console.print(f"[yellow]Rejected changes for {actual_filename} (no rollback found, file may be modified)[/yellow]")
                 if task_id:
                     await state.update_task_status(task_id, "pending")
             else:
+                # Option B: File already applied to disk, just clean up shadow .tmp
                 if os.path.exists(tmp_path):
-                    target_dir = os.path.dirname(target_path)
-                    if target_dir:
-                        os.makedirs(target_dir, exist_ok=True)
-                    os.replace(tmp_path, target_path)
+                    os.remove(tmp_path)
                 console.print(f"[green]Approved changes for {actual_filename}[/green]")
                 if task_id:
                     await state.update_task_status(task_id, "completed")
@@ -1098,7 +1192,7 @@ Mandatory rules:
         if rejected_files:
             await asyncio.to_thread(OrphanRecoveryScanner().run)
 
-    async def run(self, command: str, args: list, model: str = "gemini-3.6-flash"):
+    async def run(self, command: str, args: list, model: str = "gemini-2.5-flash"):
         self.model = model
         print(f"DumbleDoer running command: {command}")
         if command == "resume":
@@ -1106,7 +1200,7 @@ Mandatory rules:
             # we can fall through to normal execution if it resumes agent logic, or just run the scanner
         
         # Skip MCP initialization for commands that do not need structural code analysis or semantic search
-        if command not in ("status", "rollback"):
+        if command not in ("status", "rollback", "report"):
             await self.connect_mcp()
         try:
             if command == "rollback":
@@ -1189,7 +1283,7 @@ Mandatory rules:
                     if wave_tmps:
                         await self.batch_diff_review(wave_tmps)
             else:
-                self.chat_session = self.client.aio.chats.create(model=getattr(self, "model", "gemini-3.6-flash"), config={"tools": list(self.gemini_tools), "automatic_function_calling": {"disable": True}})
+                self.chat_session = self.client.aio.chats.create(model=getattr(self, "model", "gemini-2.5-flash"), config={"tools": self._get_tools_for_command(command), "automatic_function_calling": {"disable": True}})
                 sys_inst = await self._get_system_instructions(command)
                 payload = f"{sys_inst}\n\nUSER DIRECTIVE: Execute the `{command}` command with arguments {args}. Follow your COMMAND SPECIFIC INSTRUCTIONS strictly. Do not ask for user input if a tool can accomplish the task."
                 from rich.console import Console
@@ -1398,7 +1492,7 @@ async def main_async():
         choices=["start", "execute", "resume", "report", "rollback", "update-docs", "audit", "iterate", "status"],
         help="The dumbledoer command to run"
     )
-    parser.add_argument("--model", default=os.getenv("AGY_MODEL", "gemini-3.6-flash"), help="Model override")
+    parser.add_argument("--model", default=os.getenv("AGY_MODEL", "gemini-2.5-flash"), help="Model override")
     parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose mode (e.g. GUI diff-gate in VS Code)")
     args, unknown = parser.parse_known_args()
     

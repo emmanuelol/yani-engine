@@ -48,7 +48,7 @@ Don't forget to reload your profile or restart your terminal:
 source ~/.bashrc # or source ~/.zshrc
 ```
 
-3. **Model Tiering:** DumbleDoer uses a default model for basic orchestration, but you can override this to utilize advanced reasoning models. You can do this by setting the `AGY_MODEL` environment variable (e.g., `export AGY_MODEL="gemini-2.5-pro"`) or by passing the `--model` flag (e.g., `--model gemini-2.5-pro`) when running commands.
+3. **Model Tiering:** DumbleDoer defaults to `gemini-2.5-flash` for orchestration, but you can override this to utilize advanced reasoning models. You can do this by setting the `AGY_MODEL` environment variable (e.g., `export AGY_MODEL="gemini-2.5-pro"`) or by passing the `--model` flag (e.g., `--model gemini-2.5-pro`) when running commands.
 
 ---
 
@@ -74,8 +74,31 @@ That's it! DumbleDoer is now hooked into your `agy` environment. 🎉
 ## 🛡️ VS Code Diff-Gate & Zero-Trust Sandbox
 
 DumbleDoer prioritizes safety during execution:
-* **VS Code Diff-Gate**: A Human-in-the-Loop review system intercepts any file modifications. DumbleDoer will automatically open a diff in your active VS Code instance, allowing you to explicitly approve or reject the agent's proposed changes. If VS Code is unavailable (e.g. running in an SSH session without GUI), you can pass the `--no-gui` flag to fall back to a terminal-native `rich` diff.
+* **VS Code Diff-Gate (Option B Flow)**: File changes are written directly to disk so that test runners (`pytest`, `ruff`, etc.) always validate against the actual updated code. A shadow `.tmp` copy is simultaneously created for the diff review workflow. If you reject a change during review, DumbleDoer automatically restores the original file from its rollback backup (`.dumbledoer/rollbacks/`). If VS Code is unavailable (e.g. running in an SSH session without GUI), you can pass the `--no-gui` flag to fall back to a terminal-native `rich` diff.
 * **Zero-Trust Docker Sandbox**: Sub-agents execute testing and validation within an isolated Docker sandbox. Note: **this requires the host Docker daemon to be running** for DumbleDoer to execute bash commands, run test suites, or interact with external dependencies securely.
+
+---
+
+## ⚡ Token Optimization Architecture
+
+DumbleDoer employs several techniques to minimize API token consumption across multi-turn sessions:
+
+* **Dynamic Tool Filtering**: Each command receives only the tool definitions it actually needs. For example, `iterate` gets only `add_task`, `read_file`, and `codegraph_search` — saving ~15,000–20,000 input tokens per call versus loading all 60–100 tools.
+* **Sliced Memory Ingestion**: The `iterate` command injects only the `## Project Goal`, `## Scope`, and `## Task Registry` sections from `memory.md` instead of the full file — saving ~10,000–30,000 tokens per call.
+* **Selective MCP Initialization**: Commands that don't need structural code analysis (`status`, `rollback`, `report`) skip CodeGraph and Context7 MCP server startup entirely.
+* **Mid-Loop Budget Enforcement**: The `BudgetManager` checks token consumption after every tool response cycle (not just at the end of a task), preventing unbounded token growth during long tool loops.
+* **Degraded Tool Loop Breaker**: If CodeGraph MCP servers are unavailable, dummy fallback tools are injected. After 3 consecutive degraded tool calls, the engine injects a `STOP` directive forcing the LLM to switch to alternatives — preventing infinite retry loops.
+
+---
+
+## 🔒 Concurrency Safety
+
+DumbleDoer executes tasks in parallel waves via `asyncio.gather`. To prevent state corruption:
+
+* **Unified Locking**: `memory.md` updates acquire both a thread-level `RLock` and a process-level `FileLock`, protecting against races in both parallel async tasks and multi-process sub-agents.
+* **Ambiguity Guard**: The `update_memory_registry` tool rejects replacement targets that match multiple locations in `memory.md`, preventing silent state corruption from ambiguous `str.replace()` calls.
+* **Orphan Recovery Safety**: The `OrphanRecoveryScanner` skips `.tmp` files younger than 60 seconds, preventing deletion of files being actively written by concurrent sub-agents.
+* **Backoff Cap**: API rate-limit retries are capped at 120 seconds total wait time, preventing indefinite stalls that block dependent execution waves.
 
 ---
 
@@ -100,7 +123,13 @@ You can interact with DumbleDoer using the following slash commands within `agy`
   Ingests documentation, conducts a Discovery Q&A, performs edge-case detection, and registers an atomic task plan in the `memory.md` file.
 
 * **/dumbledoer execute**
-  Executes the registered tasks in dependency order. It utilizes concurrent Gemini calls where there are no overlapping output files. Changes are automatically approved by default unless you pass the `-v` (verbose) flag for manual Diff-Gate review. Rich progress bars visualize task advancement directly in the terminal. If token bloat is detected, it invokes RTK to clean the workspace.
+  Executes the registered tasks in dependency order. It utilizes concurrent Gemini calls where there are no overlapping output files. Changes are applied directly to disk (with rollback backups) and auto-approved by default unless you pass the `-v` (verbose) flag for manual Diff-Gate review. Rich progress bars visualize task advancement directly in the terminal. If token bloat is detected, it invokes RTK to clean the workspace.
+
+* **/dumbledoer iterate**
+  Evaluates a user prompt against the current project state and decomposes it into atomic tasks, registering them in the Task Registry. Uses sliced memory ingestion and filtered tools for minimal token consumption.
+
+* **/dumbledoer audit**
+  Runs the QA Harness Loop — evaluates completed tasks against their success criteria and autonomously generates fix tasks if bugs are found.
 
 * **/dumbledoer resume**
   Detects interrupted tasks or stale locks, offering you options to safely resume from a checkpoint, roll back, or defer the task.
@@ -113,6 +142,9 @@ You can interact with DumbleDoer using the following slash commands within `agy`
 
 * **/dumbledoer update-docs**
   Syncs your project's documentation with the current codebase utilizing CodeGraph structural analysis to ensure everything is up to date.
+
+* **/dumbledoer status**
+  Shows the Task Registry, session summary, budget usage, and CodeGraph health for the current improvement session.
 
 ---
 
