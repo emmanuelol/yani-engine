@@ -620,6 +620,45 @@ async def add_task(task_id: str, title: str, task_type: str = "change", deps: st
                 return f"Error adding task: {e}"
     return await asyncio.to_thread(_write)
 
+async def record_knowledge(title: str, entry_type: str, description: str, rationale: str) -> str:
+    """Saves a durable learning (insight, failure, decision) to the Markdown Knowledge Vault before chat history is pruned."""
+    try:
+        import time
+        from datetime import datetime
+        k_id = f"K-{int(time.time())}"
+        slug = title.lower().replace(" ", "-")
+        slug = "".join(c for c in slug if c.isalnum() or c == "-")[:25]
+        filename = f"knowledge/entries/{k_id}-{slug}.md"
+
+        content = f"""---
+id: {k_id}
+title: "{title}"
+type: {entry_type}
+status: active
+created: {datetime.utcnow().isoformat()}Z
+session: manual
+tags: [knowledge-registry]
+---
+
+## Description
+{description}
+
+## Rationale
+{rationale}
+"""
+        os.makedirs("knowledge/entries", exist_ok=True)
+        with open(filename, "w", encoding="utf-8") as f:
+            f.write(content)
+
+        # Auto-sync the index using DumbleDoer's built-in script
+        if os.path.exists("sync_knowledge.py"):
+            import subprocess
+            subprocess.run([sys.executable, "sync_knowledge.py"], capture_output=True)
+
+        return f"Successfully recorded learning to {filename} and synced knowledge/index.md"
+    except Exception as e:
+        return f"Error recording knowledge: {e}"
+
 class DumbleDoerCLI:
     def __init__(self):
         self.plugin_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -632,7 +671,7 @@ class DumbleDoerCLI:
         self.exit_stack = AsyncExitStack()
         self.mcp_sessions = {}
         self.mcp_locks = {}
-        self.local_tools = [read_file, write_file_with_review, execute_bash, update_memory_registry, run_rtk, add_task]
+        self.local_tools = [read_file, write_file_with_review, execute_bash, update_memory_registry, run_rtk, add_task, record_knowledge]
         self.gemini_tools = list(self.local_tools)
 
     # Dynamic tool filtering per command to reduce token consumption
@@ -833,12 +872,28 @@ class DumbleDoerCLI:
         else:
             memory_content = await self.local_tools[0]("memory.md") or "No memory.md found. Start a new project."
 
+        # Load schemas and protocols
+        memory_schema = await self.local_tools[0](os.path.join(self.plugin_root, "lib", "memory-schema.md")) or ""
+        knowledge_protocol = await self.local_tools[0](os.path.join(self.plugin_root, "lib", "knowledge-protocol.md")) or ""
+
+        # OP-2 Selective Load: Inject the Knowledge Index as semantic memory
+        knowledge_index = await self.local_tools[0]("knowledge/index.md")
+        if not knowledge_index or knowledge_index.startswith("Error"):
+            knowledge_index = "Knowledge registry not yet initialized. Use the record_knowledge tool to capture insights."
+
         instructions = [
             "# MISSION",
             "You are DumbleDoer, an Agent Engineering Harness. Your goal is to systematically analyze, improve, and validate agent projects.",
             await self.local_tools[0](os.path.join(self.plugin_root, "SYSTEM_INSTRUCTIONS.md")) or "Core rules not found.",
             await self.local_tools[0](os.path.join(self.plugin_root, "lib", "common-preamble.md")) or "",
             await self.local_tools[0](os.path.join(self.plugin_root, "lib", "compression-policy.md")) or "",
+            "# KNOWLEDGE PROTOCOL",
+            knowledge_protocol,
+            "# MEMORY SCHEMA",
+            memory_schema,
+            "# DURABLE SEMANTIC MEMORY (Knowledge Vault)",
+            knowledge_index,
+            "# CURRENT STATE (Working Memory)",
             memory_content
         ]
         if command and command != "execute":
@@ -881,7 +936,12 @@ class DumbleDoerCLI:
 
     async def _run_with_tools(self, chat_session, initial_payload, status=None):
         response = await self._send_message_with_backoff(chat_session, initial_payload)
-        degraded_consecutive = 0  # Track consecutive degraded tool calls to prevent infinite loops
+        degraded_consecutive = 0  # Track consecutive degraded tool calls
+
+        # [CONTEXT MANAGEMENT CONFIG]
+        MAX_HISTORY_TURNS = 15  # Keep system prompt + last 14 turns
+        MAX_TOOL_OUTPUT_CHARS = 16000  # Hard cap tool outputs to ~4k tokens
+
         while response.function_calls:
             from google.genai.types import Part
             parts = []
@@ -908,8 +968,15 @@ class DumbleDoerCLI:
                         else:
                             result = tool_func(**args)
 
+                        # [THE BLEED VALVE: Tool Output Truncation]
+                        result_str = str(result)
+                        if len(result_str) > MAX_TOOL_OUTPUT_CHARS:
+                            if status:
+                                status.update(f"[bold red]Truncated massive output from {tool_name}...")
+                            result_str = result_str[:MAX_TOOL_OUTPUT_CHARS] + f"\n\n... [SYSTEM OVERRIDE: Output truncated at {MAX_TOOL_OUTPUT_CHARS} chars to prevent token exhaustion. You MUST use tools like `grep`, `head/tail`, or `codegraph_search` for targeted extraction.]"
+
                         # Track consecutive degraded tool responses
-                        if isinstance(result, str) and "Degraded] Tool not available" in result:
+                        if isinstance(result_str, str) and "Degraded] Tool not available" in result_str:
                             degraded_consecutive += 1
                             if degraded_consecutive >= 3:
                                 parts.append(Part.from_function_response(
@@ -922,7 +989,7 @@ class DumbleDoerCLI:
 
                         parts.append(Part.from_function_response(
                             name=tool_name,
-                            response={"result": str(result)}
+                            response={"result": result_str}
                         ))
                     except Exception as e:
                         msg = f"Tool {tool_name} failed: {e}"
@@ -941,7 +1008,21 @@ class DumbleDoerCLI:
             
             if status:
                 status.update("[bold cyan]Agent analyzing tool results...")
+
             response = await self._send_message_with_backoff(chat_session, parts)
+
+            # [THE SLIDING WINDOW: History Pruning]
+            # Slice the SDK's internal history list to drop stale middle turns while preserving
+            # history[0] (system prompt + initial payload) and maintaining User/Model role parity.
+            if hasattr(chat_session, '_history') and len(chat_session._history) > MAX_HISTORY_TURNS:
+                # Ensure we slice at an even boundary so User/Model turn parity isn't broken
+                slice_index = -(MAX_HISTORY_TURNS - 1)
+                if slice_index % 2 != 0:
+                    slice_index -= 1
+
+                chat_session._history = [chat_session._history[0]] + chat_session._history[slice_index:]
+                if status:
+                    status.update("[bold magenta]Context optimization: Pruned stale chat history...")
 
             # Mid-loop budget check to prevent unbounded token consumption
             if hasattr(response, 'usage_metadata') and response.usage_metadata:
@@ -951,6 +1032,7 @@ class DumbleDoerCLI:
             except BudgetExhaustedException:
                 print("Budget threshold reached during tool loop. Stopping execution.", file=sys.stderr)
                 raise
+
         return response
 
     async def execute_task(self, task_id: str, description: str):
