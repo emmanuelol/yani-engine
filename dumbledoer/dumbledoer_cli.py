@@ -108,6 +108,54 @@ class ASTMemoryMapper:
                 with open(file_path, "w", encoding="utf-8") as f:
                     f.write("\n".join(lines) + "\n")
 
+# ── Docker Warm-Pool Infrastructure ──
+_WARM_SANDBOX_NAME = "dumbledoer-sandbox"
+_WARM_SANDBOX_LOCK = __import__('threading').Lock()
+_WARM_SANDBOX_STARTED = False
+
+def _ensure_warm_sandbox(image: str = "dumbledoer-base:latest") -> bool:
+    """Ensures a persistent Docker sandbox container is running. Returns True if available."""
+    global _WARM_SANDBOX_STARTED
+    with _WARM_SANDBOX_LOCK:
+        if _WARM_SANDBOX_STARTED:
+            return True
+        try:
+            # Check if container already exists and is running
+            result = subprocess.run(
+                ["docker", "inspect", "-f", "{{.State.Running}}", _WARM_SANDBOX_NAME],
+                capture_output=True, text=True
+            )
+            if result.returncode == 0 and "true" in result.stdout.lower():
+                _WARM_SANDBOX_STARTED = True
+                return True
+
+            # Remove stale container if it exists but isn't running
+            subprocess.run(["docker", "rm", "-f", _WARM_SANDBOX_NAME], capture_output=True)
+
+            # Start persistent container with workspace mount
+            import platform
+            user_args = [] if platform.system() == "Windows" else ["--user", f"{os.getuid()}:{os.getgid()}"]
+            subprocess.run(
+                ["docker", "run", "-d", "-it", "--name", _WARM_SANDBOX_NAME] + user_args +
+                ["-v", f"{os.getcwd()}:/workspace", "-w", "/workspace", image, "/bin/bash"],
+                capture_output=True, text=True, check=True
+            )
+            _WARM_SANDBOX_STARTED = True
+            return True
+        except Exception:
+            return False  # Fallback to cold-boot
+
+def _teardown_warm_sandbox():
+    """Kills and removes the persistent Docker sandbox container."""
+    global _WARM_SANDBOX_STARTED
+    with _WARM_SANDBOX_LOCK:
+        try:
+            subprocess.run(["docker", "kill", _WARM_SANDBOX_NAME], capture_output=True)
+            subprocess.run(["docker", "rm", _WARM_SANDBOX_NAME], capture_output=True)
+        except Exception:
+            pass
+        _WARM_SANDBOX_STARTED = False
+
 async def execute_bash(command: str, sandbox_mode: str = None) -> str:
     def _read_mode():
         mode = "dumbledoer-base"
@@ -168,10 +216,14 @@ async def execute_bash(command: str, sandbox_mode: str = None) -> str:
                 image_name, "bash", "-c", command
             ]
         else:
-            args = ["docker", "run", "--rm"] + user_args + [
-                "-v", f"{os.getcwd()}:/workspace", "-w", "/workspace", 
-                "dumbledoer-base:latest", "bash", "-c", command
-            ]
+            # [WARM POOL] Use persistent sandbox if available, cold-boot fallback
+            if _ensure_warm_sandbox():
+                args = ["docker", "exec", _WARM_SANDBOX_NAME, "bash", "-c", command]
+            else:
+                args = ["docker", "run", "--rm"] + user_args + [
+                    "-v", f"{os.getcwd()}:/workspace", "-w", "/workspace", 
+                    "dumbledoer-base:latest", "bash", "-c", command
+                ]
             
         result = await asyncio.to_thread(subprocess.run, args, capture_output=True, text=True, check=True)
         return result.stdout
@@ -188,6 +240,47 @@ async def read_file(path: str) -> str:
         return await asyncio.to_thread(_read)
     except Exception as e:
         return f"Error reading file {path}: {e}"
+
+async def read_code_block(file_path: str, symbol_name: str) -> str:
+    """Reads a specific function, class, or method from a file using AST parsing. Returns only the relevant code block instead of the entire file."""
+    def _extract():
+        with open(file_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        lines = content.splitlines()
+
+        # Python AST: precise start/end line extraction
+        if file_path.endswith(".py"):
+            import ast
+            try:
+                tree = ast.parse(content)
+                for node in ast.walk(tree):
+                    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                        if node.name == symbol_name:
+                            start = node.lineno - 1
+                            end = node.end_lineno
+                            return f"# {file_path} lines {start+1}-{end}\n" + "\n".join(lines[start:end])
+            except SyntaxError:
+                pass  # Fall through to generic extraction
+
+        # Generic fallback: keyword + indentation-based block detection
+        for i, line in enumerate(lines):
+            if symbol_name in line and any(kw in line for kw in ["def ", "class ", "function ", "fn ", "func ", "struct ", "impl "]):
+                start = i
+                indent = len(line) - len(line.lstrip())
+                end = start + 1
+                while end < len(lines):
+                    stripped = lines[end].strip()
+                    if stripped and (len(lines[end]) - len(lines[end].lstrip())) <= indent and not stripped.startswith(("#", "//", "/*", "*", "@")):
+                        break
+                    end += 1
+                return f"# {file_path} lines {start+1}-{end}\n" + "\n".join(lines[start:end])
+
+        return f"Symbol '{symbol_name}' not found in {file_path}"
+
+    try:
+        return await asyncio.to_thread(_extract)
+    except Exception as e:
+        return f"Error reading code block: {e}"
 
 def _write_file(path: str, content: str) -> str:
     try:
@@ -671,7 +764,7 @@ class DumbleDoerCLI:
         self.exit_stack = AsyncExitStack()
         self.mcp_sessions = {}
         self.mcp_locks = {}
-        self.local_tools = [read_file, write_file_with_review, execute_bash, update_memory_registry, run_rtk, add_task, record_knowledge]
+        self.local_tools = [read_file, read_code_block, write_file_with_review, execute_bash, update_memory_registry, run_rtk, add_task, record_knowledge]
         self.gemini_tools = list(self.local_tools)
 
     # Dynamic tool filtering per command to reduce token consumption
@@ -680,7 +773,7 @@ class DumbleDoerCLI:
         "status":  {"read_file"},
         "rollback": {"read_file", "execute_bash"},
         "report":  {"read_file", "execute_bash", "update_memory_registry"},
-        "audit":   {"read_file", "execute_bash", "codegraph_callers", "codegraph_affected"},
+        "audit":   {"read_file", "read_code_block", "execute_bash", "codegraph_callers", "codegraph_affected"},
     }
 
     def _get_tools_for_command(self, command: str):
@@ -847,6 +940,7 @@ class DumbleDoerCLI:
                     f.write(content)
                     
         await asyncio.to_thread(_shutdown)
+        _teardown_warm_sandbox()
         print("Graceful Shutdown Sequence Complete. State preserved in memory.md.")
 
     async def _get_sliced_memory(self, sections: list) -> str:
@@ -1066,6 +1160,30 @@ Mandatory rules:
                 print(f"Task failed or budget threshold blocked retry: {e}")
                 await self._graceful_shutdown(task_id)
 
+    def _files_are_import_coupled(self, file_a: str, file_b: str) -> bool:
+        """Check if file_a imports file_b or vice versa using Python AST import analysis."""
+        try:
+            import ast
+            for src, target in [(file_a, file_b), (file_b, file_a)]:
+                if not os.path.exists(src) or not src.endswith(".py"):
+                    continue
+                with open(src, "r", encoding="utf-8") as f:
+                    tree = ast.parse(f.read())
+                # Derive module name from file path (e.g., "dumbledoer/cli.py" -> "cli", "dumbledoer.cli")
+                target_module = os.path.splitext(os.path.basename(target))[0]
+                target_dotpath = target.replace("/", ".").replace(".py", "")
+                for node in ast.walk(tree):
+                    if isinstance(node, ast.Import):
+                        for alias in node.names:
+                            if target_module in alias.name or target_dotpath in alias.name:
+                                return True
+                    elif isinstance(node, ast.ImportFrom):
+                        if node.module and (target_module in node.module or target_dotpath in node.module):
+                            return True
+            return False
+        except Exception:
+            return False  # Fail open: don't block parallelism on parse errors
+
     def get_pending_waves(self) -> list[list[dict]]:
         state = TaskRegistryState()
         tasks_dict = state.load_tasks()
@@ -1082,7 +1200,18 @@ Mandatory rules:
             for t_id, t in list(pending_tasks.items()):
                 if all(d in completed_task_ids for d in t['deps']):
                     task_files = set(t.get('outputs', []))
-                    if not task_files or not task_files.intersection(claimed_files_in_wave):
+
+                    # [SEMANTIC DEPENDENCY CHECK] Detect import coupling between task outputs
+                    import_coupled = False
+                    for claimed_file in claimed_files_in_wave:
+                        for task_file in task_files:
+                            if self._files_are_import_coupled(claimed_file, task_file):
+                                import_coupled = True
+                                break
+                        if import_coupled:
+                            break
+
+                    if not task_files or (not task_files.intersection(claimed_files_in_wave) and not import_coupled):
                         current_wave.append(t)
                         claimed_files_in_wave.update(task_files)
                         
@@ -1377,6 +1506,7 @@ Mandatory rules:
                 print(response.text)
 
         finally:
+            _teardown_warm_sandbox()
             self._archive_stale_sessions()
             await self.exit_stack.aclose()
 
