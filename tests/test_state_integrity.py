@@ -39,6 +39,10 @@ async def test_update_memory_registry_concurrency(tmp_path):
 @patch('rich.prompt.Confirm.ask', return_value=False)
 async def test_temp_file_collision(mock_confirm, mock_checkpoint, mock_which, mock_subprocess, tmp_path):
     """Test that concurrent write_file_with_review calls for same basename don't collide."""
+    from unittest.mock import AsyncMock
+    mock_checkpoint.return_value.write_rollback_copy = AsyncMock()
+    mock_checkpoint.return_value.log_planned_change = AsyncMock()
+    mock_checkpoint.return_value.write_checkpoint_json = AsyncMock()
     original_cwd = os.getcwd()
     os.chdir(tmp_path)
     try:

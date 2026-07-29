@@ -2,15 +2,20 @@
   "mcpServers": {
     "context7": {
       "command": "npx",
-      "args": ["-y", "@upstash/context7-mcp"]
+      "args": [
+        "-y",
+        "@upstash/context7-mcp"
+      ]
     },
     "codegraph": {
       "command": "npx",
-      "args": ["-y", "--package=@colbymchenry/codegraph", "codegraph", "serve", "--mcp"]
-    },
-    "dumbledoer": {
-      "command": "./.venv/bin/python",
-      "args": ["dumbledoer/dumbledoer_cli.py"]
+      "args": [
+        "-y",
+        "--package=@colbymchenry/codegraph",
+        "codegraph",
+        "serve",
+        "--mcp"
+      ]
     }
   }
 }

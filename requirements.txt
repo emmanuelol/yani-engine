@@ -1,5 +1,5 @@
 # Orchestrator & AI Core
-google-genai>=0.1.0
+google-genai>=2.8.0
 mcp>=0.1.0  # Model Context Protocol
 
 # Data Validation & Typing
@@ -23,3 +23,8 @@ certifi>=2024.0.0
 # Environment & Utils
 python-dotenv>=1.0.0
 distro>=1.9.0
+
+filelock>=3.13.0
+typing-extensions>=4.10.0
+pytest>=8.0.0
+pytest-asyncio>=0.23.0

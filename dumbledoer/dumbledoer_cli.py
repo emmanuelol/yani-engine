@@ -489,9 +489,26 @@ async def write_file_with_review(path: str, content: str) -> str:
         from datetime import datetime
         manager = CheckpointManager()
         chk_id = f"chk_{int(time.time())}"
+        
+        # Dynamically determine task_id
+        task_id = "manual-edit"
+        try:
+            with open("memory.md", "r") as f:
+                for line in f:
+                    if "| in_progress |" in line or " in_progress " in line:
+                        parts = [p.strip() for p in line.split("|")]
+                        if len(parts) >= 2 and parts[1].startswith("T-"):
+                            task_id = parts[1]
+                            break
+                        elif len(parts) >= 3 and parts[2].startswith("T-"):
+                            task_id = parts[2]
+                            break
+        except Exception:
+            pass
+
         metadata = {
             "Timestamp": datetime.now().isoformat(),
-            "Task ID": "manual-edit",
+            "Task ID": task_id,
             "Change Summary": f"Update {os.path.basename(path)} via Diff-Gate",
             "Rationale": "User-approved manual write_file_with_review",
             "Checkpoint ID": chk_id,
@@ -499,7 +516,7 @@ async def write_file_with_review(path: str, content: str) -> str:
             "Step": "diff-gate",
             "Files Snapshotted": path
         }
-        rollback_path = os.path.join(".dumbledoer", "rollbacks", f"{chk_id}_{encoded_path}.bak")
+        rollback_path = os.path.join(".dumbledoer", "rollbacks", task_id, encoded_path)
         checkpoint_path = os.path.join(".dumbledoer", "checkpoints", f"{chk_id}.json")
         
         await manager.write_rollback_copy(path, rollback_path)
@@ -601,12 +618,12 @@ class OrphanRecoveryScanner:
                     for line in lines:
                         if line.strip().startswith("|") and "---" not in line and "Timestamp" not in line:
                             parts = [p.strip() for p in line.split("|")]
-                            if len(parts) >= 7:
-                                # | Timestamp | Checkpoint ID | Task ID | Target Path | Action | Status | Rationale |
+                            if len(parts) >= 6:
+                                # | Timestamp | Task ID | Target Path | Summary | Status | Rationale |
                                 change_log.append({
                                     "chk_id": parts[2],
-                                    "target": parts[4],
-                                    "status": parts[6],
+                                    "target": parts[3],
+                                    "status": parts[5],
                                     "line_text": line,
                                 })
             except FileNotFoundError:
@@ -641,9 +658,18 @@ class OrphanRecoveryScanner:
             new_content = content
             for chk_id, entry in planned_chks.items():
                 target = entry["target"]
-                bak_files = glob.glob(os.path.join(bak_dir, f"{chk_id}_*.bak"))
-                if bak_files and os.path.exists(target):
-                    bak_file = bak_files[0]
+                encoded_path = target.replace("/", "__")
+                possible_rollback = os.path.join(bak_dir, chk_id, encoded_path)
+                
+                bak_file = None
+                if os.path.exists(possible_rollback):
+                    bak_file = possible_rollback
+                else:
+                    bak_files = glob.glob(os.path.join(bak_dir, f"{chk_id}_*.bak"))
+                    if bak_files:
+                        bak_file = bak_files[0]
+                        
+                if bak_file and os.path.exists(target):
                     if filecmp.cmp(target, bak_file, shallow=False):
                         new_status = "rolled-back"
                     else:
@@ -1270,12 +1296,10 @@ Mandatory rules:
                     if matches:
                         rollback_path = matches[0]
 
-                if rollback_path:
+                if rollback_path and os.path.exists(rollback_path):
                     args = ["code", "--wait", "--diff", rollback_path, tmp_path]
-                elif os.path.exists(actual_filename):
-                    args = ["code", "--wait", "--diff", actual_filename, tmp_path]
                 else:
-                    args = ["code", "--wait", tmp_path]
+                    args = ["code", "--wait", "--diff", os.devnull, tmp_path]
                 print(f"Opening diff in VS Code: {' '.join(args)}")
                 await asyncio.to_thread(subprocess.run, args, check=False)
         
@@ -1316,12 +1340,11 @@ Mandatory rules:
                     if matches:
                         rollback_path = matches[0]
 
-                if rollback_path:
+                if rollback_path and os.path.exists(rollback_path):
                     with open(rollback_path, "r") as f:
                         original_text = f.read()
-                elif os.path.exists(actual_filename):
-                    with open(actual_filename, "r") as f:
-                        original_text = f.read()
+                else:
+                    original_text = ""
 
                 with open(tmp_path, "r") as f:
                     new_text = f.read()
@@ -1383,11 +1406,18 @@ Mandatory rules:
                 # Find and restore from rollback backup
                 import glob as _glob
                 encoded_path = actual_filename.replace("/", "__")
-                rollback_matches = _glob.glob(f".dumbledoer/rollbacks/*_{encoded_path}.bak")
-                if rollback_matches:
-                    os.replace(rollback_matches[0], target_path)
+                possible_rollback = os.path.join(".dumbledoer", "rollbacks", task_id, encoded_path) if task_id else None
+                
+                if possible_rollback and os.path.exists(possible_rollback):
+                    os.replace(possible_rollback, target_path)
                     rollback_restored = True
                     console.print(f"[yellow]Rejected and rolled back changes for {actual_filename}[/yellow]")
+                else:
+                    rollback_matches = _glob.glob(f".dumbledoer/rollbacks/*_{encoded_path}.bak")
+                    if rollback_matches:
+                        os.replace(rollback_matches[0], target_path)
+                        rollback_restored = True
+                        console.print(f"[yellow]Rejected and rolled back changes for {actual_filename}[/yellow]")
                 else:
                     console.print(f"[yellow]Rejected changes for {actual_filename} (no rollback found, file may be modified)[/yellow]")
                 if task_id:

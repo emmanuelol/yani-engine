@@ -1,10 +1,98 @@
 {
-  "task-1": {
-    "id": "task-1",
-    "desc": "Call the codegraph_impact tool to search for \"test\" and print the result. This is just a test to verify the tool runs without KeyError.",
-    "title": "Call codegraph_impact tool to search for \"test\"",
+  "T-001": {
+    "id": "T-001",
+    "desc": "Fix safe_float ImportError in sales_reader.py",
+    "title": "Fix safe_float ImportError in sales_reader.py",
     "status": "completed",
     "deps": [],
-    "original_line": "| task-1 | Call codegraph_impact tool to search for \"test\" | test | pending | High | none | Low | TestAgent |"
+    "outputs": [],
+    "original_line": "|T-001|Fix safe_float ImportError in sales_reader.py|change| completed |\u2014|none|\u2014|none|"
+  },
+  "T-002": {
+    "id": "T-002",
+    "desc": "Fix Invalid Entrypoint Imports in inventory_tracker.py",
+    "title": "Fix Invalid Entrypoint Imports in inventory_tracker.py",
+    "status": "completed",
+    "deps": [],
+    "outputs": [],
+    "original_line": "|T-002|Fix Invalid Entrypoint Imports in inventory_tracker.py|change| completed |\u2014|none|\u2014|none|"
+  },
+  "T-003": {
+    "id": "T-003",
+    "desc": "Fix Unbound df_recipes in inventory_tracker.py",
+    "title": "Fix Unbound df_recipes in inventory_tracker.py",
+    "status": "completed",
+    "deps": [],
+    "outputs": [],
+    "original_line": "|T-003|Fix Unbound df_recipes in inventory_tracker.py|change| completed |\u2014|none|\u2014|none|"
+  },
+  "T-004": {
+    "id": "T-004",
+    "desc": "Fix Worksheet Title Mismatch in inventory_tracker.py",
+    "title": "Fix Worksheet Title Mismatch in inventory_tracker.py",
+    "status": "completed",
+    "deps": [],
+    "outputs": [],
+    "original_line": "|T-004|Fix Worksheet Title Mismatch in inventory_tracker.py|change| completed |\u2014|none|\u2014|none|"
+  },
+  "T-005": {
+    "id": "T-005",
+    "desc": "Upgrade Gemini Model to 2.6",
+    "title": "Upgrade Gemini Model to 2.6",
+    "status": "completed",
+    "deps": [],
+    "outputs": [],
+    "original_line": "|T-005|Upgrade Gemini Model to 2.6|change| completed |\u2014|none|\u2014|none|"
+  },
+  "T-006": {
+    "id": "T-006",
+    "desc": "Generate improvement report",
+    "title": "Generate improvement report",
+    "status": "completed",
+    "deps": [
+      "T-001",
+      "T-002",
+      "T-003",
+      "T-004",
+      "T-005"
+    ],
+    "outputs": [],
+    "original_line": "|T-006|Generate improvement report|report| completed |\u2014|T-001,T-002,T-003,T-004,T-005|\u2014|none|"
+  },
+  "T-007": {
+    "id": "T-007",
+    "desc": "Fix missing Config.INVENTORY_HEADERS in inventory_tracker.py",
+    "title": "Fix missing Config.INVENTORY_HEADERS in inventory_tracker.py",
+    "status": "completed",
+    "deps": [],
+    "outputs": [],
+    "original_line": "|T-007|Fix missing Config.INVENTORY_HEADERS in inventory_tracker.py|change| completed |\u2014|none|\u2014|none|"
+  },
+  "T-008": {
+    "id": "T-008",
+    "desc": "Fix app.core.logging ModuleNotFoundError in inventory_tracker.py",
+    "title": "Fix app.core.logging ModuleNotFoundError in inventory_tracker.py",
+    "status": "pending",
+    "deps": [],
+    "outputs": [],
+    "original_line": "|T-008|Fix app.core.logging ModuleNotFoundError in inventory_tracker.py|change| pending |\u2014|none|\u2014|none|"
+  },
+  "T-009": {
+    "id": "T-009",
+    "desc": "Fix NameError List not defined in alert_monitor.py",
+    "title": "Fix NameError List not defined in alert_monitor.py",
+    "status": "pending",
+    "deps": [],
+    "outputs": [],
+    "original_line": "|T-009|Fix NameError List not defined in alert_monitor.py|change| pending |\u2014|none|\u2014|none|"
+  },
+  "T-010": {
+    "id": "T-010",
+    "desc": "Fix ModuleNotFoundError for mcp in test_mcp.py",
+    "title": "Fix ModuleNotFoundError for mcp in test_mcp.py",
+    "status": "pending",
+    "deps": [],
+    "outputs": [],
+    "original_line": "|T-010|Fix ModuleNotFoundError for mcp in test_mcp.py|change| pending |\u2014|none|\u2014|none|"
   }
 }

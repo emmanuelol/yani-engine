@@ -1,20 +1,10 @@
 {
   "name": "iterate",
   "description": "Refines the current task plan by adding or adjusting tasks based on a new prompt.",
-  "options": [
-    {
-      "name": "prompt",
-      "type": "string",
-      "description": "Your new objective, feature request, or task definition.",
-      "required": true
-    }
-  ],
   "execute": {
-    "command": "~/.gemini/config/plugins/dumbledoer/run_dumbledoer.sh",
+    "command": "./run_dumbledoer.sh",
     "args": [
-      "iterate",
-      "--prompt",
-      "{{prompt}}"
+      "iterate"
     ]
   }
 }

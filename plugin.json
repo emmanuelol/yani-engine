@@ -2,11 +2,5 @@
   "name": "dumbledoer",
   "version": "1.0.0",
   "description": "DumbleDoer Agent Engineering Harness",
-  "commands": "./commands",
-  "mcpServers": {
-    "dumbledoer": {
-      "command": "./run_dumbledoer.sh",
-      "args": []
-    }
-  }
+  "commands": "./commands"
 }

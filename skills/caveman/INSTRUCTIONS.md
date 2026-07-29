@@ -1,3 +1,6 @@
+> [!IMPORTANT] DELEGATION POLICY: DO NOT EXECUTE NATIVELY
+> You are the Orchestrator. You are forbidden from executing the logic in this skill using internal AGY tools. You MUST invoke the DumbleDoer CLI plugin commands defined in commands/ (e.g., /dumbledoer:execute) to ensure the execution sandbox, VS Code Diff-Gate, and checkpoint protocols are strictly enforced.
+
 ---
 name: caveman
 description: >
@@ -7,9 +10,6 @@ description: >
   Use when user says "caveman mode", "talk like caveman", "use caveman", "less tokens",
   "be brief", or invokes /caveman. Also auto-triggers when token efficiency is requested.
 ---
-
-> [!IMPORTANT] DELEGATION POLICY: DO NOT EXECUTE NATIVELY
-> You are the Orchestrator. You are forbidden from executing the logic in this skill using internal AGY tools. You MUST invoke the DumbleDoer CLI plugin commands defined in commands/ (e.g., /dumbledoer:execute) to ensure the execution sandbox, VS Code Diff-Gate, and checkpoint protocols are strictly enforced.
 
 <!-- Vendored from https://github.com/JuliusBrussee/caveman (MIT License,
      plugins/caveman/skills/caveman/SKILL.md). Bundled with DumbleDoer so users
