@@ -114,6 +114,22 @@ Compare baseline metrics to current `codegraph status`:
 
 ---
 
+## Section 4a — Theoretical Token Optimization
+Calculate the tokens saved during this session by DumbleDoer's dynamic tool filtering and sliced memory ingestion architecture.
+1. Estimate the total number of tool calls made across all completed tasks (assume an average of 5 tool calls per `small` task, 10 for `medium`, 20 for `large`).
+2. Multiply that total by `25,000` (the average input tokens saved per call by stripping unnecessary tools and truncating memory.md).
+3. Format as:
+
+```markdown
+## Token Optimization
+
+- Estimated Tool Calls Executed: {calculated_total}
+- Optimization Yield: ~{calculated_total * 25000} tokens saved
+- Engine Mechanism: Dynamic Tool Filtering & Sliced Memory Ingestion
+```
+
+---
+
 ## Section 5 — Recommended Next Steps
 
 Read Task Registry for tasks with status `pending` or `deferred`:

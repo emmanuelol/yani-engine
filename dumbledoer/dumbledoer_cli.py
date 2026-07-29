@@ -675,12 +675,17 @@ class OrphanRecoveryScanner:
                     if bak_files:
                         bak_file = bak_files[0]
                         
-                if bak_file and os.path.exists(target):
-                    if filecmp.cmp(target, bak_file, shallow=False):
+                if bak_file:
+                    if os.path.exists(target) and filecmp.cmp(target, bak_file, shallow=False):
                         new_status = "rolled-back"
                     else:
                         new_status = "applied"
-                    new_line = entry["line_text"].replace("| planned |", f"| {new_status} |")
+                else:
+                    if os.path.exists(target):
+                        new_status = "applied"
+                    else:
+                        new_status = "rolled-back"
+                new_line = entry["line_text"].replace("| planned |", f"| {new_status} |")
                     new_content = new_content.replace(entry["line_text"], new_line)
                     console.print(f"[green]O4: Resolved planned change {chk_id} as {new_status}[/green]")
             
@@ -807,11 +812,11 @@ class DumbleDoerCLI:
 
     # Dynamic tool filtering per command to reduce token consumption
     COMMAND_TOOL_WHITELIST = {
-        "iterate": {"add_task", "read_file", "codegraph_search", "codegraph_impact", "context7_query_docs"},
+        "iterate": {"add_task", "read_file", "codegraph_search", "codegraph_impact", "context7_resolve_library_id", "context7_query_docs"},
         "status":  {"read_file"},
         "rollback": {"read_file", "execute_bash"},
         "report":  {"read_file", "execute_bash", "update_memory_registry"},
-        "audit":   {"read_file", "read_code_block", "execute_bash", "codegraph_callers", "codegraph_affected", "codegraph_search", "add_task", "context7_query_docs"},
+        "audit":   {"read_file", "read_code_block", "execute_bash", "codegraph_callers", "codegraph_affected", "codegraph_search", "add_task", "context7_resolve_library_id", "context7_query_docs"},
     }
 
     def _get_tools_for_command(self, command: str):
@@ -1163,7 +1168,30 @@ class DumbleDoerCLI:
 
     async def execute_task(self, task_id: str, description: str):
         print(f"Executing task {task_id}: {description}")
-        chat_session = self.client.aio.chats.create(model=getattr(self, "model", "gemini-2.5-flash"), config={"tools": list(self.gemini_tools), "automatic_function_calling": {"disable": True}})
+        
+        # --- DYNAMIC MODEL TIERING ---
+        effort = "small"
+        try:
+            with open("memory.md", "r", encoding="utf-8") as f:
+                mem_content = f.read()
+            import re
+            match = re.search(rf"### {task_id}:.*?
+.*?- \*\*Estimated Effort\*\*: (small|medium|large)", mem_content, re.DOTALL)
+            if match:
+                effort = match.group(1).lower()
+        except Exception:
+            pass
+            
+        base_model = getattr(self, "model", "gemini-2.5-flash")
+        
+        # Upgrade to pro reasoning tier for complex execution waves
+        if effort in ["medium", "large"] and "flash" in base_model:
+            target_model = "gemini-2.5-pro"
+            print(f"[Tier Upgrade] Task {task_id} requires {effort} effort. Spawning sub-agent on {target_model}.")
+        else:
+            target_model = base_model
+            
+        chat_session = self.client.aio.chats.create(model=target_model, config={"tools": list(self.gemini_tools), "automatic_function_calling": {"disable": True}})
         system_instructions = await self._get_system_instructions()
         prompt_payload = f"""{system_instructions}
 
@@ -1424,8 +1452,9 @@ Mandatory rules:
                         shutil.copy2(rollback_matches[0], target_path)
                         rollback_restored = True
                         console.print(f"[yellow]Rejected and rolled back changes for {actual_filename}[/yellow]")
-                    else:
-                        console.print(f"[yellow]Rejected changes for {actual_filename} (no rollback found, file may be modified)[/yellow]")
+                    elif os.path.exists(target_path):
+                        os.remove(target_path)
+                        console.print(f"[yellow]Rejected new file creation, deleted {actual_filename}[/yellow]")
                 if task_id:
                     await state.update_task_status(task_id, "pending")
             else:
@@ -1459,13 +1488,33 @@ Mandatory rules:
                 if not os.path.exists(bak_dir):
                     print(f"Error: No rollbacks found for {task_id}")
                     return
+                # Find all files touched by this task in the Change Log
+                touched_files = []
+                try:
+                    with open("memory.md", "r", encoding="utf-8") as f:
+                        for line in f:
+                            parts = [p.strip() for p in line.split("|")]
+                            if len(parts) >= 6 and parts[2] == task_id:
+                                touched_files.append(parts[3])
+                except Exception:
+                    pass
+
+                restored_files = set()
                 for root, _, files in os.walk(bak_dir):
                     for file in files:
                         bak_path = os.path.join(root, file)
                         rel_path = bak_path.replace(bak_dir + "/", "").replace("__colon__", ":").replace("__", "/")
                         os.makedirs(os.path.dirname(os.path.abspath(rel_path)), exist_ok=True)
                         shutil.copy2(bak_path, rel_path)
+                        restored_files.add(rel_path)
                         print(f"Restored {rel_path}")
+                
+                # Delete files that were created by the task (no backup existed)
+                for f_path in touched_files:
+                    if f_path not in restored_files and os.path.exists(f_path):
+                        os.remove(f_path)
+                        print(f"Deleted newly created file {f_path}")
+                        
                 await TaskRegistryState().update_task_status(task_id, "pending")
                 print(f"Task {task_id} rolled back to pending.")
                 return
