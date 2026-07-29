@@ -2,6 +2,7 @@ import sys
 import os
 import inspect
 import asyncio
+import hashlib
 from dotenv import load_dotenv
 import argparse
 import subprocess
@@ -109,7 +110,7 @@ class ASTMemoryMapper:
                     f.write("\n".join(lines) + "\n")
 
 # ── Docker Warm-Pool Infrastructure ──
-_WARM_SANDBOX_NAME = "dumbledoer-sandbox"
+_WARM_SANDBOX_NAME = f"dumbledoer-sandbox-{hashlib.md5(os.getcwd().encode()).hexdigest()[:8]}"
 _WARM_SANDBOX_LOCK = __import__('threading').Lock()
 _WARM_SANDBOX_STARTED = False
 
@@ -262,9 +263,10 @@ async def read_code_block(file_path: str, symbol_name: str) -> str:
             except SyntaxError:
                 pass  # Fall through to generic extraction
 
-        # Generic fallback: keyword + indentation-based block detection
+        # Generic fallback: keyword + exact word boundary detection
+        import re
         for i, line in enumerate(lines):
-            if symbol_name in line and any(kw in line for kw in ["def ", "class ", "function ", "fn ", "func ", "struct ", "impl "]):
+            if re.search(rf"\b(def|class|function|fn|func|struct|impl)\s+{re.escape(symbol_name)}\b", line):
                 start = i
                 indent = len(line) - len(line.lstrip())
                 end = start + 1
@@ -424,8 +426,9 @@ class TaskRegistryState:
 
     def _sync_to_markdown(self, tasks: dict):
         with get_registry_lock():
-            try:
-                with open(self.md_path, "r", encoding="utf-8") as f:
+            with FileLock("memory.md.lock", timeout=60):
+                try:
+                    with open(self.md_path, "r", encoding="utf-8") as f:
                     content = f.read()
                 start_idx, end_idx = ASTMemoryMapper.locate_heading_block(content, "##", "Task Registry")
                 if start_idx == -1: return
@@ -462,7 +465,7 @@ class TaskRegistryState:
             except Exception as e:
                 print(f"Warning: Failed to sync task registry to markdown: {e}", file=sys.stderr)
 
-async def write_file_with_review(path: str, content: str) -> str:
+async def write_file_with_review(path: str, content: str, task_id: str) -> str:
     """Writes content to a file immediately (for valid test runs), with rollback copy and shadow .tmp for diff review."""
     try:
         try:
@@ -482,7 +485,7 @@ async def write_file_with_review(path: str, content: str) -> str:
         tmp_dir = ".dumbledoer/tmp"
         os.makedirs(tmp_dir, exist_ok=True)
         import uuid
-        encoded_path = path.replace("/", "__")
+        encoded_path = path.replace("/", "__").replace(":", "__colon__")
         tmp_path = os.path.join(tmp_dir, f"{uuid.uuid4().hex}_{encoded_path}.tmp")
         
         import time
@@ -490,21 +493,7 @@ async def write_file_with_review(path: str, content: str) -> str:
         manager = CheckpointManager()
         chk_id = f"chk_{int(time.time())}"
         
-        # Dynamically determine task_id
-        task_id = "manual-edit"
-        try:
-            with open("memory.md", "r") as f:
-                for line in f:
-                    if "| in_progress |" in line or " in_progress " in line:
-                        parts = [p.strip() for p in line.split("|")]
-                        if len(parts) >= 2 and parts[1].startswith("T-"):
-                            task_id = parts[1]
-                            break
-                        elif len(parts) >= 3 and parts[2].startswith("T-"):
-                            task_id = parts[2]
-                            break
-        except Exception:
-            pass
+
 
         metadata = {
             "Timestamp": datetime.now().isoformat(),
@@ -523,11 +512,6 @@ async def write_file_with_review(path: str, content: str) -> str:
         await manager.log_planned_change(path, metadata)
         await manager.write_checkpoint_json(checkpoint_path, metadata)
         
-        # Write directly to target path so execute_bash/pytest tests run against actual new code
-        os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(content)
-
         # Also write shadow .tmp copy for batch_diff_review workflow
         with open(tmp_path, "w") as f:
             f.write(content)
@@ -664,7 +648,7 @@ class OrphanRecoveryScanner:
             for entry in planned_chks:
                 task_id = entry["chk_id"]
                 target = entry["target"]
-                encoded_path = target.replace("/", "__")
+                encoded_path = target.replace("/", "__").replace(":", "__colon__")
                 possible_rollback = os.path.join(bak_dir, task_id, encoded_path)
                 
                 bak_file = None
@@ -697,7 +681,7 @@ class OrphanRecoveryScanner:
             for file in glob.glob(os.path.join(tmp_dir, "*.tmp")):
                 # Safety guard: skip recently-created files that may belong to active concurrent tasks
                 import time
-                if time.time() - os.path.getmtime(file) < 60:
+                if time.time() - os.path.getmtime(file) < 3600:
                     continue
                 try:
                     # Find corresponding target by decoding the path
@@ -728,7 +712,8 @@ async def add_task(task_id: str, title: str, task_type: str = "change", deps: st
     """Registers a new atomic task to the memory.md Task Registry and Task Details."""
     def _write():
         with get_registry_lock():
-            try:
+            with FileLock("memory.md.lock", timeout=60):
+                try:
                 # 1. Append to Task Registry
                 row = f"| {task_id} | {title} | {task_type} | pending | — | {deps} | — | none |"
                 ASTMemoryMapper.append_to_markdown_table("memory.md", "Task Registry", row)
@@ -953,7 +938,8 @@ class DumbleDoerCLI:
         print("CRITICAL: Budget Exhausted. Initiating Graceful Shutdown Sequence...")
         def _shutdown():
             with get_registry_lock():
-                with open("memory.md", "r", encoding="utf-8") as f:
+                with FileLock("memory.md.lock", timeout=60):
+                    with open("memory.md", "r", encoding="utf-8") as f:
                     content = f.read()
                 
                 if task_id:
@@ -1063,7 +1049,7 @@ class DumbleDoerCLI:
                     raise
         raise RuntimeError("Max retries exceeded for API rate limit")
 
-    async def _run_with_tools(self, chat_session, initial_payload, status=None):
+    async def _run_with_tools(self, chat_session, initial_payload, status=None, task_id=None):
         response = await self._send_message_with_backoff(chat_session, initial_payload)
         degraded_consecutive = 0  # Track consecutive degraded tool calls
 
@@ -1092,6 +1078,8 @@ class DumbleDoerCLI:
                             print(msg)
                         
                         import inspect
+                        if tool_name == "write_file_with_review" and task_id is not None:
+                            args["task_id"] = task_id
                         if inspect.iscoroutinefunction(tool_func):
                             result = await tool_func(**args)
                         else:
@@ -1146,9 +1134,24 @@ class DumbleDoerCLI:
             if hasattr(chat_session, '_history') and len(chat_session._history) > MAX_HISTORY_TURNS:
                 # Ensure we slice at an even boundary so User/Model turn parity isn't broken
                 slice_index = -(MAX_HISTORY_TURNS - 1)
-                item = chat_session._history[slice_index]
-                item_role = getattr(item, 'role', None) or (item.get('role') if isinstance(item, dict) else None)
-                if item_role == 'user':
+                while abs(slice_index) < len(chat_session._history):
+                    item = chat_session._history[slice_index]
+                    item_role = getattr(item, 'role', None) or (item.get('role') if isinstance(item, dict) else None)
+                    
+                    is_func_resp = False
+                    parts = getattr(item, 'parts', None)
+                    if parts is None and isinstance(item, dict):
+                        parts = item.get('parts', [])
+                        
+                    if parts:
+                        for p in parts:
+                            if getattr(p, 'function_response', None) is not None:
+                                is_func_resp = True
+                            elif isinstance(p, dict) and ('function_response' in p or 'functionResponse' in p):
+                                is_func_resp = True
+                                
+                    if item_role == 'user' and not is_func_resp:
+                        break
                     slice_index -= 1
 
                 chat_session._history = [chat_session._history[0]] + chat_session._history[slice_index:]
@@ -1175,10 +1178,14 @@ class DumbleDoerCLI:
             with open("memory.md", "r", encoding="utf-8") as f:
                 mem_content = f.read()
             import re
-            match = re.search(rf"### {task_id}:.*?
-.*?- \*\*Estimated Effort\*\*: (small|medium|large)", mem_content, re.DOTALL)
-            if match:
-                effort = match.group(1).lower()
+            
+            # Isolate the specific task block first to prevent regex bleed
+            start_idx, end_idx = ASTMemoryMapper.locate_heading_block(mem_content, "###", task_id)
+            if start_idx != -1:
+                task_block = "\n".join(mem_content.splitlines()[start_idx:end_idx])
+                match = re.search(r"- \*\*Estimated Effort\*\*: (small|medium|large)", task_block, re.IGNORECASE)
+                if match:
+                    effort = match.group(1).lower()
         except Exception:
             pass
             
@@ -1204,7 +1211,7 @@ Mandatory rules:
 4. Log your codegraph_impact result to memory.md task {task_id} CodeGraph Impact field.
 5. Do not modify any file listed in another in_progress task's Outputs."""
         try:
-            response = await self._run_with_tools(chat_session, prompt_payload)
+            response = await self._run_with_tools(chat_session, prompt_payload, task_id=task_id)
             if hasattr(response, 'usage_metadata') and response.usage_metadata:
                 self.budget_manager.add_tokens(getattr(response.usage_metadata, 'total_token_count', 0))
             self.budget_manager.check_and_harvest()
@@ -1213,7 +1220,11 @@ Mandatory rules:
         except BudgetExhaustedException:
             try:
                 rtk_out = await run_rtk("gain")
-                response = await self._run_with_tools(chat_session, prompt_payload)
+                import re
+                match = re.search(r"(\d+)", rtk_out)
+                rtk_savings = int(match.group(1)) if match else 50000
+                self.budget_manager.estimated_tokens = max(0, self.budget_manager.estimated_tokens - rtk_savings)
+                response = await self._run_with_tools(chat_session, prompt_payload, task_id=task_id)
                 print(f"Task {task_id} completed: {response.text}")
                 await TaskRegistryState().update_task_status(task_id, "awaiting-review")
             except (BudgetExhaustedException, RuntimeError) as e:
@@ -1317,7 +1328,7 @@ Mandatory rules:
                 rollback_path = None
                 task_id = task_mapping.get(actual_filename)
                 if task_id:
-                    encoded_path = actual_filename.replace("/", "__")
+                    encoded_path = actual_filename.replace("/", "__").replace(":", "__colon__")
                     possible_rollback = os.path.join(".dumbledoer", "rollbacks", task_id, encoded_path)
                     if os.path.exists(possible_rollback):
                         rollback_path = possible_rollback
@@ -1325,7 +1336,7 @@ Mandatory rules:
                 # Try fallback global rollback format if task-specific isn't found
                 if not rollback_path:
                     import glob
-                    encoded_path = actual_filename.replace("/", "__")
+                    encoded_path = actual_filename.replace("/", "__").replace(":", "__colon__")
                     matches = glob.glob(f".dumbledoer/rollbacks/*_{encoded_path}.bak")
                     if matches:
                         rollback_path = matches[0]
@@ -1362,14 +1373,14 @@ Mandatory rules:
                                 break
                                 
                 if task_id:
-                    encoded_path = actual_filename.replace("/", "__")
+                    encoded_path = actual_filename.replace("/", "__").replace(":", "__colon__")
                     possible_rollback = os.path.join(".dumbledoer", "rollbacks", task_id, encoded_path)
                     if os.path.exists(possible_rollback):
                         rollback_path = possible_rollback
                                 
                 if not rollback_path:
                     import glob
-                    encoded_path = actual_filename.replace("/", "__")
+                    encoded_path = actual_filename.replace("/", "__").replace(":", "__colon__")
                     matches = glob.glob(f".dumbledoer/rollbacks/*_{encoded_path}.bak")
                     if matches:
                         rollback_path = matches[0]
@@ -1439,7 +1450,7 @@ Mandatory rules:
                     os.remove(tmp_path)
                 # Find and restore from rollback backup
                 import glob as _glob
-                encoded_path = actual_filename.replace("/", "__")
+                encoded_path = actual_filename.replace("/", "__").replace(":", "__colon__")
                 possible_rollback = os.path.join(".dumbledoer", "rollbacks", task_id, encoded_path) if task_id else None
                 
                 if possible_rollback and os.path.exists(possible_rollback):
