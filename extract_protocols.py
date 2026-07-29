@@ -28,7 +28,6 @@ for filepath in files:
         if out_f:
             # Complete agy (Antigravity/Gemini) adaptation
             adapted_line = line
-            adapted_line = adapted_line.replace("Kandalf", "DumbleDoer").replace("kandalf", "dumbledoer")
             adapted_line = adapted_line.replace("CLAUDE.md", "SYSTEM_INSTRUCTIONS.md")
             adapted_line = adapted_line.replace(".claude", ".dumbledoer")
             adapted_line = adapted_line.replace("claude", "agy")

@@ -635,37 +635,43 @@ class OrphanRecoveryScanner:
             from rich.console import Console
             console = Console()
             
-            valid_chks = {c["chk_id"] for c in change_log}
-            planned_chks = {c["chk_id"]: c for c in change_log if c["status"] == "planned"}
+            # Build valid checkpoints explicitly from Checkpoint Registry
+            valid_checkpoints = set()
+            try:
+                start_idx, end_idx = ASTMemoryMapper.locate_heading_block(content, "##", "Checkpoint Registry")
+                if start_idx != -1:
+                    for line in content.splitlines()[start_idx+1:end_idx]:
+                        if line.strip().startswith("|") and "---" not in line and "Checkpoint ID" not in line:
+                            parts = [p.strip() for p in line.split("|")]
+                            if len(parts) >= 2:
+                                valid_checkpoints.add(parts[1]) # Checkpoint ID is parts[1]
+            except Exception:
+                pass
+
+            # Use a list to prevent dictionary key collisions on multi-file tasks
+            planned_chks = [c for c in change_log if c["status"] == "planned"]
             
-            # O3: Discard orphaned .json checkpoints
+            # O3: Discard orphaned .json checkpoints safely
             for chk_file in glob.glob(os.path.join(chk_dir, "*.json")):
                 basename = os.path.basename(chk_file)
                 chk_id = basename.replace(".json", "")
-                if chk_id not in valid_chks:
+                if chk_id not in valid_checkpoints:
                     os.remove(chk_file)
                     console.print(f"[yellow]O3: Discarded orphaned checkpoint {chk_file}[/yellow]")
                     
-            # O5: Discard orphaned .bak rollbacks
-            for bak_file in glob.glob(os.path.join(bak_dir, "*.bak")):
-                basename = os.path.basename(bak_file)
-                chk_id = basename.split("_")[0] if "_" in basename else basename.replace(".bak", "")
-                if chk_id not in valid_chks:
-                    os.remove(bak_file)
-                    console.print(f"[yellow]O5: Discarded orphaned rollback {bak_file}[/yellow]")
-                    
             # O4: Evaluate planned Change Log entries and update memory.md
             new_content = content
-            for chk_id, entry in planned_chks.items():
+            for entry in planned_chks:
+                task_id = entry["chk_id"]
                 target = entry["target"]
                 encoded_path = target.replace("/", "__")
-                possible_rollback = os.path.join(bak_dir, chk_id, encoded_path)
+                possible_rollback = os.path.join(bak_dir, task_id, encoded_path)
                 
                 bak_file = None
                 if os.path.exists(possible_rollback):
                     bak_file = possible_rollback
                 else:
-                    bak_files = glob.glob(os.path.join(bak_dir, f"{chk_id}_*.bak"))
+                    bak_files = glob.glob(os.path.join(bak_dir, f"*_{encoded_path}.bak"))
                     if bak_files:
                         bak_file = bak_files[0]
                         
@@ -792,14 +798,20 @@ class DumbleDoerCLI:
         self.mcp_locks = {}
         self.local_tools = [read_file, read_code_block, write_file_with_review, execute_bash, update_memory_registry, run_rtk, add_task, record_knowledge]
         self.gemini_tools = list(self.local_tools)
+        try:
+            with get_registry_lock():
+                with open("memory.md", "r", encoding="utf-8") as f:
+                    self.budget_manager = BudgetManager(f.read())
+        except Exception:
+            self.budget_manager = BudgetManager("")
 
     # Dynamic tool filtering per command to reduce token consumption
     COMMAND_TOOL_WHITELIST = {
-        "iterate": {"add_task", "read_file", "codegraph_search"},
+        "iterate": {"add_task", "read_file", "codegraph_search", "codegraph_impact", "context7_query_docs"},
         "status":  {"read_file"},
         "rollback": {"read_file", "execute_bash"},
         "report":  {"read_file", "execute_bash", "update_memory_registry"},
-        "audit":   {"read_file", "read_code_block", "execute_bash", "codegraph_callers", "codegraph_affected"},
+        "audit":   {"read_file", "read_code_block", "execute_bash", "codegraph_callers", "codegraph_affected", "codegraph_search", "add_task", "context7_query_docs"},
     }
 
     def _get_tools_for_command(self, command: str):
@@ -807,14 +819,6 @@ class DumbleDoerCLI:
         if not allowed:
             return self.gemini_tools
         return [t for t in self.gemini_tools if getattr(t, "__name__", "") in allowed]
-        
-        # Initialize BudgetManager
-        try:
-            with get_registry_lock():
-                with open("memory.md", "r", encoding="utf-8") as f:
-                    self.budget_manager = BudgetManager(f.read())
-        except Exception:
-            self.budget_manager = BudgetManager("")
 
     def _create_mcp_wrapper(self, server_name: str, tool):
         async def mcp_wrapper(**kwargs):
@@ -1137,7 +1141,9 @@ class DumbleDoerCLI:
             if hasattr(chat_session, '_history') and len(chat_session._history) > MAX_HISTORY_TURNS:
                 # Ensure we slice at an even boundary so User/Model turn parity isn't broken
                 slice_index = -(MAX_HISTORY_TURNS - 1)
-                if slice_index % 2 != 0:
+                item = chat_session._history[slice_index]
+                item_role = getattr(item, 'role', None) or (item.get('role') if isinstance(item, dict) else None)
+                if item_role == 'user':
                     slice_index -= 1
 
                 chat_session._history = [chat_session._history[0]] + chat_session._history[slice_index:]
@@ -1409,17 +1415,17 @@ Mandatory rules:
                 possible_rollback = os.path.join(".dumbledoer", "rollbacks", task_id, encoded_path) if task_id else None
                 
                 if possible_rollback and os.path.exists(possible_rollback):
-                    os.replace(possible_rollback, target_path)
+                    shutil.copy2(possible_rollback, target_path)
                     rollback_restored = True
                     console.print(f"[yellow]Rejected and rolled back changes for {actual_filename}[/yellow]")
                 else:
                     rollback_matches = _glob.glob(f".dumbledoer/rollbacks/*_{encoded_path}.bak")
                     if rollback_matches:
-                        os.replace(rollback_matches[0], target_path)
+                        shutil.copy2(rollback_matches[0], target_path)
                         rollback_restored = True
                         console.print(f"[yellow]Rejected and rolled back changes for {actual_filename}[/yellow]")
-                else:
-                    console.print(f"[yellow]Rejected changes for {actual_filename} (no rollback found, file may be modified)[/yellow]")
+                    else:
+                        console.print(f"[yellow]Rejected changes for {actual_filename} (no rollback found, file may be modified)[/yellow]")
                 if task_id:
                     await state.update_task_status(task_id, "pending")
             else:
@@ -1457,7 +1463,8 @@ Mandatory rules:
                     for file in files:
                         bak_path = os.path.join(root, file)
                         rel_path = bak_path.replace(bak_dir + "/", "").replace("__colon__", ":").replace("__", "/")
-                        os.replace(bak_path, rel_path)
+                        os.makedirs(os.path.dirname(os.path.abspath(rel_path)), exist_ok=True)
+                        shutil.copy2(bak_path, rel_path)
                         print(f"Restored {rel_path}")
                 await TaskRegistryState().update_task_status(task_id, "pending")
                 print(f"Task {task_id} rolled back to pending.")
