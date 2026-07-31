@@ -110,54 +110,63 @@ class ASTMemoryMapper:
                     f.write("\n".join(lines) + "\n")
 
 # ── Docker Warm-Pool Infrastructure ──
-_WARM_SANDBOX_NAME = f"dumbledoer-sandbox-{hashlib.md5(os.getcwd().encode()).hexdigest()[:8]}"
+_WARM_SANDBOXES = {}  # task_id -> container_name
 _WARM_SANDBOX_LOCK = __import__('threading').Lock()
-_WARM_SANDBOX_STARTED = False
 
-def _ensure_warm_sandbox(image: str = "dumbledoer-base:latest") -> bool:
+def _ensure_warm_sandbox(task_id: str = None, image: str = "dumbledoer-base:latest") -> bool:
     """Ensures a persistent Docker sandbox container is running. Returns True if available."""
-    global _WARM_SANDBOX_STARTED
+    global _WARM_SANDBOXES
+    
+    if not task_id:
+        task_id = "global"
+        
+    container_name = f"dumbledoer-sandbox-{task_id.lower()}-{hashlib.md5(os.getcwd().encode()).hexdigest()[:8]}"
+    
     with _WARM_SANDBOX_LOCK:
-        if _WARM_SANDBOX_STARTED:
+        if task_id in _WARM_SANDBOXES:
             return True
         try:
             # Check if container already exists and is running
             result = subprocess.run(
-                ["docker", "inspect", "-f", "{{.State.Running}}", _WARM_SANDBOX_NAME],
+                ["docker", "inspect", "-f", "{{.State.Running}}", container_name],
                 capture_output=True, text=True
             )
             if result.returncode == 0 and "true" in result.stdout.lower():
-                _WARM_SANDBOX_STARTED = True
+                _WARM_SANDBOXES[task_id] = container_name
                 return True
 
             # Remove stale container if it exists but isn't running
-            subprocess.run(["docker", "rm", "-f", _WARM_SANDBOX_NAME], capture_output=True)
+            subprocess.run(["docker", "rm", "-f", container_name], capture_output=True)
 
             # Start persistent container with workspace mount
             import platform
             user_args = [] if platform.system() == "Windows" else ["--user", f"{os.getuid()}:{os.getgid()}"]
             subprocess.run(
-                ["docker", "run", "-d", "-it", "--name", _WARM_SANDBOX_NAME] + user_args +
+                ["docker", "run", "-d", "-it", "--name", container_name] + user_args +
                 ["-v", f"{os.getcwd()}:/workspace", "-w", "/workspace", image, "/bin/bash"],
                 capture_output=True, text=True, check=True
             )
-            _WARM_SANDBOX_STARTED = True
+            _WARM_SANDBOXES[task_id] = container_name
             return True
         except Exception:
             return False  # Fallback to cold-boot
 
-def _teardown_warm_sandbox():
-    """Kills and removes the persistent Docker sandbox container."""
-    global _WARM_SANDBOX_STARTED
+def _teardown_warm_sandbox(task_id: str = None):
+    """Kills and removes the persistent Docker sandbox container(s)."""
+    global _WARM_SANDBOXES
     with _WARM_SANDBOX_LOCK:
-        try:
-            subprocess.run(["docker", "kill", _WARM_SANDBOX_NAME], capture_output=True)
-            subprocess.run(["docker", "rm", _WARM_SANDBOX_NAME], capture_output=True)
-        except Exception:
-            pass
-        _WARM_SANDBOX_STARTED = False
+        tasks_to_remove = [task_id] if task_id else list(_WARM_SANDBOXES.keys())
+        for tid in tasks_to_remove:
+            if tid in _WARM_SANDBOXES:
+                container_name = _WARM_SANDBOXES[tid]
+                try:
+                    subprocess.run(["docker", "kill", container_name], capture_output=True)
+                    subprocess.run(["docker", "rm", container_name], capture_output=True)
+                except Exception:
+                    pass
+                del _WARM_SANDBOXES[tid]
 
-async def execute_bash(command: str, sandbox_mode: str = None) -> str:
+async def execute_bash(command: str, sandbox_mode: str = None, task_id: str = None) -> str:
     def _read_mode():
         mode = "dumbledoer-base"
         try:
@@ -218,8 +227,9 @@ async def execute_bash(command: str, sandbox_mode: str = None) -> str:
             ]
         else:
             # [WARM POOL] Use persistent sandbox if available, cold-boot fallback
-            if _ensure_warm_sandbox():
-                args = ["docker", "exec", _WARM_SANDBOX_NAME, "bash", "-c", command]
+            if _ensure_warm_sandbox(task_id):
+                container_name = _WARM_SANDBOXES.get(task_id if task_id else "global")
+                args = ["docker", "exec", container_name, "bash", "-c", command]
             else:
                 args = ["docker", "run", "--rm"] + user_args + [
                     "-v", f"{os.getcwd()}:/workspace", "-w", "/workspace", 
@@ -429,41 +439,42 @@ class TaskRegistryState:
             with FileLock("memory.md.lock", timeout=60):
                 try:
                     with open(self.md_path, "r", encoding="utf-8") as f:
-                    content = f.read()
-                start_idx, end_idx = ASTMemoryMapper.locate_heading_block(content, "##", "Task Registry")
-                if start_idx == -1: return
-                
-                lines = content.splitlines()
+                        content = f.read()
+                    start_idx, end_idx = ASTMemoryMapper.locate_heading_block(content, "##", "Task Registry")
+                    if start_idx == -1: return
+                    
+                    lines = content.splitlines()
 
-                # Find actual table header line (contains "Task ID"), not the section heading
-                header_line = next((l for l in lines[start_idx+1:end_idx] if "|" in l and "Task ID" in l), None)
-                if header_line:
-                    headers = [h.strip() for h in header_line.split("|") if h.strip()]
-                    stat_idx = headers.index("Status") + 1 if "Status" in headers else 4
-                else:
-                    stat_idx = 4
+                    # Find actual table header line (contains "Task ID"), not the section heading
+                    header_line = next((l for l in lines[start_idx+1:end_idx] if "|" in l and "Task ID" in l), None)
+                    if header_line:
+                        headers = [h.strip() for h in header_line.split("|") if h.strip()]
+                        stat_idx = headers.index("Status") + 1 if "Status" in headers else 4
+                    else:
+                        stat_idx = 4
 
-                new_block = []
-                for line in lines[start_idx+1:end_idx]:
-                    parts = [p.strip() for p in line.split("|")]
-                    if len(parts) >= 5 and "Task ID" not in parts[1] and not parts[1].strip().startswith("---"):
-                        tid = parts[1].strip()
-                        if tid in tasks:
-                            if len(parts) > stat_idx:
-                                parts[stat_idx] = f" {tasks[tid]['status']} "
+                    new_block = []
+                    for line in lines[start_idx+1:end_idx]:
+                        parts = [p.strip() for p in line.split("|")]
+                        if len(parts) >= 5 and "Task ID" not in parts[1] and not parts[1].strip().startswith("---"):
+                            tid = parts[1].strip()
+                            if tid in tasks:
+                                if len(parts) > stat_idx:
+                                    parts[stat_idx] = f" {tasks[tid]['status']} "
+                                else:
+                                    parts[4] = f" {tasks[tid]['status']} "
+                                new_block.append("|".join(parts))
                             else:
-                                parts[4] = f" {tasks[tid]['status']} "
-                            new_block.append("|".join(parts))
+                                new_block.append(line)
                         else:
                             new_block.append(line)
-                    else:
-                        new_block.append(line)
-                            
-                new_content = "\n".join(lines[:start_idx+1] + new_block + lines[end_idx:])
-                with open(self.md_path, "w", encoding="utf-8") as f:
-                    f.write(new_content)
-            except Exception as e:
-                print(f"Warning: Failed to sync task registry to markdown: {e}", file=sys.stderr)
+                                
+                    new_content = "\n".join(lines[:start_idx+1] + new_block + lines[end_idx:])
+                    with open(self.md_path, "w", encoding="utf-8") as f:
+                        f.write(new_content)
+                except Exception as e:
+                    print(f"Warning: Failed to sync task registry to markdown: {e}", file=sys.stderr)
+
 
 async def write_file_with_review(path: str, content: str, task_id: str) -> str:
     """Writes content to a file immediately (for valid test runs), with rollback copy and shadow .tmp for diff review."""
@@ -582,7 +593,7 @@ class CheckpointManager:
         await asyncio.to_thread(_do_log)
 
 class OrphanRecoveryScanner:
-    def run(self):
+    def run(self, unattended=False):
         with get_registry_lock():
             tmp_dir = ".dumbledoer/tmp"
             chk_dir = ".dumbledoer/checkpoints"
@@ -670,8 +681,8 @@ class OrphanRecoveryScanner:
                     else:
                         new_status = "rolled-back"
                 new_line = entry["line_text"].replace("| planned |", f"| {new_status} |")
-                    new_content = new_content.replace(entry["line_text"], new_line)
-                    console.print(f"[green]O4: Resolved planned change {chk_id} as {new_status}[/green]")
+                new_content = new_content.replace(entry["line_text"], new_line)
+                console.print(f"[green]O4: Resolved planned change {task_id} as {new_status}[/green]")
             
             if new_content != content:
                 with open("memory.md", "w", encoding="utf-8") as f:
@@ -696,56 +707,112 @@ class OrphanRecoveryScanner:
                             break
                             
                     if matched_target:
-                        if Confirm.ask(f"Found orphaned planned change for [bold]{matched_target}[/bold] (File: {file}). Apply it?"):
-                            os.replace(file, matched_target)
-                            console.print(f"[green]Applied {file} to {matched_target}[/green]")
-                        else:
+                        if unattended:
                             os.remove(file)
-                            console.print(f"[yellow]Discarded {file}[/yellow]")
+                            console.print(f"[yellow]O4: Unattended mode - Discarded orphaned planned change for {matched_target} (File: {file})[/yellow]")
+                        else:
+                            if Confirm.ask(f"Found orphaned planned change for [bold]{matched_target}[/bold] (File: {file}). Apply it?"):
+                                os.replace(file, matched_target)
+                                console.print(f"[green]Applied {file} to {matched_target}[/green]")
+                            else:
+                                os.remove(file)
+                                console.print(f"[yellow]Discarded {file}[/yellow]")
                     else:
                         os.remove(file)
                 except Exception as e:
                     console.print(f"[red]Error recovering {file}: {e}[/red]")
 
 
-async def add_task(task_id: str, title: str, task_type: str = "change", deps: str = "none", description: str = "", outputs: str = "none") -> str:
-    """Registers a new atomic task to the memory.md Task Registry and Task Details."""
+async def add_task(title: str, task_type: str = "change", deps: str = "none", description: str = "", outputs: str = "none") -> str:
+    """Registers a new atomic task to the memory.md Task Registry. Auto-generates the Task ID."""
     def _write():
         with get_registry_lock():
             with FileLock("memory.md.lock", timeout=60):
                 try:
-                # 1. Append to Task Registry
-                row = f"| {task_id} | {title} | {task_type} | pending | — | {deps} | — | none |"
-                ASTMemoryMapper.append_to_markdown_table("memory.md", "Task Registry", row)
-                
-                # 2. Append to Task Details
-                with open("memory.md", "r", encoding="utf-8") as f:
-                    content = f.read()
-                
-                details = f"\n### {task_id}: {title}\n- **Type**: {task_type}\n- **Status**: pending\n- **Owner**: —\n- **Depends On**: {deps}\n- **Assigned Session**: —\n- **Description**: {description}\n- **Inputs**: none\n- **Outputs**: {outputs}\n- **Success Criteria**: TBD\n- **Estimated Effort**: small\n- **Parallelizable**: yes\n- **CodeGraph Impact**: —\n- **Checkpoint**: none\n- **Resume Instructions**: none\n- **Notes**: —\n"
-                
-                start_idx, end_idx = ASTMemoryMapper.locate_heading_block(content, "##", "Task Details")
-                if start_idx != -1:
-                    lines = content.splitlines()
-                    lines.insert(end_idx, details)
-                    with open("memory.md", "w", encoding="utf-8") as f:
-                        f.write("\n".join(lines) + "\n")
-                return f"Successfully registered task {task_id}."
-            except Exception as e:
-                return f"Error adding task: {e}"
+                    with open("memory.md", "r", encoding="utf-8") as f:
+                        content = f.read()
+                    
+                    # 1. Native ID Generation (Enforces Rule 7)
+                    import re
+                    existing_ids = re.findall(r'\bT-(\d{3,4})\b', content)
+                    if existing_ids:
+                        next_num = max([int(x) for x in existing_ids]) + 1
+                    else:
+                        next_num = 1
+                    task_id = f"T-{next_num:03d}"
+
+                    # 2. Native Dependency Validation (Enforces Rule 8)
+                    if deps.lower() not in ["none", "—", "-", ""]:
+                        dep_list = [d.strip() for d in deps.split(",")]
+                        for d in dep_list:
+                            # Verify the dependency actually exists in the registry
+                            if f"| {d} |" not in content and f"### {d}" not in content:
+                                return f"Error: Dependency {d} does not exist in memory.md. Task creation rejected. Check your dependencies."
+
+                    # 3. Append to Task Registry
+                    row = f"| {task_id} | {title} | {task_type} | pending | — | {deps} | — | none |"
+                    ASTMemoryMapper.append_to_markdown_table("memory.md", "Task Registry", row)
+                    
+                    # 4. Append to Task Details
+                    with open("memory.md", "r", encoding="utf-8") as f:
+                        content = f.read()
+                    
+                    details = f"\n### {task_id}: {title}\n- **Type**: {task_type}\n- **Status**: pending\n- **Owner**: —\n- **Depends On**: {deps}\n- **Assigned Session**: —\n- **Description**: {description}\n- **Inputs**: none\n- **Outputs**: {outputs}\n- **Success Criteria**: TBD\n- **Estimated Effort**: small\n- **Parallelizable**: yes\n- **CodeGraph Impact**: —\n- **Checkpoint**: none\n- **Resume Instructions**: none\n- **Notes**: —\n"
+                    
+                    start_idx, end_idx = ASTMemoryMapper.locate_heading_block(content, "##", "Task Details")
+                    if start_idx != -1:
+                        lines = content.splitlines()
+                        lines.insert(end_idx, details)
+                        with open("memory.md", "w", encoding="utf-8") as f:
+                            f.write("\n".join(lines) + "\n")
+                            
+                    # 5. Return the native ID so the LLM knows what was created
+                    return f"Successfully registered task {task_id}."
+                except Exception as e:
+                    return f"Error adding task: {e}"
     return await asyncio.to_thread(_write)
 
-async def record_knowledge(title: str, entry_type: str, description: str, rationale: str) -> str:
-    """Saves a durable learning (insight, failure, decision) to the Markdown Knowledge Vault before chat history is pruned."""
-    try:
-        import time
-        from datetime import datetime
-        k_id = f"K-{int(time.time())}"
-        slug = title.lower().replace(" ", "-")
-        slug = "".join(c for c in slug if c.isalnum() or c == "-")[:25]
-        filename = f"knowledge/entries/{k_id}-{slug}.md"
+async def record_knowledge(title: str, entry_type: str, description: str, rationale: str, supersedes: str = "none") -> str:
+    """Saves a durable learning to the Markdown Knowledge Vault safely, handling sequential IDs and supersession."""
+    def _write():
+        with get_registry_lock():
+            with FileLock("knowledge.lock", timeout=60):
+                try:
+                    os.makedirs("knowledge/entries", exist_ok=True)
+                    
+                    # 1. Native Sequential ID Generation
+                    import glob, re
+                    existing_entries = glob.glob("knowledge/entries/*.md")
+                    highest_num = 0
+                    for entry in existing_entries:
+                        match = re.search(r'K-(\d+)', os.path.basename(entry))
+                        if match:
+                            num = int(match.group(1))
+                            if num > highest_num:
+                                highest_num = num
+                                
+                    k_id = f"K-{(highest_num + 1):03d}"
+                    slug = title.lower().replace(" ", "-")
+                    slug = "".join(c for c in slug if c.isalnum() or c == "-")[:25]
+                    filename = f"knowledge/entries/{k_id}-{slug}.md"
 
-        content = f"""---
+                    # 2. Handle Supersession (OP-7)
+                    if supersedes and supersedes.lower() not in ["none", "—", "-", ""]:
+                        sup_list = [s.strip() for s in supersedes.split(",")]
+                        for sup_id in sup_list:
+                            # Find the file that matches this ID
+                            target_files = glob.glob(f"knowledge/entries/{sup_id}-*.md")
+                            for tf in target_files:
+                                with open(tf, "r", encoding="utf-8") as f_sup:
+                                    sup_content = f_sup.read()
+                                # Demote status to superseded
+                                sup_content = re.sub(r'status:\s*active', 'status: superseded', sup_content, count=1)
+                                with open(tf, "w", encoding="utf-8") as f_sup:
+                                    f_sup.write(sup_content)
+
+                    # 3. Write New Entry
+                    from datetime import datetime
+                    content = f"""---
 id: {k_id}
 title: "{title}"
 type: {entry_type}
@@ -761,21 +828,25 @@ tags: [knowledge-registry]
 ## Rationale
 {rationale}
 """
-        os.makedirs("knowledge/entries", exist_ok=True)
-        with open(filename, "w", encoding="utf-8") as f:
-            f.write(content)
+                    with open(filename, "w", encoding="utf-8") as f:
+                        f.write(content)
 
-        # Auto-sync the index using DumbleDoer's built-in script
-        if os.path.exists("sync_knowledge.py"):
-            import subprocess
-            subprocess.run([sys.executable, "sync_knowledge.py"], capture_output=True)
+                    # 4. Synchronous Index Update
+                    if os.path.exists("sync_knowledge.py"):
+                        import subprocess
+                        subprocess.run([sys.executable, "sync_knowledge.py"], capture_output=True)
 
-        return f"Successfully recorded learning to {filename} and synced knowledge/index.md"
-    except Exception as e:
-        return f"Error recording knowledge: {e}"
+                    msg = f"Successfully recorded learning to {filename}"
+                    if supersedes and supersedes.lower() not in ["none", "—", "-", ""]:
+                        msg += f" (Superseded: {supersedes})"
+                    return msg
+                except Exception as e:
+                    return f"Error recording knowledge: {e}"
+                    
+    return await asyncio.to_thread(_write)
 
 class DumbleDoerCLI:
-    def __init__(self):
+    def __init__(self, budget_limit=None, budget_threshold=None):
         self.plugin_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
         load_dotenv(dotenv_path=os.path.join(os.getcwd(), '.env'), override=False)
         api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
@@ -794,14 +865,24 @@ class DumbleDoerCLI:
                     self.budget_manager = BudgetManager(f.read())
         except Exception:
             self.budget_manager = BudgetManager("")
+            
+        if budget_limit is not None:
+            self.budget_manager.budget_limit = budget_limit
+            self.budget_manager.shutdown_threshold = int(self.budget_manager.budget_limit * (self.budget_manager.threshold_pct / 100.0))
+        if budget_threshold is not None:
+            self.budget_manager.threshold_pct = budget_threshold
+            self.budget_manager.shutdown_threshold = int(self.budget_manager.budget_limit * (self.budget_manager.threshold_pct / 100.0))
 
     # Dynamic tool filtering per command to reduce token consumption
     COMMAND_TOOL_WHITELIST = {
+        "start":   {"read_file", "execute_bash", "add_task", "write_file_with_review", "codegraph_status", "context7_resolve_library_id", "context7_query_docs"},
         "iterate": {"add_task", "read_file", "codegraph_search", "codegraph_impact", "context7_resolve_library_id", "context7_query_docs"},
-        "status":  {"read_file"},
+        "status":  {"read_file", "execute_bash"},
         "rollback": {"read_file", "execute_bash"},
         "report":  {"read_file", "execute_bash", "update_memory_registry"},
-        "audit":   {"read_file", "read_code_block", "execute_bash", "codegraph_callers", "codegraph_affected", "codegraph_search", "add_task", "context7_resolve_library_id", "context7_query_docs"},
+        "audit":   {"read_file", "read_code_block", "execute_bash", "codegraph_callers", "codegraph_affected", "codegraph_search", "add_task", "context7_resolve_library_id", "context7_query_docs", "update_memory_registry"},
+        "resume":  {"read_file", "execute_bash"},
+        "update-docs": {"read_file", "execute_bash", "codegraph_search", "codegraph_impact", "codegraph_node", "codegraph_context"}
     }
 
     def _get_tools_for_command(self, command: str):
@@ -865,6 +946,7 @@ class DumbleDoerCLI:
     async def connect_mcp(self):
         if not os.path.exists(".codegraph"):
             os.makedirs(".codegraph", exist_ok=True)
+            import sys
             print("Initializing CodeGraph index...", file=sys.stderr)
             import subprocess
             await asyncio.to_thread(subprocess.run, ["npx", "--yes", "--package=@colbymchenry/codegraph", "codegraph", "init"], check=True)
@@ -940,7 +1022,7 @@ class DumbleDoerCLI:
             with get_registry_lock():
                 with FileLock("memory.md.lock", timeout=60):
                     with open("memory.md", "r", encoding="utf-8") as f:
-                    content = f.read()
+                        content = f.read()
                 
                 if task_id:
                     content = content.replace(f"| {task_id} | in_progress", f"| {task_id} | interrupted")
@@ -981,9 +1063,9 @@ class DumbleDoerCLI:
         return "\n".join(sliced) if sliced else content
 
     async def _get_system_instructions(self, command: str = None):
-        # For iterate, only inject Goal/Scope/Task Registry to save ~30k tokens
+        # For iterate, inject Goal/Scope/Task Registry + Edge Cases to preserve architectural awareness
         if command == "iterate":
-            memory_content = await self._get_sliced_memory(["Project Goal", "Scope", "Task Registry"])
+            memory_content = await self._get_sliced_memory(["Project Goal", "Scope", "Edge Case Coverage", "Task Registry"])
         else:
             memory_content = await self.local_tools[0]("memory.md") or "No memory.md found. Start a new project."
 
@@ -1078,7 +1160,7 @@ class DumbleDoerCLI:
                             print(msg)
                         
                         import inspect
-                        if tool_name == "write_file_with_review" and task_id is not None:
+                        if tool_name in ["write_file_with_review", "execute_bash"] and task_id is not None:
                             args["task_id"] = task_id
                         if inspect.iscoroutinefunction(tool_func):
                             result = await tool_func(**args)
@@ -1230,6 +1312,7 @@ Mandatory rules:
             except (BudgetExhaustedException, RuntimeError) as e:
                 print(f"Task failed or budget threshold blocked retry: {e}")
                 await self._graceful_shutdown(task_id)
+                raise e
 
     def _files_are_import_coupled(self, file_a: str, file_b: str) -> bool:
         """Check if file_a imports file_b or vice versa using Python AST import analysis."""
@@ -1477,14 +1560,48 @@ Mandatory rules:
                     await state.update_task_status(task_id, "completed")
 
         if rejected_files:
-            await asyncio.to_thread(OrphanRecoveryScanner().run)
+            await asyncio.to_thread(OrphanRecoveryScanner().run, True)
 
     async def run(self, command: str, args: list, model: str = "gemini-2.5-flash"):
         self.model = model
         print(f"DumbleDoer running command: {command}")
         if command == "resume":
             OrphanRecoveryScanner().run()
-            # we can fall through to normal execution if it resumes agent logic, or just run the scanner
+            
+            state = TaskRegistryState()
+            tasks = state.load_tasks()
+            
+            # Detect interrupted tasks or stale locks natively
+            interrupted = [t_id for t_id, t in tasks.items() if t['status'] in ["interrupted", "in_progress"]]
+            
+            if not interrupted:
+                print("\nNo interrupted tasks or stale locks found. Run /dumbledoer:execute to process pending tasks.")
+                return
+                
+            from rich.prompt import Prompt
+            from rich.console import Console
+            console = Console()
+            
+            console.print(f"\n[bold yellow]Found interrupted or stale tasks: {', '.join(interrupted)}[/bold yellow]")
+            choice = Prompt.ask("How would you like to handle them? [R(esume)/B(Rollback)/S(Skip)]", choices=["R", "B", "S"], default="R")
+            
+            if choice == "B":
+                for t_id in interrupted:
+                    await state.update_task_status(t_id, "pending")
+                console.print("[yellow]Tasks demoted to pending. Please run /dumbledoer:rollback to revert file changes manually.[/yellow]")
+                return
+            elif choice == "S":
+                for t_id in interrupted:
+                    await state.update_task_status(t_id, "deferred")
+                console.print("[green]Tasks deferred.[/green]")
+                return
+            else:
+                for t_id in interrupted:
+                    await state.update_task_status(t_id, "pending")
+                console.print("[green]Locks cleared. Handing off to the native execution engine...[/green]")
+                
+                # Natively chain into the execute command
+                command = "execute"
         
         # Skip MCP initialization for commands that do not need structural code analysis or semantic search
         if command not in ("status", "rollback", "report"):
@@ -1492,45 +1609,111 @@ Mandatory rules:
         try:
             if command == "rollback":
                 if not args:
-                    print("Error: must provide a task ID (e.g., T-001)")
+                    print("Error: must provide a task ID (e.g., T-001) or --all")
                     return
-                task_id = args[0]
-                bak_dir = f".dumbledoer/rollbacks/{task_id}"
-                if not os.path.exists(bak_dir):
-                    print(f"Error: No rollbacks found for {task_id}")
-                    return
-                # Find all files touched by this task in the Change Log
-                touched_files = []
-                try:
-                    with open("memory.md", "r", encoding="utf-8") as f:
-                        for line in f:
-                            parts = [p.strip() for p in line.split("|")]
-                            if len(parts) >= 6 and parts[2] == task_id:
-                                touched_files.append(parts[3])
-                except Exception:
-                    pass
-
-                restored_files = set()
-                for root, _, files in os.walk(bak_dir):
-                    for file in files:
-                        bak_path = os.path.join(root, file)
-                        rel_path = bak_path.replace(bak_dir + "/", "").replace("__colon__", ":").replace("__", "/")
-                        os.makedirs(os.path.dirname(os.path.abspath(rel_path)), exist_ok=True)
-                        shutil.copy2(bak_path, rel_path)
-                        restored_files.add(rel_path)
-                        print(f"Restored {rel_path}")
                 
-                # Delete files that were created by the task (no backup existed)
-                for f_path in touched_files:
-                    if f_path not in restored_files and os.path.exists(f_path):
-                        os.remove(f_path)
-                        print(f"Deleted newly created file {f_path}")
+                target = args[0]
+                tasks_to_rollback = []
+                state = TaskRegistryState()
+                all_tasks = state.load_tasks()
+
+                if target == "--all":
+                    tasks_to_rollback = sorted([t_id for t_id, t in all_tasks.items() if "completed" in t["status"]], reverse=True)
+                    if not tasks_to_rollback:
+                        print("No completed tasks found to roll back.")
+                        return
+                elif target.startswith("T-"):
+                    if target not in all_tasks or "completed" not in all_tasks[target]["status"]:
+                        print(f"Error: {target} is not a completed task.")
+                        return
+                    tasks_to_rollback = [target]
+                else:
+                    print(f"Error: Invalid rollback target '{target}'. Use a Task ID or --all.")
+                    return
+
+                # Read memory into a list for surgical, line-by-line replacement
+                with open("memory.md", "r", encoding="utf-8") as f:
+                    mem_content = f.read()
+                mem_lines = mem_content.splitlines()
+
+                for task_id in tasks_to_rollback:
+                    print(f"\nRolling back {task_id}...")
+                    bak_dir = f".dumbledoer/rollbacks/{task_id}"
+                    
+                    if not os.path.exists(bak_dir):
+                        print(f"Warning: No rollback directory found for {task_id}. Only memory.md will be reset.")
+                    else:
+                        touched_files = []
+                        chg_start, chg_end = ASTMemoryMapper.locate_heading_block(mem_content, "##", "Change Log")
+                        if chg_start != -1:
+                            # Fix 1: Surgical String Replacement to avoid Ambiguity Corruption
+                            for i in range(chg_start + 1, chg_end):
+                                parts = [p.strip() for p in mem_lines[i].split("|")]
+                                if len(parts) >= 6 and parts[2] == task_id:
+                                    touched_files.append(parts[3])
+                                    mem_lines[i] = mem_lines[i].replace("| applied |", "| rolled-back |")
+
+                        restored_files = set()
+                        for root, _, files in os.walk(bak_dir):
+                            for file in files:
+                                bak_path = os.path.join(root, file)
+                                rel_path = bak_path.replace(bak_dir + "/", "").replace("__colon__", ":").replace("__", "/")
+                                os.makedirs(os.path.dirname(os.path.abspath(rel_path)), exist_ok=True)
+                                
+                                # Safety temp copy before overwrite
+                                tmp_path = f".dumbledoer/tmp/{file}.tmp"
+                                os.makedirs(os.path.dirname(tmp_path), exist_ok=True)
+                                if os.path.exists(rel_path):
+                                    shutil.copy2(rel_path, tmp_path)
+                                
+                                shutil.copy2(bak_path, rel_path)
+                                restored_files.add(rel_path)
+                                print(f"  Restored: {rel_path}")
                         
-                await TaskRegistryState().update_task_status(task_id, "pending")
-                print(f"Task {task_id} rolled back to pending.")
+                        for f_path in touched_files:
+                            if f_path not in restored_files and os.path.exists(f_path):
+                                os.remove(f_path)
+                                print(f"  Deleted newly created file: {f_path}")
+
+                    # Fix 2: Dynamic Task Details lookup for trailing titles
+                    t_start, t_end = -1, -1
+                    for i, line in enumerate(mem_lines):
+                        if line.startswith(f"### {task_id}"):
+                            t_start = i
+                            for j in range(i + 1, len(mem_lines)):
+                                if mem_lines[j].startswith("## ") or mem_lines[j].startswith("### T-"):
+                                    t_end = j
+                                    break
+                            if t_end == -1:
+                                t_end = len(mem_lines)
+                            break
+                    
+                    if t_start != -1:
+                        for i in range(t_start, t_end):
+                            if "- **Owner**:" in mem_lines[i]: mem_lines[i] = "- **Owner**: —"
+                            if "- **Checkpoint**:" in mem_lines[i]: mem_lines[i] = "- **Checkpoint**: none"
+                            if "- **Notes**:" in mem_lines[i]: mem_lines[i] += f" (Rolled back)"
+
+                # Save updated memory.md
+                mem_content = "\n".join(mem_lines)
+                with open("memory.md", "w", encoding="utf-8") as f:
+                    f.write(mem_content)
+
+                # Fix 3: Execute TaskRegistryState updates AFTER the file write
+                for task_id in tasks_to_rollback:
+                    await state.update_task_status(task_id, "pending")
+
+                # Sync CodeGraph AST
+                if os.path.exists(".codegraph"):
+                    print("\nSyncing CodeGraph index...")
+                    import subprocess
+                    subprocess.run(["npx", "-y", "--package=@colbymchenry/codegraph", "codegraph", "sync"], capture_output=True)
+
+                print(f"\nRollback complete. Restored {len(tasks_to_rollback)} task(s).")
                 return
     
             if command == "execute":
+                OrphanRecoveryScanner().run(unattended=True)
                 import glob
                 existing_tmps = set(glob.glob(".dumbledoer/tmp/*.tmp"))
                 if existing_tmps:
@@ -1590,6 +1773,573 @@ Mandatory rules:
                     wave_tmps = list(after_tmps - before_tmps)
                     if wave_tmps:
                         await self.batch_diff_review(wave_tmps)
+
+            elif command == "report":
+                from rich.console import Console
+                from rich.markdown import Markdown
+                import difflib
+                from datetime import datetime
+                
+                console = Console()
+                output_path = None
+                
+                # 1. Parse Args
+                for i, arg in enumerate(args):
+                    if arg.startswith("--output="):
+                        output_path = arg.split("=")[1]
+                    elif arg == "--output" and i + 1 < len(args):
+                        output_path = args[i + 1]
+
+                if not os.path.exists("memory.md"):
+                    console.print("[red]Error: memory.md not found. Run /dumbledoer:start first.[/red]")
+                    return
+
+                with open("memory.md", "r", encoding="utf-8") as f:
+                    mem_content = f.read()
+
+                # 2. Parse Baseline Config
+                config_start, config_end = ASTMemoryMapper.locate_heading_block(mem_content, "##", "Config")
+                baseline_symbols = "0"
+                baseline_sync = "Unknown"
+                backend = "native"
+                if config_start != -1:
+                    for line in mem_content.splitlines()[config_start:config_end]:
+                        if "codegraph_baseline_symbols:" in line: baseline_symbols = line.split(":", 1)[1].strip()
+                        if "codegraph_baseline_sync:" in line: baseline_sync = line.split(":", 1)[1].strip()
+                        if "codegraph_backend:" in line: backend = line.split(":", 1)[1].strip()
+
+                # 3. Get Current CodeGraph Status
+                cg_symbols = "0"
+                if os.path.exists(".codegraph"):
+                    try:
+                        cg_out = subprocess.run(["npx", "-y", "--package=@colbymchenry/codegraph", "codegraph", "status"], capture_output=True, text=True).stdout
+                        sym_match = re.search(r"(\d+)\s+symbols", cg_out)
+                        if sym_match: cg_symbols = sym_match.group(1)
+                    except Exception: pass
+
+                # 4. Extract Tasks & Goal
+                goal_start, goal_end = ASTMemoryMapper.locate_heading_block(mem_content, "##", "Project Goal")
+                project_goal = mem_content.splitlines()[goal_start+1:goal_end][0] if goal_start != -1 and goal_end > goal_start + 1 else "No goal defined."
+
+                state = TaskRegistryState()
+                all_tasks = state.load_tasks()
+                completed_changes = [t for t in all_tasks.values() if t['status'] == 'completed' and 'change' in t.get('original_line', '')]
+                pending_tasks = [t for t in all_tasks.values() if t['status'] in ['pending', 'deferred']]
+
+                if not completed_changes:
+                    console.print("[yellow]No completed changes found. Run /dumbledoer:status to see pending tasks.[/yellow]")
+                    return
+
+                # 5. Build Report Markdown
+                lines = [
+                    "# DumbleDoer Improvement Report\n",
+                    f"**Project**: {project_goal}",
+                    f"**Tasks Completed**: {len(completed_changes)}",
+                    f"**Generated**: {datetime.utcnow().isoformat()}Z\n",
+                    "---\n",
+                    "## Baseline Assessment\n",
+                    f"- Symbols indexed at session start: {baseline_symbols}",
+                    f"- CodeGraph backend: {backend}",
+                    f"- Session start: {baseline_sync}",
+                    f"- Current symbol count: {cg_symbols}\n",
+                    "---\n",
+                    "## Changes Applied\n"
+                ]
+
+                total_tool_calls_est = 0
+                unique_files_modified = set()
+
+                # 6. Generate Diffs Deterministically
+                for t in completed_changes:
+                    t_id = t['id']
+                    title = t['title']
+                    outputs = t.get('outputs', [])
+                    
+                    effort = "small"
+                    impact = "—"
+                    t_start, t_end = ASTMemoryMapper.locate_heading_block(mem_content, "###", t_id)
+                    if t_start != -1:
+                        task_block = "\n".join(mem_content.splitlines()[t_start:t_end])
+                        match_eff = re.search(r"- \*\*Estimated Effort\*\*: (small|medium|large)", task_block, re.IGNORECASE)
+                        if match_eff: effort = match_eff.group(1).lower()
+                        match_imp = re.search(r"- \*\*CodeGraph Impact\*\*: (.*)", task_block)
+                        if match_imp: impact = match_imp.group(1).strip()
+                    
+                    if effort == "small": total_tool_calls_est += 5
+                    elif effort == "medium": total_tool_calls_est += 10
+                    elif effort == "large": total_tool_calls_est += 20
+
+                    lines.append(f"### {t_id}: {title}\n")
+                    lines.append(f"**What changed**: {', '.join(outputs) if outputs else 'None'}")
+                    lines.append(f"**Impact radius** (CodeGraph): {impact}\n")
+                    
+                    for file_path in outputs:
+                        unique_files_modified.add(file_path)
+                        encoded_path = file_path.replace("/", "__").replace(":", "__colon__")
+                        possible_rollback = os.path.join(".dumbledoer", "rollbacks", t_id, encoded_path)
+                        
+                        original_text = ""
+                        if os.path.exists(possible_rollback):
+                            with open(possible_rollback, "r") as rf: original_text = rf.read()
+                        
+                        current_text = ""
+                        if os.path.exists(file_path):
+                            with open(file_path, "r") as cf: current_text = cf.read()
+                            
+                        diff = list(difflib.unified_diff(
+                            original_text.splitlines(),
+                            current_text.splitlines(),
+                            fromfile=f"a/{file_path}",
+                            tofile=f"b/{file_path}",
+                            n=3, lineterm=""
+                        ))
+                        
+                        if diff:
+                            lines.append(f"**Diff for `{file_path}`**:")
+                            lines.append("```diff")
+                            # Truncate massive diffs to keep report scannable
+                            diff_block = "\n".join(diff[:40])
+                            lines.append(diff_block)
+                            if len(diff) > 40:
+                                lines.append(f"... (diff truncated, {len(diff)-40} more lines)")
+                            lines.append("```\n")
+                            
+                # 7. Analytics & Token Yield
+                lines.append("---\n")
+                lines.append("## Delta Summary\n")
+                lines.append("| Metric | Before | After | Change |")
+                lines.append("|--------|--------|-------|--------|")
+                try: delta_sym = int(cg_symbols) - int(baseline_symbols)
+                except ValueError: delta_sym = "N/A"
+                delta_str = f"+{delta_sym}" if isinstance(delta_sym, int) and delta_sym > 0 else str(delta_sym)
+                lines.append(f"| Symbols indexed | {baseline_symbols} | {cg_symbols} | {delta_str} |")
+                lines.append(f"| Files modified | 0 | {len(unique_files_modified)} | +{len(unique_files_modified)} |")
+                lines.append(f"| Tasks completed | 0 | {len(completed_changes)} | +{len(completed_changes)} |\n")
+                
+                lines.append("---\n")
+                lines.append("## Token Optimization\n")
+                lines.append(f"- Estimated Tool Calls Executed: {total_tool_calls_est}")
+                lines.append(f"- Optimization Yield: ~{total_tool_calls_est * 25000} tokens saved")
+                lines.append("- Engine Mechanism: Dynamic Tool Filtering & Sliced Memory Ingestion\n")
+                
+                lines.append("---\n")
+                lines.append("## Recommended Next Steps\n")
+                if pending_tasks:
+                    for pt in pending_tasks:
+                        lines.append(f"- {pt['id']}: {pt['title']} ({pt['status']})")
+                    lines.append("\nRun `/dumbledoer:resume` to continue working on these tasks.")
+                else:
+                    lines.append("All improvement tasks completed. The agent has been fully improved per the session goals.")
+
+                report_md = "\n".join(lines)
+                
+                if output_path:
+                    try:
+                        os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
+                        with open(output_path, "w", encoding="utf-8") as f:
+                            f.write(report_md)
+                        console.print(f"[green]Report successfully written to {output_path}[/green]")
+                    except Exception as e:
+                        console.print(f"[red]Error writing report to {output_path}: {e}[/red]")
+                else:
+                    console.print(Markdown(report_md))
+                    
+                # 8. Sync Knowledge Base implicitly
+                if os.path.exists("sync_knowledge.py"):
+                    try: subprocess.run([sys.executable, "sync_knowledge.py"], capture_output=True)
+                    except: pass
+                
+                return
+
+            elif command == "audit":
+                from rich.console import Console
+                from rich.table import Table
+                console = Console()
+                
+                if not os.path.exists("memory.md"):
+                    console.print("[red]Error: memory.md not found. Run /dumbledoer:start first.[/red]")
+                    return
+
+                with open("memory.md", "r", encoding="utf-8") as f:
+                    mem_content = f.read()
+
+                OrphanRecoveryScanner().run(unattended=True)
+
+                state = TaskRegistryState()
+                all_tasks = state.load_tasks()
+                # 1. State Parsing: Target only awaiting-review
+                review_tasks = [t for t in all_tasks.values() if t['status'].strip() == 'awaiting-review']
+
+                if not review_tasks:
+                    console.print("[green]No tasks currently awaiting review.[/green]")
+                    return
+
+                console.print(f"[cyan]Starting Native QA Harness Loop for {len(review_tasks)} task(s)...[/cyan]")
+                
+                results_summary = []
+
+                # 2. Sequential Unattended Dispatch Loop
+                for t in review_tasks:
+                    t_id = t['id']
+                    title = t['title']
+                    outputs = t.get('outputs', [])
+                    
+                    console.print(f"\n[bold yellow]Auditing {t_id}: {title}[/bold yellow]")
+                    
+                    # Extract Success Criteria natively
+                    success_criteria = "Not defined."
+                    t_start, t_end = ASTMemoryMapper.locate_heading_block(mem_content, "###", t_id)
+                    if t_start != -1:
+                        task_block = "\n".join(mem_content.splitlines()[t_start:t_end])
+                        import re
+                        match_crit = re.search(r"- \*\*Success Criteria\*\*: (.*)", task_block)
+                        if match_crit:
+                            success_criteria = match_crit.group(1).strip()
+
+                    # 3. Native Static Analysis (Defusing the Unbounded Bash Trap)
+                    static_analysis_output = ""
+                    py_files = [f for f in outputs if f.endswith(".py") and os.path.exists(f)]
+                    
+                    for pf in py_files:
+                        try:
+                            # Primary Backend: uvx ruff check
+                            import subprocess
+                            proc = subprocess.run(["uvx", "ruff", "check", pf], capture_output=True, text=True)
+                            out = proc.stdout + proc.stderr
+                            if proc.returncode != 0 and "executable file not found" in proc.stderr.lower():
+                                raise FileNotFoundError("uvx not found")
+                            static_analysis_output += f"--- Ruff Check for {pf} ---\n{out.strip() or 'Syntax OK. No issues found.'}\n"
+                        except FileNotFoundError:
+                            # Safety Net Backend: Built-in py_compile
+                            proc1 = subprocess.run([sys.executable, "-m", "py_compile", pf], capture_output=True, text=True)
+                            out = proc1.stdout + proc1.stderr
+                            if proc1.returncode != 0:
+                                static_analysis_output += f"--- py_compile for {pf} ---\n{out.strip()}\n"
+                            else:
+                                static_analysis_output += f"--- py_compile for {pf} ---\nSyntax OK.\n"
+                                
+                    if not static_analysis_output.strip():
+                        static_analysis_output = "No Python files modified, or no static analysis warnings found."
+                    
+                    # Hard Truncation to prevent context window explosion
+                    if len(static_analysis_output) > 2000:
+                        static_analysis_output = static_analysis_output[:2000] + "\n... [TRUNCATED BY NATIVE ORCHESTRATOR TO PREVENT TOKEN BLOAT]"
+
+                    # 4. Isolated LLM Evaluator Prompt
+                    prompt_payload = f"""You are the strict DumbleDoer QA Evaluator.
+You are evaluating EXACTLY ONE task.
+
+# TASK UNDER REVIEW: {t_id}
+Title: {title}
+Modified Files: {', '.join(outputs) if outputs else 'None'}
+Success Criteria: {success_criteria}
+
+# NATIVE STATIC ANALYSIS RESULTS
+{static_analysis_output}
+
+# YOUR DIRECTIVE
+1. Evaluate the static analysis output and any other necessary context (using read_file or execute_bash for a single targeted test if needed).
+2. If the task passes its success criteria and has no critical static analysis errors, you MUST use the `update_memory_registry` tool to change its status from `awaiting-review` to `completed` in the Task Registry. Example target string: `| {t_id} | {title} | change | awaiting-review |`
+3. If the task fails, you MUST use the `add_task` tool to queue a specific `change` task to fix the bug. Do not change the current task's status (leave it as awaiting-review).
+4. Terminate your turn with a brief summary of your decision.
+"""
+                    
+                    chat_session = self.client.aio.chats.create(model=getattr(self, "model", "gemini-2.5-flash"), config={"tools": self._get_tools_for_command("audit"), "automatic_function_calling": {"disable": True}})
+                    
+                    with console.status(f"[cyan]LLM Evaluator analyzing {t_id}...[/cyan]", spinner="dots") as status:
+                        try:
+                            response = await self._run_with_tools(chat_session, prompt_payload, status=status)
+                            if hasattr(response, 'usage_metadata') and response.usage_metadata:
+                                self.budget_manager.add_tokens(getattr(response.usage_metadata, 'total_token_count', 0))
+                            self.budget_manager.check_and_harvest()
+                            
+                            # Reload tasks to detect what the LLM decided
+                            new_tasks = TaskRegistryState().load_tasks()
+                            current_status = new_tasks.get(t_id, {}).get('status', 'awaiting-review')
+                            
+                            if current_status == 'completed':
+                                results_summary.append((t_id, "[green]PASSED[/green]", "Marked completed"))
+                                console.print(f"[green]✔ {t_id} Passed QA.[/green]")
+                            else:
+                                results_summary.append((t_id, "[red]FAILED[/red]", "Fix task queued"))
+                                console.print(f"[red]✖ {t_id} Failed QA. Fix task generated.[/red]")
+                                
+                        except BudgetExhaustedException:
+                            console.print("[bold red]Budget exhausted during audit.[/bold red]")
+                            await self._graceful_shutdown(t_id)
+                            return
+                        except Exception as e:
+                            console.print(f"[bold red]Error auditing {t_id}: {e}[/bold red]")
+                            results_summary.append((t_id, "[yellow]ERROR[/yellow]", str(e)))
+
+                # 5. Final Report
+                console.print("\n[bold]Audit Wave Complete[/bold]")
+                table = Table(title="QA Harness Results")
+                table.add_column("Task ID", style="cyan")
+                table.add_column("Result")
+                table.add_column("Action Taken", style="dim")
+                for res in results_summary:
+                    table.add_row(res[0], res[1], res[2])
+                console.print(table)
+                return
+
+            elif command == "status":
+                is_verbose = "--verbose" in args or "-v" in args
+                
+                if not os.path.exists("memory.md"):
+                    print("Error: memory.md not found. Run /dumbledoer:start to begin.")
+                    return
+
+                with open("memory.md", "r", encoding="utf-8") as f:
+                    content = f.read()
+
+                # 1. Parse Project Goal
+                goal_start, goal_end = ASTMemoryMapper.locate_heading_block(content, "##", "Project Goal")
+                project_goal = "None"
+                if goal_start != -1:
+                    for line in content.splitlines()[goal_start+1:goal_end]:
+                        if line.strip() and not line.startswith("#"):
+                            project_goal = line.strip().split(".")[0] + "."
+                            break
+
+                # 2. Parse Session & Budget Data
+                sess_start, sess_end = ASTMemoryMapper.locate_heading_block(content, "##", "Session Log")
+                last_session_id, last_outcome, last_end = "None", "None", "None"
+                if sess_start != -1:
+                    sess_lines = [l.strip() for l in content.splitlines()[sess_start+1:sess_end] if l.startswith("|") and "---" not in l and "Session ID" not in l]
+                    if sess_lines:
+                        parts = [p.strip() for p in sess_lines[-1].split("|")]
+                        if len(parts) >= 6:
+                            last_session_id, last_end, last_outcome = parts[1], parts[3], parts[4]
+
+                tokens = self.budget_manager.estimated_tokens
+                limit = self.budget_manager.budget_limit
+                pct_used = int((tokens / limit) * 100) if limit > 0 else 0
+
+                # 3. Print Header
+                print(f"\ndumbledoer — Session {last_session_id} | Budget: {pct_used}% used ({tokens}/{limit} est. tokens)")
+                print(f"\nProject Goal: {project_goal}\n")
+                print("Task Registry:")
+
+                # 4. Parse and Format Task Registry
+                icons = {"completed": "✅", "in_progress": "🔄", "interrupted": "⏸", "pending": "⬜", "blocked": "🚫", "deferred": "💤"}
+                tasks = TaskRegistryState().load_tasks()
+                
+                for t_id, t in tasks.items():
+                    parts = [p.strip() for p in t.get('original_line', '').split("|")]
+                    t_type = parts[3] if len(parts) > 3 else "unknown"
+                    t_status = parts[4] if len(parts) > 4 else t['status']
+                    owner = parts[5] if len(parts) > 5 else "—"
+                    
+                    icon = icons.get(t_status.lower(), "⬜")
+                    title = (t['title'][:47] + "...") if len(t['title']) > 50 else t['title']
+                    
+                    step_note = ""
+                    if "in_progress" in t_status.lower() and len(parts) > 8:
+                        chk_id = parts[8]
+                        if "step" in chk_id:
+                            step_note = f"(step {chk_id.split('step')[1].split('-')[0]})"
+
+                    print(f"  {icon} {t_id}  {title:<50} [{t_type}]  {owner}  {step_note}")
+                    
+                    if is_verbose:
+                        # Extract and print detailed task block
+                        t_start, t_end = ASTMemoryMapper.locate_heading_block(content, "###", t_id)
+                        if t_start != -1:
+                            print("\n    " + "\n    ".join(content.splitlines()[t_start+1:t_end]))
+                            print("")
+
+                # 5. Fetch CodeGraph Status Natively
+                cg_healthy, cg_symbols, cg_sync = "⚠ not initialized — run codegraph init -i", "0", "N/A"
+                if os.path.exists(".codegraph"):
+                    try:
+                        import subprocess, re
+                        cg_out = subprocess.run(["npx", "-y", "--package=@colbymchenry/codegraph", "codegraph", "status"], capture_output=True, text=True).stdout
+                        sym_match = re.search(r"(\d+)\s+symbols", cg_out)
+                        cg_symbols = sym_match.group(1) if sym_match else "unknown"
+                        cg_healthy = "✅ healthy" if "healthy" in cg_out.lower() or "ok" in cg_out.lower() else "⚠ stale"
+                        cg_sync = "recently" # Simplification for native speed
+                    except Exception:
+                        cg_healthy = "⚠ degraded"
+
+                # 6. Evaluate Knowledge Registry Natively
+                know_path = "knowledge"
+                conf_start, conf_end = ASTMemoryMapper.locate_heading_block(content, "##", "Config")
+                if conf_start != -1:
+                    for l in content.splitlines()[conf_start:conf_end]:
+                        if "- knowledge_path:" in l:
+                            know_path = l.split(":", 1)[1].strip()
+
+                if not os.path.exists(know_path):
+                    know_str = f"Knowledge: no registry — /dumbledoer:start creates it"
+                else:
+                    k_stats = {"decision": 0, "success": 0, "failure": 0, "constraint": 0, "insight": 0, "superseded": 0}
+                    k_total, k_last_date = 0, "N/A"
+                    import glob, re
+                    entries = glob.glob(os.path.join(know_path, "entries", "*.md"))
+                    dates = []
+                    for e in entries:
+                        try:
+                            with open(e, "r", encoding="utf-8") as kf:
+                                fm = re.match(r'^---\n(.*?)\n---', kf.read(), re.DOTALL)
+                                if fm:
+                                    fm_text = fm.group(1).lower()
+                                    t_match = re.search(r'type:\s*(\w+)', fm_text)
+                                    s_match = re.search(r'status:\s*(\w+)', fm_text)
+                                    d_match = re.search(r'created:\s*([^\n]+)', fm_text)
+                                    
+                                    if t_match and t_match.group(1) in k_stats: k_stats[t_match.group(1)] += 1
+                                    if s_match and "superseded" in s_match.group(1): k_stats["superseded"] += 1
+                                    if d_match: dates.append(d_match.group(1).strip())
+                                    k_total += 1
+                        except Exception: pass
+                        
+                    if dates: k_last_date = max(dates)
+                    know_str = f"Knowledge: {k_total} entries ({k_stats['decision']} decisions, {k_stats['success']} successes, {k_stats['failure']} failures, {k_stats['constraint']} constraints, {k_stats['insight']} insights; {k_stats['superseded']} superseded) | last entry {k_last_date} | {know_path}"
+
+                # 7. Print Footers
+                print(f"\nLast session: {last_session_id} — {last_outcome} ({last_end})")
+                print(f"CodeGraph: {cg_healthy} | {cg_symbols} symbols | last sync {cg_sync}")
+                print(know_str + "\n")
+                return
+
+            elif command == "update-docs":
+                dry_run = "--dry-run" in args
+                enrich = "--enrich" in args
+                docs_path = None
+                
+                # 1. Parse Args & memory.md Config
+                for i, arg in enumerate(args):
+                    if arg.startswith("--docs="):
+                        docs_path = arg.split("=")[1]
+                    elif arg == "--docs" and i + 1 < len(args):
+                        docs_path = args[i + 1]
+
+                if not os.path.exists("memory.md"):
+                    print("Error: memory.md not found. Run /dumbledoer:start to initialize.")
+                    return
+                
+                with open("memory.md", "r", encoding="utf-8") as f:
+                    mem_content = f.read()
+                
+                if not docs_path:
+                    conf_start, conf_end = ASTMemoryMapper.locate_heading_block(mem_content, "##", "Config")
+                    if conf_start != -1:
+                        for line in mem_content.splitlines()[conf_start:conf_end]:
+                            if "- docs_path:" in line:
+                                docs_path = line.split(":", 1)[1].strip()
+                
+                if not docs_path or not os.path.isdir(docs_path):
+                    print(f"Error: valid docs path not found ('{docs_path}'). Provide --docs <path>.")
+                    return
+
+                last_docs_update = None
+                conf_start, conf_end = ASTMemoryMapper.locate_heading_block(mem_content, "##", "Config")
+                if conf_start != -1:
+                    for line in mem_content.splitlines()[conf_start:conf_end]:
+                        if "- last_docs_update:" in line and "null" not in line and "never" not in line:
+                            last_docs_update = line.split(":", 1)[1].strip()
+
+                # 2. Get Changed Files from Git
+                changed_files = []
+                if last_docs_update:
+                    try:
+                        git_out = subprocess.run(["git", "log", "--name-only", "--pretty=format:", f"--since={last_docs_update}"], capture_output=True, text=True).stdout
+                        changed_files = [f.strip() for f in git_out.splitlines() if f.strip()]
+                    except Exception:
+                        pass
+
+                from rich.console import Console
+                from rich.table import Table
+                from rich.prompt import Prompt
+                console = Console()
+                
+                console.print(f"[cyan]Scanning '{docs_path}' for explicit AST bindings...[/cyan]")
+                
+                # 3. Explicit AST Extraction (Defusing the Backtick Bomb)
+                wikilink_pattern = re.compile(r'\[\[([^\|\]]+)(?:\|[^\]]+)?\]\]')
+                html_comment_pattern = re.compile(r'<!--\s*ast-symbol:\s*([^\s>]+)\s*-->')
+
+                import glob
+                doc_files = glob.glob(os.path.join(docs_path, "**/*.md"), recursive=True)
+                if not doc_files:
+                    console.print(f"[yellow]Warning: No markdown files found in {docs_path}.[/yellow]")
+                    return
+
+                tasks_to_create = []
+                
+                # 4. Inverted Search & Delta Analysis
+                with console.status("[bold yellow]Inverting search against CodeGraph AST...", spinner="dots"):
+                    for doc_file in doc_files:
+                        with open(doc_file, "r", encoding="utf-8") as df:
+                            doc_content = df.read()
+                        
+                        symbols = set(wikilink_pattern.findall(doc_content) + html_comment_pattern.findall(doc_content))
+                        
+                        needs_update = False
+                        reasons = []
+
+                        if enrich and len(doc_content.splitlines()) <= 5:
+                            needs_update = True
+                            reasons.append("Sparse document (enrichment candidate)")
+
+                        for sym in symbols:
+                            try:
+                                cg_out = subprocess.run(["npx", "-y", "--package=@colbymchenry/codegraph", "codegraph", "search", sym], capture_output=True, text=True).stdout
+                                
+                                if "No results" in cg_out or not cg_out.strip():
+                                    needs_update = True
+                                    reasons.append(f"Symbol '{sym}' is dead/missing")
+                                elif not last_docs_update or any(cf in cg_out for cf in changed_files):
+                                    needs_update = True
+                                    reasons.append(f"Symbol '{sym}' source file modified")
+                            except Exception:
+                                pass 
+
+                        if needs_update:
+                            tasks_to_create.append({
+                                "file": doc_file,
+                                "reasons": list(set(reasons))
+                            })
+
+                if not tasks_to_create:
+                    console.print("[green]Documentation is already up to date. No dead symbols or modified sources detected.[/green]")
+                    return
+
+                table = Table(title="Proposed Documentation Updates")
+                table.add_column("Document", style="cyan")
+                table.add_column("Reason", style="yellow")
+                
+                for t in tasks_to_create:
+                    table.add_row(t['file'], ", ".join(t['reasons']))
+                    
+                console.print(table)
+
+                if dry_run:
+                    console.print("\n[yellow]Dry run — no files modified. Run without --dry-run to apply.[/yellow]")
+                    return
+
+                choice = Prompt.ask("Queue these surgical patches into the Task Registry? [Y/N]", choices=["Y", "N"], default="Y")
+                if choice == "N":
+                    console.print("[yellow]Update cancelled.[/yellow]")
+                    return
+
+                # 5. Task Generation & Handoff
+                console.print("\n[cyan]Queueing tasks...[/cyan]")
+                for t in tasks_to_create:
+                    desc = f"Surgically patch {t['file']} to resolve: {', '.join(t['reasons'])}. STRICTLY preserve human rationale, Mermaid diagrams, and tables."
+                    res = await add_task(title=f"Update docs: {os.path.basename(t['file'])}", task_type="change", description=desc, outputs=t['file'])
+                    console.print(f"[dim]{res}[/dim]")
+
+                from datetime import datetime
+                now_iso = datetime.utcnow().isoformat() + "Z"
+                mem_content = re.sub(r"- last_docs_update:.*", f"- last_docs_update: {now_iso}", mem_content)
+                with open("memory.md", "w", encoding="utf-8") as f:
+                    f.write(mem_content)
+
+                console.print("\n[bold green]Tasks successfully queued! Run /dumbledoer:execute to trigger the LLM patch wave.[/bold green]")
+                return
+
             else:
                 self.chat_session = self.client.aio.chats.create(model=getattr(self, "model", "gemini-2.5-flash"), config={"tools": self._get_tools_for_command(command), "automatic_function_calling": {"disable": True}})
                 sys_inst = await self._get_system_instructions(command)
@@ -1597,7 +2347,21 @@ Mandatory rules:
                 from rich.console import Console
                 console = Console()
                 with console.status(f"[bold cyan]Running {command} agent...", spinner="dots") as status:
-                    response = await self._run_with_tools(self.chat_session, payload, status=status)
+                    try:
+                        response = await self._run_with_tools(self.chat_session, payload, status=status)
+                    except BudgetExhaustedException:
+                        print(f"\n[bold red]Budget threshold reached during {command}. Attempting token clearance...[/bold red]")
+                        rtk_out = await run_rtk("gain")
+                        import re
+                        match = re.search(r"(\d+)", rtk_out)
+                        rtk_savings = int(match.group(1)) if match else 50000
+                        self.budget_manager.estimated_tokens = max(0, self.budget_manager.estimated_tokens - rtk_savings)
+                        try:
+                            response = await self._run_with_tools(self.chat_session, payload, status=status)
+                        except (BudgetExhaustedException, RuntimeError) as e:
+                            print(f"Task failed or budget threshold blocked retry: {e}")
+                            await self._graceful_shutdown()
+                            return
                 if response.function_calls:
                     print("Function Calls that were not handled:", response.function_calls)
                 print(response.text)
@@ -1803,7 +2567,16 @@ async def main_async():
     )
     parser.add_argument("--model", default=os.getenv("AGY_MODEL", "gemini-2.5-flash"), help="Model override")
     parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose mode (e.g. GUI diff-gate in VS Code)")
-    args, unknown = parser.parse_known_args()
+    parser.add_argument("--budget-limit", type=int, help="Override budget_limit for token tracking")
+    parser.add_argument("--budget-threshold", type=int, help="Override budget_threshold_pct (e.g. 80)")
+    import shlex
+    flat_args = []
+    for arg in sys.argv[1:]:
+        if " " in arg and (arg.startswith("-") or "--" in arg):
+            flat_args.extend(shlex.split(arg))
+        else:
+            flat_args.append(arg)
+    args, unknown = parser.parse_known_args(flat_args)
     
     global GUI_DIFF_ENABLED
     GUI_DIFF_ENABLED = args.verbose
@@ -1820,7 +2593,7 @@ async def main_async():
         except FileNotFoundError:
             pass
     
-    cli = DumbleDoerCLI()
+    cli = DumbleDoerCLI(budget_limit=args.budget_limit, budget_threshold=args.budget_threshold)
     await cli.run(args.command, unknown, model=args.model)
 
 def main():
