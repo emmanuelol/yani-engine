@@ -35,7 +35,7 @@ class DependencyGraphError(Exception):
 class BudgetManager:
     def __init__(self, config_text: str):
         self.estimated_tokens = 0
-        self.budget_limit = 100000
+        self.budget_limit = 500000
         self.threshold_pct = 80
         
         for line in config_text.splitlines():
@@ -245,7 +245,10 @@ async def execute_bash(command: str, sandbox_mode: str = None, task_id: str = No
 
 async def read_file(path: str) -> str:
     def _read():
-        with open(path, "r", encoding="utf-8") as f:
+        import os
+        # Expand the ~ so the LLM can use standard home directory paths
+        expanded_path = os.path.expanduser(path)
+        with open(expanded_path, "r", encoding="utf-8") as f:
             return f.read()
     try:
         return await asyncio.to_thread(_read)
@@ -525,6 +528,10 @@ async def write_file_with_review(path: str, content: str, task_id: str) -> str:
         
         # Also write shadow .tmp copy for batch_diff_review workflow
         with open(tmp_path, "w") as f:
+            f.write(content)
+            
+        # ACTUALLY WRITE THE FILE!
+        with open(path, "w") as f:
             f.write(content)
             
         return f"Successfully applied changes to {path} (Rollback: {rollback_path}, Review: {tmp_path})"
@@ -875,7 +882,7 @@ class DumbleDoerCLI:
 
     # Dynamic tool filtering per command to reduce token consumption
     COMMAND_TOOL_WHITELIST = {
-        "start":   {"read_file", "execute_bash", "add_task", "write_file_with_review", "codegraph_status", "context7_resolve_library_id", "context7_query_docs"},
+        "start":   {"read_file", "execute_bash", "add_task", "write_file_with_review", "codegraph_status", "context7_resolve_library_id", "context7_query_docs", "update_memory_registry"},
         "iterate": {"add_task", "read_file", "codegraph_search", "codegraph_impact", "context7_resolve_library_id", "context7_query_docs"},
         "status":  {"read_file", "execute_bash"},
         "rollback": {"read_file", "execute_bash"},
@@ -1020,6 +1027,12 @@ class DumbleDoerCLI:
         print("CRITICAL: Budget Exhausted. Initiating Graceful Shutdown Sequence...")
         def _shutdown():
             with get_registry_lock():
+                # --- NEW GUARDRAIL: Prevent FileNotFoundError if bootstrapping fails ---
+                if not os.path.exists("memory.md"):
+                    print("Shutdown intercepted: memory.md has not been initialized yet. Aborting cleanly without saving state.")
+                    return
+                # -----------------------------------------------------------------------
+
                 with FileLock("memory.md.lock", timeout=60):
                     with open("memory.md", "r", encoding="utf-8") as f:
                         content = f.read()
@@ -1044,7 +1057,7 @@ class DumbleDoerCLI:
                     
         await asyncio.to_thread(_shutdown)
         _teardown_warm_sandbox()
-        print("Graceful Shutdown Sequence Complete. State preserved in memory.md.")
+        print("Graceful Shutdown Sequence Complete. State preserved in memory.md (if initialized).")
 
     async def _get_sliced_memory(self, sections: list) -> str:
         """Extracts only specified sections from memory.md to minimize token consumption."""
@@ -1153,11 +1166,10 @@ class DumbleDoerCLI:
                 if tool_func:
                     try:
                         args = dict(call.args) if call.args else {}
-                        msg = f"Executing tool: {tool_name}"
+                        msg = f"Executing tool: {tool_name} with args: {args}"
                         if status:
                             status.update(f"[bold yellow]{msg}...")
-                        else:
-                            print(msg)
+                        print(msg)
                         
                         import inspect
                         if tool_name in ["write_file_with_review", "execute_bash"] and task_id is not None:

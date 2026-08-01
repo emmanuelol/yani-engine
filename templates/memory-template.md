@@ -1,7 +1,7 @@
 # Memory
 
 ## Config
-- budget_limit: 100000
+- budget_limit: 500000
 - budget_threshold_pct: 80
 - session_count: 1
 - codegraph_baseline_symbols: 0

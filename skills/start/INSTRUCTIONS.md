@@ -1,6 +1,3 @@
-> [!IMPORTANT] EXECUTION DIRECTIVE: When the user invokes this command, you MUST immediately execute the corresponding JSON tool defined in the commands/ directory. Do not explain the command to the user. Do not ask the user to run it in their terminal. Execute the tool call silently and report the output.
-> FALLBACK PROTOCOL: If the JSON tool call fails or cannot be resolved, you MUST use the Bash tool to execute the command directly via ~/.gemini/config/plugins/dumbledoer/run_dumbledoer.sh <command_name>. Under NO circumstances are you allowed to invoke python3 directly or use pip install. You must rely exclusively on the run_dumbledoer.sh wrapper.
-
 ---
 name: start
 description: Start a new agent improvement session with discovery Q&A, CodeGraph analysis, and task execution. Use when beginning a new dumbledoer improvement project.
@@ -93,18 +90,18 @@ no Gemini Code restart. Only the project INDEX may need to be built:
 
 ---
 
-## Section 4 — Ingest Inputs
+## Section 4 — Strict Bounded Ingestion (CONCURRENT EXECUTION REQUIRED)
 
-Read all provided input files as plain text (any format accepted, no schema required):
+**CRITICAL TOKEN GUARDRAIL:** You are STRICTLY FORBIDDEN from using `execute_bash` to run recursive directory mapping (like `ls -R`, `tree`, or `find`). 
 
-1. Read all files recursively from `--docs` directory.
-2. If `--project` provided: read the file.
-3. If `--examples` provided: read all files in the directory recursively.
-4. If `--requirements` provided: read the file.
-5. Explicitly detect if `Dockerfile` or `docker-compose.yml` exists in the project root.
+**PARALLEL EXECUTION MANDATE:** You MUST compress your reconnaissance into a single execution turn. Fire your bash commands, your file reads, and your semantic queries concurrently. Do not run them sequentially.
 
-Summarize the ingested content internally to understand the agent's purpose, existing
-behavior, and any stated improvement goals.
+1. **Shallow Reconnaissance:** Use `execute_bash` with `ls -1 <path>` to view the root directories. 
+2. **Surgical Reading:** Select a maximum of TWO high-level files (e.g., `README.md`) using `read_file`. 
+3. **Semantic Offloading:** Offload deep searches to the `context7_query_docs` MCP tool. Do not manually parse codebases. 
+4. Check for `Dockerfile` or `docker-compose.yml` in the root via bash.
+
+Summarize your findings internally. Do not loop to gather more data. Proceed immediately to Section 5.
 
 ---
 
@@ -113,7 +110,7 @@ behavior, and any stated improvement goals.
 **Load `dumbledoer/lib/knowledge-protocol.md` now** (lazy reference).
 
 1. Instruct AGY to check for `knowledge/index.md` on startup.
-2. If absent, instruct AGY to use `write_file_with_review` to create it from `templates/knowledge-index-template.md`.
+2. If absent, instruct AGY to use `write_file_with_review` to create it from `~/.gemini/config/plugins/dumbledoer/templates/knowledge-index-template.md`.
 3. If present, instruct AGY to selectively read ONLY `index.md` and active `failure` or `constraint` entries matching the current project goal during discovery.
 4. Carry the loaded knowledge into Sections 5–7: cite relevant prior decisions,
    constraints, and failures during discovery and planning instead of re-asking
@@ -123,7 +120,9 @@ behavior, and any stated improvement goals.
 
 ## Section 5 — Discovery Q&A
 
-Conduct an interactive Q&A session with the user to clarify improvement goals.
+**FRONT-LOAD BYPASS:** If the user provided explicit Project Goals, Scope, and Constraints in their initial invocation, you MUST bypass this Q&A phase entirely. Do not output conversational text asking for confirmation. Silently compose the Project Goal and Scope internally, and proceed IMMEDIATELY to Section 6 by executing the bash `mkdir` and `cp` commands to initialize `memory.md`.
+
+If information is missing, conduct an interactive Q&A session to clarify improvement goals.
 
 Ask the user about:
 1. What specific behaviors or outcomes need improvement (accuracy, tone, tool usage, instruction-following, etc.).
@@ -132,7 +131,7 @@ Ask the user about:
 4. Constraints: what must not change.
 5. If containers are detected, ask the user if DumbleDoer should use the project's native containers for the execution sandbox, and if the user wants DumbleDoer to audit and optimize their Docker configurations.
 
-Based on the Q&A results, compose:
+Based on the Q&A results (or the front-loaded prompt), compose:
 - **Project Goal**: one paragraph summarizing the improvement objective.
 - **Scope**: bullet list of in-scope components (file paths or component types).
 
@@ -140,35 +139,29 @@ Based on the Q&A results, compose:
 
 ## Section 6 — Initialize memory.md
 
-1. Generate a session ID (format and collision rules: `lib/common-preamble.md`).
-2. Create `.dumbledoer/sessions/`, `.dumbledoer/checkpoints/`, `.dumbledoer/rollbacks/`, `.dumbledoer/tmp/` directories.
-3. Write `memory.md` from `templates/memory-template.md`, substituting:
-   - `{{DATE}}` → today's date (YYYY-MM-DD)
-   - `{{PROJECT_GOAL}}` → Project Goal from Section 5
-   - `{{SCOPE_ITEMS}}` → Scope bullets from Section 5
-   - `budget_limit` → `--budget-limit` value or 100000
-   - `budget_threshold_pct` → `--budget-threshold` value or 80
-   - `session_count` → 1
-   - `{{COMPRESSION_ENABLED}}` → the compression state resolved in Section 1
-     step 5 (`true` unless the user opted out)
-4. Append first Session Log row: `| {sessionId} | {ISO startTime} | — | — | active |`
-5. Write baseline CodeGraph metrics (from Section 3) to Config section:
-   ```
-   - codegraph_baseline_symbols: N
-   - codegraph_baseline_sync: {ISO timestamp}
-   - codegraph_backend: native|wasm
-   ```
+**DRY-RUN OVERRIDE:** Even if `--dry-run` is passed, you MUST physically create `memory.md` on disk and use `add_task` to register tasks. The dry-run flag only suppresses Section 8 (Execution); it does NOT suppress planning or initialization.
 
-**CRITICAL**: `memory.md` must be fully written before any task is registered or any
-file in the user's project is modified.
+1. Generate a session ID (format and collision rules: `lib/common-preamble.md`).
+2. Create directories via bash: `mkdir -p .dumbledoer/sessions/ .dumbledoer/checkpoints/ .dumbledoer/rollbacks/ .dumbledoer/tmp/`
+3. Copy the template via bash (you MUST set the `sandbox_mode` argument to `"native"` for this specific command so it runs on the host): `cp ~/.gemini/config/plugins/dumbledoer/templates/memory-template.md memory.md`
+4. Use the `update_memory_registry` tool to inject your project specifics. Make independent tool calls to replace:
+   - `{{DATE}}` with today's date
+   - `{{PROJECT_GOAL}}` with your composed Project Goal
+   - `{{SCOPE_ITEMS}}` with your bulleted scope list
+5. Use `update_memory_registry` to update the Config block baseline metrics (from Section 3) and append the first Session Log row (`| {sessionId} | {ISO startTime} | — | — | active |`).
+
+Wait for these updates to succeed before proceeding to Section 6b or 7.
 
 ---
 
 ## Section 6b — Edge Case Q&A
 
-Before decomposing tasks, identify 3-5 edge cases based on the user's prompt.
-1. Ask the user how to handle them.
-2. Write the results to the `## Edge Case Coverage` table in `memory.md`.
+**FRONT-LOAD BYPASS:** If the user provided explicit constraints in their initial prompt, bypass the interactive edge-case Q&A. Autonomously identify 3-5 edge cases based on the architecture, assume safe defaults, set their Disposition to `addressed`, and write them directly to the `## Edge Case Coverage` table.
+
+If constraints were not front-loaded:
+1. Identify 3-5 edge cases based on the user's prompt.
+2. Ask the user how to handle them.
+3. Write the results to the `## Edge Case Coverage` table in `memory.md`.
 
 ---
 
