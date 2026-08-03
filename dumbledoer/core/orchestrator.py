@@ -18,6 +18,7 @@ _REGISTRY_LOCK = __import__('threading').Lock()
 
 from dumbledoer.core.sandbox import execute_bash, _ensure_warm_sandbox, _teardown_warm_sandbox, run_rtk
 from dumbledoer.core.state import (
+    append_handoff_summary,
     get_registry_lock, get_async_registry_lock, ASTMemoryMapper, 
     update_memory_registry, CheckpointManager, OrphanRecoveryScanner, 
     TaskRegistryState, read_file, write_file_with_review,

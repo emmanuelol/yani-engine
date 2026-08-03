@@ -1,10 +1,11 @@
+from dumbledoer.core.locks import _MEMORY_MUTEX, _KNOWLEDGE_MUTEX, _REGISTRY_LOCK, get_registry_lock
 import sys
 import os
 import subprocess
 import asyncio
 
-_KNOWLEDGE_MUTEX = asyncio.Lock()
-_MEMORY_MUTEX = asyncio.Lock()
+
+
 import re
 import glob
 import shutil
@@ -14,10 +15,8 @@ import filelock
 
 _REGISTRY_LOCK = __import__('threading').Lock()
 _ASYNC_REGISTRY_LOCK = None
-_MEMORY_MUTEX = asyncio.Lock()
 
-def get_registry_lock():
-    return _REGISTRY_LOCK
+
 
 def get_async_registry_lock():
     global _ASYNC_REGISTRY_LOCK
@@ -534,33 +533,22 @@ tags: [knowledge-registry]
                     
     return await asyncio.to_thread(_write)
 
-class DumbleDoerCLI:
-    def __init__(self, budget_limit=None, budget_threshold=None):
-        self.plugin_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-        load_dotenv(dotenv_path=os.path.join(os.getcwd(), '.env'), override=False)
-        api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
-        if not api_key:
-            print("Error: GEMINI_API_KEY or GOOGLE_API_KEY not found in environment or local .env file.", file=sys.stderr)
-            sys.exit(1)
-        self.client = genai.Client(api_key=api_key)
-        self.exit_stack = AsyncExitStack()
-        self.mcp_sessions = {}
-        self.mcp_locks = {}
-        self.local_tools = [read_file, read_code_block, write_file_with_review, execute_bash, update_memory_registry, run_rtk, add_task, record_knowledge]
-        self.gemini_tools = list(self.local_tools)
-        try:
+
+async def append_handoff_summary(summary: str):
+    async with _MEMORY_MUTEX:
+        def _write():
             with get_registry_lock():
                 with open("memory.md", "r", encoding="utf-8") as f:
-                    self.budget_manager = BudgetManager(f.read())
-        except Exception:
-            self.budget_manager = BudgetManager("")
-            
-        if budget_limit is not None:
-            self.budget_manager.budget_limit = budget_limit
-            self.budget_manager.shutdown_threshold = int(self.budget_manager.budget_limit * (self.budget_manager.threshold_pct / 100.0))
-        if budget_threshold is not None:
-            self.budget_manager.threshold_pct = budget_threshold
-            self.budget_manager.shutdown_threshold = int(self.budget_manager.budget_limit * (self.budget_manager.threshold_pct / 100.0))
+                    content = f.read()
+                start_idx, end_idx = ASTMemoryMapper.locate_heading_block(content, "##", "Session Handoff Summary")
+                if start_idx != -1:
+                    lines = content.splitlines()
+                    content = "\n".join(lines[:start_idx] + [summary.strip()] + lines[end_idx:])
+                else:
+                    content += f"\n\n{summary}"
+                with open("memory.md", "w", encoding="utf-8") as f:
+                    f.write(content)
+        await asyncio.to_thread(_write)
 
 
 async def read_code_block(file_path: str, symbol_name: str) -> str:

@@ -1,3 +1,4 @@
+from dumbledoer.core.locks import _MEMORY_MUTEX, _REGISTRY_LOCK, get_registry_lock
 import os
 import sys
 import asyncio
@@ -120,72 +121,3 @@ async def run_rtk(command: str) -> str:
     except Exception as e:
         raise RuntimeError(f"Exception executing rtk command: {e}")
 
-class TaskRegistryState:
-    def __init__(self):
-        self.json_path = ".dumbledoer/task_registry.json"
-        self.md_path = "memory.md"
-        os.makedirs(os.path.dirname(self.json_path), exist_ok=True)
-        
-    def load_tasks(self) -> dict:
-        with get_registry_lock():
-            return self._load_tasks_unlocked()
-
-    def _load_tasks_unlocked(self) -> dict:
-        tasks = {}
-        try:
-            with open(self.md_path, "r", encoding="utf-8") as f:
-                content = f.read()
-            start_idx, end_idx = ASTMemoryMapper.locate_heading_block(content, "##", "Task Registry")
-            if start_idx != -1:
-                lines = content.splitlines()[start_idx+1:end_idx]
-                for line in lines:
-                    parts = [p.strip() for p in line.split("|")]
-
-                    header_line = next((l for l in content.splitlines()[start_idx:end_idx] if "Task ID" in l), None)
-                    if header_line:
-                        headers = [h.strip() for h in header_line.split("|") if h.strip()]
-                        id_idx = headers.index("Task ID") + 1 if "Task ID" in headers else 1
-                        stat_idx = headers.index("Status") + 1 if "Status" in headers else 4
-                        title_idx = headers.index("Title") + 1 if "Title" in headers else 2
-                        dep_idx = headers.index("Depends On") + 1 if "Depends On" in headers else 6
-                    else:
-                        id_idx, stat_idx, title_idx, dep_idx = 1, 4, 2, 6
-
-                    if len(parts) > max(id_idx, stat_idx) and "Task ID" not in parts[id_idx] and not parts[id_idx].strip().startswith("---"):
-                        task_id = parts[id_idx].strip()
-                        
-                        desc_start, desc_end = ASTMemoryMapper.locate_heading_block(content, "###", task_id)
-                        description = parts[title_idx].strip() if len(parts) > title_idx else ""
-                        target_files = []
-                        
-                        if desc_start != -1:
-                            desc_lines = content.splitlines()[desc_start+1:desc_end]
-                            for dline in desc_lines:
-                                if dline.startswith("- **Description**:"):
-                                    description = dline.split("- **Description**:")[1].strip()
-                                if dline.startswith("- **Outputs**:"):
-                                    raw_outputs = dline.split("- **Outputs**:")[1].strip()
-                                    if raw_outputs.lower() not in ["none", "—", "-", ""]:
-                                        target_files = [f.strip() for f in raw_outputs.replace("[", "").replace("]", "").split(",")]
-                                    
-                        status_col = parts[stat_idx].strip() if len(parts) > stat_idx else "pending"
-                        deps_str = parts[dep_idx].strip() if len(parts) > dep_idx else ""
-                        deps = [d.strip() for d in deps_str.split(",") if "T-" in d and d.strip() != task_id]
-
-                        tasks[task_id] = {
-                            "id": task_id,
-                            "desc": description,
-                            "title": parts[title_idx].strip() if len(parts) > title_idx else task_id,
-                            "status": status_col,
-                            "deps": deps,
-                            "outputs": target_files,
-                            "original_line": line
-                        }
-        except Exception as e:
-            print(f"Warning: Failed to load tasks from memory.md: {e}", file=sys.stderr)
-        return tasks
-
-    def save_tasks(self, tasks: dict):
-        self._sync_to_markdown(tasks)
-        
-    
