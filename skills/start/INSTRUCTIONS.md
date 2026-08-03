@@ -235,8 +235,8 @@ For each task claimed:
 2. Classify the task per `lib/compression-policy.md` (type + effort → `simple` or
    `complex`) and spawn a sub-agent (or execute inline for small analysis tasks)
    following all rules in `lib/codegraph-integration.md`:
-   - `simple` tasks: request the standard model tier (`gemini-2.0-flash`) at spawn.
-   - `complex` tasks: request the premium model tier (`gemini-2.0-pro`) at spawn.
+   - `simple` tasks: request the standard model tier (`gemini-3.5-flash`) at spawn.
+   - `complex` tasks: request the premium model tier (`gemini-3.1-pro-preview`) at spawn.
    - Include the task's compression level in the sub-agent prompt (template below).
    - If the requested tier is unavailable, spawn on the session default model and
      output the one-time fallback notice from `lib/compression-policy.md`.

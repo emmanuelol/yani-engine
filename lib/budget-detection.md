@@ -11,12 +11,12 @@ Budget settings live in `memory.md` Config section:
 
 | Field | Default | Override |
 |-------|---------|---------|
-| `budget_limit` | 100000 | Set during `/dumbledoer start` discovery or via `--budget-limit` |
+| `budget_limit` | 5000000 | Set during `/dumbledoer start` discovery or via `--budget-limit` |
 | `budget_threshold_pct` | 80 | Per-session via `--budget-threshold <pct>` flag or by editing `memory.md` Config |
 
 **Threshold computation**: `shutdown_threshold = budget_limit × (budget_threshold_pct / 100)`
 
-Example: `budget_limit=100000`, `budget_threshold_pct=80` → shutdown at 80,000 estimated tokens.
+Example: `budget_limit=5000000`, `budget_threshold_pct=80` → shutdown at 4,000,000 estimated tokens.
 
 ---
 
@@ -66,6 +66,12 @@ If the NEXT planned operation would push over threshold:
 
 **Do NOT start a new task if `tokens_estimated + expected_task_cost > shutdown_threshold`.**
 Instead, include the task in Session Handoff Summary as "not started."
+
+### Cumulative Token Accounting
+
+Each Gemini API call is stateless — `total_token_count` represents the full request payload (all history + response tokens). For a 10-turn task with 20k average context, actual API cost is ~200k tokens (sum of all calls), NOT 20k. The `budget_limit` must account for this cumulative cost across all parallel workers.
+
+**Example**: 3 parallel workers × 10 tool iterations × 25k avg context = 750,000 tokens per wave.
 
 ---
 

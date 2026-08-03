@@ -39,7 +39,7 @@ For each completed task:
 3. **If the test fails or criteria are unmet:** You MUST use the `add_task` tool to append a new fix task to the `memory.md` Task Registry. 
    - Set the Task Type to `change`.
    - Set the title to clearly state the bug found (e.g., "Fix Type Error in Reporting Pipeline").
-   - Set the `Depends On` field appropriately.
+   - Set the `Depends On` field to `none` (DO NOT make it depend on the failed task to avoid deadlocks).
 
 ## Section 4 — Audit Report
 Once all completed tasks are evaluated, output a concise audit report detailing what was tested, what passed, and what new tasks (if any) were autonomously added to the queue for the next Execution Wave.

@@ -52,7 +52,7 @@ async def test_temp_file_collision(mock_confirm, mock_checkpoint, mock_which, mo
         with open("db/utils.py", "w") as f: f.write("db")
         
         async def run_write(path):
-            return await write_file_with_review(path, "new content")
+            return await write_file_with_review(path, "new content", "T-test")
             
         # Run simultaneously
         await asyncio.gather(run_write("api/utils.py"), run_write("db/utils.py"))

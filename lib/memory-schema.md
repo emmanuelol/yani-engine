@@ -28,7 +28,7 @@ MUST read this file before reading or writing `memory.md`.
 
 | Field | Type | Description | Default |
 |-------|------|-------------|---------|
-| `budget_limit` | integer | Estimated total token budget for this project | 100000 |
+| `budget_limit` | integer | Estimated total token budget for this project | 5000000 |
 | `budget_threshold_pct` | integer (1–99) | Trigger graceful shutdown at this % of budget_limit | 80 |
 | `session_count` | integer | Total sessions run; increment on each session start | 0 |
 | `created` | YYYY-MM-DD | Date memory.md was first created | (set at init) |

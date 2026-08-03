@@ -14,9 +14,18 @@ import difflib
 from filelock import FileLock
 import filelock
 
-_REGISTRY_LOCK = __import__('threading').RLock()
+_REGISTRY_LOCK = __import__('threading').Lock()
+_ASYNC_REGISTRY_LOCK = None
+
 def get_registry_lock():
     return _REGISTRY_LOCK
+
+def get_async_registry_lock():
+    global _ASYNC_REGISTRY_LOCK
+    if _ASYNC_REGISTRY_LOCK is None:
+        _ASYNC_REGISTRY_LOCK = asyncio.Lock()
+    return _ASYNC_REGISTRY_LOCK
+
 # GUI_DIFF_ENABLED will be set dynamically in main_async
 GUI_DIFF_ENABLED = True
 from google import genai
@@ -35,7 +44,7 @@ class DependencyGraphError(Exception):
 class BudgetManager:
     def __init__(self, config_text: str):
         self.estimated_tokens = 0
-        self.budget_limit = 500000
+        self.budget_limit = 5000000
         self.threshold_pct = 80
         
         for line in config_text.splitlines():
@@ -50,7 +59,7 @@ class BudgetManager:
         self.shutdown_threshold = int(self.budget_limit * (self.threshold_pct / 100.0))
                     
     def add_tokens(self, count: int):
-        self.estimated_tokens += count
+        self.estimated_tokens += count if isinstance(count, int) else 0
         
     def check_and_harvest(self):
         if self.estimated_tokens >= self.shutdown_threshold:
@@ -62,7 +71,8 @@ class ASTMemoryMapper:
         lines = content.splitlines()
         start_idx = -1
         end_idx = -1
-        target_pattern = re.compile(rf"^{re.escape(heading_level)}\s+{re.escape(title)}\s*$", re.IGNORECASE)
+        normalized_title = re.escape(title.strip())
+        target_pattern = re.compile(rf"^{re.escape(heading_level)}\s+{normalized_title}\s*[:\.\-—]*\s*$", re.IGNORECASE)
         in_code_block = False
         
         for i, line in enumerate(lines):
@@ -108,12 +118,20 @@ class ASTMemoryMapper:
                 lines.insert(last_idx + 1, new_row)
                 with open(file_path, "w", encoding="utf-8") as f:
                     f.write("\n".join(lines) + "\n")
+            else:
+                raise ValueError(f"Table under header '{header}' not found or has no rows in {file_path}")
+        else:
+            raise ValueError(f"Header '{header}' not found in {file_path}")
 
 # ── Docker Warm-Pool Infrastructure ──
 _WARM_SANDBOXES = {}  # task_id -> container_name
 _WARM_SANDBOX_LOCK = __import__('threading').Lock()
 
-def _ensure_warm_sandbox(task_id: str = None, image: str = "dumbledoer-base:latest") -> bool:
+def _is_sandbox_warm_sync(task_id: str) -> bool:
+    with _WARM_SANDBOX_LOCK:
+        return task_id in _WARM_SANDBOXES
+
+async def _ensure_warm_sandbox(task_id: str = None, image: str = "dumbledoer-base:latest") -> bool:
     """Ensures a persistent Docker sandbox container is running. Returns True if available."""
     global _WARM_SANDBOXES
     
@@ -122,48 +140,64 @@ def _ensure_warm_sandbox(task_id: str = None, image: str = "dumbledoer-base:late
         
     container_name = f"dumbledoer-sandbox-{task_id.lower()}-{hashlib.md5(os.getcwd().encode()).hexdigest()[:8]}"
     
-    with _WARM_SANDBOX_LOCK:
-        if task_id in _WARM_SANDBOXES:
+    if _is_sandbox_warm_sync(task_id):
+        return True
+
+    # Use async lock to coordinate heavy Docker operations
+    async with get_async_registry_lock():
+        if _is_sandbox_warm_sync(task_id):
             return True
+            
         try:
             # Check if container already exists and is running
-            result = subprocess.run(
+            result = await asyncio.to_thread(
+                subprocess.run,
                 ["docker", "inspect", "-f", "{{.State.Running}}", container_name],
                 capture_output=True, text=True
             )
             if result.returncode == 0 and "true" in result.stdout.lower():
-                _WARM_SANDBOXES[task_id] = container_name
+                with _WARM_SANDBOX_LOCK:
+                    _WARM_SANDBOXES[task_id] = container_name
                 return True
 
             # Remove stale container if it exists but isn't running
-            subprocess.run(["docker", "rm", "-f", container_name], capture_output=True)
+            await asyncio.to_thread(subprocess.run, ["docker", "rm", "-f", container_name], capture_output=True)
 
             # Start persistent container with workspace mount
             import platform
             user_args = [] if platform.system() == "Windows" else ["--user", f"{os.getuid()}:{os.getgid()}"]
-            subprocess.run(
+            await asyncio.to_thread(
+                subprocess.run,
                 ["docker", "run", "-d", "-it", "--name", container_name] + user_args +
                 ["-v", f"{os.getcwd()}:/workspace", "-w", "/workspace", image, "/bin/bash"],
                 capture_output=True, text=True, check=True
             )
-            _WARM_SANDBOXES[task_id] = container_name
+            with _WARM_SANDBOX_LOCK:
+                _WARM_SANDBOXES[task_id] = container_name
             return True
         except Exception:
             return False  # Fallback to cold-boot
 
-def _teardown_warm_sandbox(task_id: str = None):
+async def _teardown_warm_sandbox(task_id: str = None):
     """Kills and removes the persistent Docker sandbox container(s)."""
     global _WARM_SANDBOXES
+    
+    tasks_to_remove = []
     with _WARM_SANDBOX_LOCK:
         tasks_to_remove = [task_id] if task_id else list(_WARM_SANDBOXES.keys())
-        for tid in tasks_to_remove:
+        
+    for tid in tasks_to_remove:
+        container_name = None
+        with _WARM_SANDBOX_LOCK:
             if tid in _WARM_SANDBOXES:
                 container_name = _WARM_SANDBOXES[tid]
-                try:
-                    subprocess.run(["docker", "kill", container_name], capture_output=True)
-                    subprocess.run(["docker", "rm", container_name], capture_output=True)
-                except Exception:
-                    pass
+                
+        if container_name:
+            try:
+                await asyncio.to_thread(subprocess.run, ["docker", "kill", container_name], capture_output=True)
+                await asyncio.to_thread(subprocess.run, ["docker", "rm", container_name], capture_output=True)
+            except Exception:
+                pass
                 del _WARM_SANDBOXES[tid]
 
 async def execute_bash(command: str, sandbox_mode: str = None, task_id: str = None) -> str:
@@ -227,8 +261,9 @@ async def execute_bash(command: str, sandbox_mode: str = None, task_id: str = No
             ]
         else:
             # [WARM POOL] Use persistent sandbox if available, cold-boot fallback
-            if _ensure_warm_sandbox(task_id):
-                container_name = _WARM_SANDBOXES.get(task_id if task_id else "global")
+            if await _ensure_warm_sandbox(task_id):
+                with _WARM_SANDBOX_LOCK:
+                    container_name = _WARM_SANDBOXES.get(task_id if task_id else "global")
                 args = ["docker", "exec", container_name, "bash", "-c", command]
             else:
                 args = ["docker", "run", "--rm"] + user_args + [
@@ -370,76 +405,82 @@ class TaskRegistryState:
         
     def load_tasks(self) -> dict:
         with get_registry_lock():
-            tasks = {}
-            try:
-                with open(self.md_path, "r", encoding="utf-8") as f:
-                    content = f.read()
-                start_idx, end_idx = ASTMemoryMapper.locate_heading_block(content, "##", "Task Registry")
-                if start_idx != -1:
-                    lines = content.splitlines()[start_idx+1:end_idx]
-                    for line in lines:
-                        parts = [p.strip() for p in line.split("|")]
+            return self._load_tasks_unlocked()
 
-                        header_line = next((l for l in content.splitlines()[start_idx:end_idx] if "Task ID" in l), None)
-                        if header_line:
-                            headers = [h.strip() for h in header_line.split("|") if h.strip()]
-                            id_idx = headers.index("Task ID") + 1 if "Task ID" in headers else 1
-                            stat_idx = headers.index("Status") + 1 if "Status" in headers else 4
-                            title_idx = headers.index("Title") + 1 if "Title" in headers else 2
-                            dep_idx = headers.index("Depends On") + 1 if "Depends On" in headers else 6
-                        else:
-                            id_idx, stat_idx, title_idx, dep_idx = 1, 4, 2, 6
+    def _load_tasks_unlocked(self) -> dict:
+        tasks = {}
+        try:
+            with open(self.md_path, "r", encoding="utf-8") as f:
+                content = f.read()
+            start_idx, end_idx = ASTMemoryMapper.locate_heading_block(content, "##", "Task Registry")
+            if start_idx != -1:
+                lines = content.splitlines()[start_idx+1:end_idx]
+                for line in lines:
+                    parts = [p.strip() for p in line.split("|")]
 
-                        if len(parts) > max(id_idx, stat_idx) and "Task ID" not in parts[id_idx] and not parts[id_idx].strip().startswith("---"):
-                            task_id = parts[id_idx].strip()
-                            
-                            desc_start, desc_end = ASTMemoryMapper.locate_heading_block(content, "###", task_id)
-                            description = parts[title_idx].strip() if len(parts) > title_idx else ""
-                            target_files = []
-                            
-                            if desc_start != -1:
-                                desc_lines = content.splitlines()[desc_start+1:desc_end]
-                                for dline in desc_lines:
-                                    if dline.startswith("- **Description**:"):
-                                        description = dline.split("- **Description**:")[1].strip()
-                                    if dline.startswith("- **Outputs**:"):
-                                        raw_outputs = dline.split("- **Outputs**:")[1].strip()
-                                        if raw_outputs.lower() not in ["none", "—", "-", ""]:
-                                            target_files = [f.strip() for f in raw_outputs.replace("[", "").replace("]", "").split(",")]
-                                        
-                            status_col = parts[stat_idx].strip() if len(parts) > stat_idx else "pending"
-                            deps_str = parts[dep_idx].strip() if len(parts) > dep_idx else ""
-                            deps = [d.strip() for d in deps_str.split(",") if "T-" in d and d.strip() != task_id]
+                    header_line = next((l for l in content.splitlines()[start_idx:end_idx] if "Task ID" in l), None)
+                    if header_line:
+                        headers = [h.strip() for h in header_line.split("|") if h.strip()]
+                        id_idx = headers.index("Task ID") + 1 if "Task ID" in headers else 1
+                        stat_idx = headers.index("Status") + 1 if "Status" in headers else 4
+                        title_idx = headers.index("Title") + 1 if "Title" in headers else 2
+                        dep_idx = headers.index("Depends On") + 1 if "Depends On" in headers else 6
+                    else:
+                        id_idx, stat_idx, title_idx, dep_idx = 1, 4, 2, 6
 
-                            tasks[task_id] = {
-                                "id": task_id,
-                                "desc": description,
-                                "title": parts[title_idx].strip() if len(parts) > title_idx else task_id,
-                                "status": status_col,
-                                "deps": deps,
-                                "outputs": target_files,
-                                "original_line": line
-                            }
-            except Exception as e:
-                print(f"Warning: Failed to load tasks from memory.md: {e}", file=sys.stderr)
-            self.save_tasks(tasks)
-            return tasks
+                    if len(parts) > max(id_idx, stat_idx) and "Task ID" not in parts[id_idx] and not parts[id_idx].strip().startswith("---"):
+                        task_id = parts[id_idx].strip()
+                        
+                        desc_start, desc_end = ASTMemoryMapper.locate_heading_block(content, "###", task_id)
+                        description = parts[title_idx].strip() if len(parts) > title_idx else ""
+                        target_files = []
+                        
+                        if desc_start != -1:
+                            desc_lines = content.splitlines()[desc_start+1:desc_end]
+                            for dline in desc_lines:
+                                if dline.startswith("- **Description**:"):
+                                    description = dline.split("- **Description**:")[1].strip()
+                                if dline.startswith("- **Outputs**:"):
+                                    raw_outputs = dline.split("- **Outputs**:")[1].strip()
+                                    if raw_outputs.lower() not in ["none", "—", "-", ""]:
+                                        target_files = [f.strip() for f in raw_outputs.replace("[", "").replace("]", "").split(",")]
+                                    
+                        status_col = parts[stat_idx].strip() if len(parts) > stat_idx else "pending"
+                        deps_str = parts[dep_idx].strip() if len(parts) > dep_idx else ""
+                        deps = [d.strip() for d in deps_str.split(",") if "T-" in d and d.strip() != task_id]
+
+                        tasks[task_id] = {
+                            "id": task_id,
+                            "desc": description,
+                            "title": parts[title_idx].strip() if len(parts) > title_idx else task_id,
+                            "status": status_col,
+                            "deps": deps,
+                            "outputs": target_files,
+                            "original_line": line
+                        }
+        except Exception as e:
+            print(f"Warning: Failed to load tasks from memory.md: {e}", file=sys.stderr)
+        return tasks
 
     def save_tasks(self, tasks: dict):
         self._sync_to_markdown(tasks)
         
     async def update_task_status(self, task_id: str, new_status: str):
-        def _do_update():
-            with get_registry_lock():
-                tasks = self.load_tasks()
-                if task_id in tasks:
-                    tasks[task_id]["status"] = new_status
-                    self.save_tasks(tasks)
-        await asyncio.to_thread(_do_update)
+        async with get_async_registry_lock():
+            def _do_update():
+                with get_registry_lock():
+                    tasks = self._load_tasks_unlocked()
+                    if task_id in tasks:
+                        tasks[task_id]["status"] = new_status
+                        self._sync_to_markdown_unlocked(tasks)
+            await asyncio.to_thread(_do_update)
 
     def _sync_to_markdown(self, tasks: dict):
         with get_registry_lock():
-            with FileLock("memory.md.lock", timeout=60):
+            self._sync_to_markdown_unlocked(tasks)
+
+    def _sync_to_markdown_unlocked(self, tasks: dict):
+        with FileLock("memory.md.lock", timeout=60):
                 try:
                     with open(self.md_path, "r", encoding="utf-8") as f:
                         content = f.read()
@@ -715,22 +756,22 @@ class OrphanRecoveryScanner:
                             
                     if matched_target:
                         if unattended:
-                            os.remove(file)
+                            if os.path.exists(file): os.remove(file)
                             console.print(f"[yellow]O4: Unattended mode - Discarded orphaned planned change for {matched_target} (File: {file})[/yellow]")
                         else:
                             if Confirm.ask(f"Found orphaned planned change for [bold]{matched_target}[/bold] (File: {file}). Apply it?"):
                                 os.replace(file, matched_target)
                                 console.print(f"[green]Applied {file} to {matched_target}[/green]")
                             else:
-                                os.remove(file)
+                                if os.path.exists(file): os.remove(file)
                                 console.print(f"[yellow]Discarded {file}[/yellow]")
                     else:
-                        os.remove(file)
+                        if os.path.exists(file): os.remove(file)
                 except Exception as e:
                     console.print(f"[red]Error recovering {file}: {e}[/red]")
 
 
-async def add_task(title: str, task_type: str = "change", deps: str = "none", description: str = "", outputs: str = "none") -> str:
+async def add_task(title: str, task_type: str = "change", deps: str = "none", description: str = "", outputs: str = "none", success_criteria: str = "TBD") -> str:
     """Registers a new atomic task to the memory.md Task Registry. Auto-generates the Task ID."""
     def _write():
         with get_registry_lock():
@@ -741,7 +782,7 @@ async def add_task(title: str, task_type: str = "change", deps: str = "none", de
                     
                     # 1. Native ID Generation (Enforces Rule 7)
                     import re
-                    existing_ids = re.findall(r'\bT-(\d{3,4})\b', content)
+                    existing_ids = re.findall(r'T-(\d{3,4})', content)
                     if existing_ids:
                         next_num = max([int(x) for x in existing_ids]) + 1
                     else:
@@ -758,13 +799,16 @@ async def add_task(title: str, task_type: str = "change", deps: str = "none", de
 
                     # 3. Append to Task Registry
                     row = f"| {task_id} | {title} | {task_type} | pending | — | {deps} | — | none |"
-                    ASTMemoryMapper.append_to_markdown_table("memory.md", "Task Registry", row)
+                    try:
+                        ASTMemoryMapper.append_to_markdown_table("memory.md", "Task Registry", row)
+                    except ValueError as e:
+                        return f"Error appending to Task Registry: {e}"
                     
                     # 4. Append to Task Details
                     with open("memory.md", "r", encoding="utf-8") as f:
                         content = f.read()
                     
-                    details = f"\n### {task_id}: {title}\n- **Type**: {task_type}\n- **Status**: pending\n- **Owner**: —\n- **Depends On**: {deps}\n- **Assigned Session**: —\n- **Description**: {description}\n- **Inputs**: none\n- **Outputs**: {outputs}\n- **Success Criteria**: TBD\n- **Estimated Effort**: small\n- **Parallelizable**: yes\n- **CodeGraph Impact**: —\n- **Checkpoint**: none\n- **Resume Instructions**: none\n- **Notes**: —\n"
+                    details = f"\n### {task_id}: {title}\n- **Type**: {task_type}\n- **Status**: pending\n- **Owner**: —\n- **Depends On**: {deps}\n- **Assigned Session**: —\n- **Description**: {description}\n- **Inputs**: none\n- **Outputs**: {outputs}\n- **Success Criteria**: {success_criteria}\n- **Estimated Effort**: small\n- **Parallelizable**: yes\n- **CodeGraph Impact**: —\n- **Checkpoint**: none\n- **Resume Instructions**: none\n- **Notes**: —\n"
                     
                     start_idx, end_idx = ASTMemoryMapper.locate_heading_block(content, "##", "Task Details")
                     if start_idx != -1:
@@ -772,6 +816,8 @@ async def add_task(title: str, task_type: str = "change", deps: str = "none", de
                         lines.insert(end_idx, details)
                         with open("memory.md", "w", encoding="utf-8") as f:
                             f.write("\n".join(lines) + "\n")
+                    else:
+                        return f"Error appending Task Details: Header '## Task Details' not found in memory.md"
                             
                     # 5. Return the native ID so the LLM knows what was created
                     return f"Successfully registered task {task_id}."
@@ -883,7 +929,7 @@ class DumbleDoerCLI:
     # Dynamic tool filtering per command to reduce token consumption
     COMMAND_TOOL_WHITELIST = {
         "start":   {"read_file", "execute_bash", "add_task", "write_file_with_review", "codegraph_status", "context7_resolve_library_id", "context7_query_docs", "update_memory_registry"},
-        "iterate": {"add_task", "read_file", "codegraph_search", "codegraph_impact", "context7_resolve_library_id", "context7_query_docs"},
+        "iterate": {"add_task", "read_file", "codegraph_search", "codegraph_impact", "context7_resolve_library_id", "context7_query_docs", "update_memory_registry"},
         "status":  {"read_file", "execute_bash"},
         "rollback": {"read_file", "execute_bash"},
         "report":  {"read_file", "execute_bash", "update_memory_registry"},
@@ -1033,16 +1079,27 @@ class DumbleDoerCLI:
                     return
                 # -----------------------------------------------------------------------
 
+                # 1. ROBUST STATUS SWEEP (Replaces the broken string replacement)
+                state = TaskRegistryState()
+                tasks = state.load_tasks()
+                interrupted_ids = []
+                for tid, t in tasks.items():
+                    if t['status'].strip() == 'in_progress':
+                        t['status'] = 'interrupted'
+                        interrupted_ids.append(tid)
+                
+                if interrupted_ids:
+                    state.save_tasks(tasks)
+
                 with FileLock("memory.md.lock", timeout=60):
                     with open("memory.md", "r", encoding="utf-8") as f:
                         content = f.read()
                 
-                if task_id:
-                    content = content.replace(f"| {task_id} | in_progress", f"| {task_id} | interrupted")
-                
                 summary = f"## Session Handoff Summary\n- Outcome: interrupted-budget\n"
                 if task_id:
                     summary += f"- Interrupted Task: {task_id}\n"
+                elif interrupted_ids:
+                    summary += f"- Interrupted Tasks: {', '.join(interrupted_ids)}\n"
                 summary += "- Recommended Next Scope: Resume interrupted tasks\n"
                 
                 start_idx, end_idx = ASTMemoryMapper.locate_heading_block(content, "##", "Session Handoff Summary")
@@ -1082,30 +1139,31 @@ class DumbleDoerCLI:
         else:
             memory_content = await self.local_tools[0]("memory.md") or "No memory.md found. Start a new project."
 
-        # Load schemas and protocols
-        memory_schema = await self.local_tools[0](os.path.join(self.plugin_root, "lib", "memory-schema.md")) or ""
-        knowledge_protocol = await self.local_tools[0](os.path.join(self.plugin_root, "lib", "knowledge-protocol.md")) or ""
+        instructions = [
+            "# MISSION",
+            "You are DumbleDoer, an Agent Engineering Harness. Your goal is to systematically analyze, improve, and validate agent projects.",
+            await self.local_tools[0](os.path.join(self.plugin_root, "SYSTEM_INSTRUCTIONS.md")) or "Core rules not found.",
+        ]
+
+        # Only inject heavy protocols for planning/iterating commands
+        if command in (None, "iterate", "start", "audit"):
+            instructions.extend([
+                await self.local_tools[0](os.path.join(self.plugin_root, "lib", "common-preamble.md")) or "",
+                await self.local_tools[0](os.path.join(self.plugin_root, "lib", "compression-policy.md")) or "",
+                "# KNOWLEDGE PROTOCOL",
+                await self.local_tools[0](os.path.join(self.plugin_root, "lib", "knowledge-protocol.md")) or "",
+                "# MEMORY SCHEMA",
+                await self.local_tools[0](os.path.join(self.plugin_root, "lib", "memory-schema.md")) or "",
+            ])
 
         # OP-2 Selective Load: Inject the Knowledge Index as semantic memory
         knowledge_index = await self.local_tools[0]("knowledge/index.md")
         if not knowledge_index or knowledge_index.startswith("Error"):
             knowledge_index = "Knowledge registry not yet initialized. Use the record_knowledge tool to capture insights."
 
-        instructions = [
-            "# MISSION",
-            "You are DumbleDoer, an Agent Engineering Harness. Your goal is to systematically analyze, improve, and validate agent projects.",
-            await self.local_tools[0](os.path.join(self.plugin_root, "SYSTEM_INSTRUCTIONS.md")) or "Core rules not found.",
-            await self.local_tools[0](os.path.join(self.plugin_root, "lib", "common-preamble.md")) or "",
-            await self.local_tools[0](os.path.join(self.plugin_root, "lib", "compression-policy.md")) or "",
-            "# KNOWLEDGE PROTOCOL",
-            knowledge_protocol,
-            "# MEMORY SCHEMA",
-            memory_schema,
-            "# DURABLE SEMANTIC MEMORY (Knowledge Vault)",
-            knowledge_index,
-            "# CURRENT STATE (Working Memory)",
-            memory_content
-        ]
+        instructions.append(f"# DURABLE SEMANTIC MEMORY (Knowledge Vault)\n{knowledge_index}")
+        instructions.append(f"# CURRENT STATE (Working Memory)\n{memory_content}")
+
         if command and command != "execute":
             skill_path = os.path.join(self.plugin_root, "skills", command, "INSTRUCTIONS.md")
             skill_content = await self.local_tools[0](skill_path)
@@ -1149,10 +1207,19 @@ class DumbleDoerCLI:
         degraded_consecutive = 0  # Track consecutive degraded tool calls
 
         # [CONTEXT MANAGEMENT CONFIG]
-        MAX_HISTORY_TURNS = 15  # Keep system prompt + last 14 turns
-        MAX_TOOL_OUTPUT_CHARS = 16000  # Hard cap tool outputs to ~4k tokens
+        MAX_HISTORY_TURNS = 6  # Aggressive prune
+        MAX_TOOL_OUTPUT_CHARS = 8000  # Hard cap
+        MAX_TOOL_ITERATIONS = 25  # Hard cap tool iterations per task
+
+        iteration_count = 0
 
         while response.function_calls:
+            iteration_count += 1
+            if iteration_count > MAX_TOOL_ITERATIONS:
+                if status:
+                    print(f"Task {task_id} aborted: Max tool iterations exceeded.", file=sys.stderr)
+                raise RuntimeError(f"Task {task_id} exceeded max tool iterations ({MAX_TOOL_ITERATIONS}). Aborting to prevent infinite loop.")
+
             from google.genai.types import Part
             parts = []
             for call in response.function_calls:
@@ -1227,6 +1294,7 @@ class DumbleDoerCLI:
             # history[0] (system prompt + initial payload) and maintaining User/Model role parity.
             if hasattr(chat_session, '_history') and len(chat_session._history) > MAX_HISTORY_TURNS:
                 # Ensure we slice at an even boundary so User/Model turn parity isn't broken
+                found_safe_boundary = False
                 slice_index = -(MAX_HISTORY_TURNS - 1)
                 while abs(slice_index) < len(chat_session._history):
                     item = chat_session._history[slice_index]
@@ -1245,16 +1313,22 @@ class DumbleDoerCLI:
                                 is_func_resp = True
                                 
                     if item_role == 'user' and not is_func_resp:
+                        found_safe_boundary = True
                         break
                     slice_index -= 1
 
-                chat_session._history = [chat_session._history[0]] + chat_session._history[slice_index:]
-                if status:
-                    status.update("[bold magenta]Context optimization: Pruned stale chat history...")
+                if found_safe_boundary:
+                    chat_session._history = [chat_session._history[0]] + chat_session._history[slice_index:]
+                    if status:
+                        status.update("[bold magenta]Context optimization: Pruned stale chat history...")
+                else:
+                    if status:
+                        status.update("[bold yellow]Context optimization: Skipped pruning (no safe boundary found)...")
 
             # Mid-loop budget check to prevent unbounded token consumption
             if hasattr(response, 'usage_metadata') and response.usage_metadata:
-                self.budget_manager.add_tokens(getattr(response.usage_metadata, 'total_token_count', 0))
+                token_count = getattr(response.usage_metadata, 'total_token_count', 0)
+                self.budget_manager.add_tokens(token_count if isinstance(token_count, int) else 0)
             try:
                 self.budget_manager.check_and_harvest()
             except BudgetExhaustedException:
@@ -1265,6 +1339,9 @@ class DumbleDoerCLI:
 
     async def execute_task(self, task_id: str, description: str):
         print(f"Executing task {task_id}: {description}")
+        
+        # ACTUALLY CLAIM THE TASK SO RESUME CAN FIND IT
+        await TaskRegistryState().update_task_status(task_id, "in_progress")
         
         # --- DYNAMIC MODEL TIERING ---
         effort = "small"
@@ -1283,11 +1360,11 @@ class DumbleDoerCLI:
         except Exception:
             pass
             
-        base_model = getattr(self, "model", "gemini-2.5-flash")
+        base_model = getattr(self, "model", "gemini-3.5-flash")
         
-        # Upgrade to pro reasoning tier for complex execution waves
-        if effort in ["medium", "large"] and "flash" in base_model:
-            target_model = "gemini-2.5-pro"
+        # Pro Brain / Cost-Efficient Hands: only large tasks get pro reasoning
+        if effort == "large" and "flash" in base_model:
+            target_model = "gemini-3.1-pro-preview"
             print(f"[Tier Upgrade] Task {task_id} requires {effort} effort. Spawning sub-agent on {target_model}.")
         else:
             target_model = base_model
@@ -1303,28 +1380,20 @@ Mandatory rules:
 2. Follow the 10-step data flow for change tasks exactly.
 3. Follow {os.path.join(self.plugin_root, 'lib', 'checkpoint-protocol.md')} for every file write.
 4. Log your codegraph_impact result to memory.md task {task_id} CodeGraph Impact field.
-5. Do not modify any file listed in another in_progress task's Outputs."""
+5. Do not modify any file listed in another in_progress task's Outputs.
+6. Output compression: render your conversational replies at the appropriate caveman level.
+7. Documentation lookup: check if this task involves external dependencies and consult context7 if needed.
+8. **DO NOT USE BASH TO PARSE MEMORY.MD.** If you need to read `memory.md`, you MUST use the native `read_file` tool. If you need to update it, you MUST use the native `update_memory_registry` tool. Do not write python scripts via bash to parse the ledger."""
         try:
             response = await self._run_with_tools(chat_session, prompt_payload, task_id=task_id)
-            if hasattr(response, 'usage_metadata') and response.usage_metadata:
-                self.budget_manager.add_tokens(getattr(response.usage_metadata, 'total_token_count', 0))
             self.budget_manager.check_and_harvest()
             print(f"Task {task_id} completed: {response.text}")
             await TaskRegistryState().update_task_status(task_id, "awaiting-review")
         except BudgetExhaustedException:
-            try:
-                rtk_out = await run_rtk("gain")
-                import re
-                match = re.search(r"(\d+)", rtk_out)
-                rtk_savings = int(match.group(1)) if match else 50000
-                self.budget_manager.estimated_tokens = max(0, self.budget_manager.estimated_tokens - rtk_savings)
-                response = await self._run_with_tools(chat_session, prompt_payload, task_id=task_id)
-                print(f"Task {task_id} completed: {response.text}")
-                await TaskRegistryState().update_task_status(task_id, "awaiting-review")
-            except (BudgetExhaustedException, RuntimeError) as e:
-                print(f"Task failed or budget threshold blocked retry: {e}")
-                await self._graceful_shutdown(task_id)
-                raise e
+            print(f"Task {task_id} interrupted: Budget exhausted at {self.budget_manager.estimated_tokens} tokens.", file=sys.stderr)
+            await TaskRegistryState().update_task_status(task_id, "interrupted")
+            await self._graceful_shutdown(task_id)
+            raise
 
     def _files_are_import_coupled(self, file_a: str, file_b: str) -> bool:
         """Check if file_a imports file_b or vice versa using Python AST import analysis."""
@@ -1505,13 +1574,13 @@ Mandatory rules:
         from rich.console import Console
         console = Console()
         if GUI_DIFF_ENABLED:
-            choice = Prompt.ask("Approve wave changes? [Y(all)/N(none)/S(select)]", choices=["Y", "N", "S"], default="Y")
+            choice = await asyncio.to_thread(Prompt.ask, "Approve wave changes? [Y(all)/N(none)/S(select)]", choices=["Y", "N", "S"], default="Y")
         else:
             console.print("[green]Auto-approving wave changes (run with -v to review)[/green]")
             choice = "Y"
         rejected_files = set()
         if choice == "S":
-            sel = Prompt.ask("Enter filenames to reject (comma separated)")
+            sel = await asyncio.to_thread(Prompt.ask, "Enter filenames to reject (comma separated)")
             rejected_files = {s.strip() for s in sel.split(",") if s.strip()}
         elif choice == "N":
             rejected_files = {os.path.basename(f) for f in wave_tmp_files}
@@ -1519,7 +1588,9 @@ Mandatory rules:
         state = TaskRegistryState()
         for tmp_path in wave_tmp_files:
             basename = os.path.basename(tmp_path)
-            actual_filename = basename.split("_", 1)[1] if "_" in basename else basename
+            import re as _re
+            uuid_match = _re.match(r'^[0-9a-f]{32}_(.+)$', basename)
+            actual_filename = uuid_match.group(1) if uuid_match else basename
             actual_filename = actual_filename.replace(".tmp", "").replace("__", "/")
             
             target_path = actual_filename
@@ -1574,8 +1645,12 @@ Mandatory rules:
         if rejected_files:
             await asyncio.to_thread(OrphanRecoveryScanner().run, True)
 
-    async def run(self, command: str, args: list, model: str = "gemini-2.5-flash"):
-        self.model = model
+    async def run(self, command: str, args: list, model: str = "gemini-3.5-flash"):
+        # Pro Brain / Cost-Efficient Hands: iterate and audit always use pro reasoning
+        if command in ["iterate", "audit"]:
+            self.model = "gemini-3.1-pro-preview"
+        else:
+            self.model = model
         print(f"DumbleDoer running command: {command}")
         if command == "resume":
             OrphanRecoveryScanner().run()
@@ -1719,7 +1794,7 @@ Mandatory rules:
                 if os.path.exists(".codegraph"):
                     print("\nSyncing CodeGraph index...")
                     import subprocess
-                    subprocess.run(["npx", "-y", "--package=@colbymchenry/codegraph", "codegraph", "sync"], capture_output=True)
+                    await asyncio.to_thread(subprocess.run, ["npx", "-y", "--package=@colbymchenry/codegraph", "codegraph", "sync"], capture_output=True)
 
                 print(f"\nRollback complete. Restored {len(tasks_to_rollback)} task(s).")
                 return
@@ -1764,20 +1839,42 @@ Mandatory rules:
                         ) as progress:
                             wave_task = progress.add_task(f"[cyan]Executing Wave {i+1}/{len(waves)}...", total=len(wave))
                             
-                            if max_parallel > 0:
-                                sem = asyncio.Semaphore(max_parallel)
-                                async def run_with_sem(t):
-                                    async with sem:
-                                        res = await self.execute_task(t['id'], t['desc'])
+                            queue = asyncio.Queue()
+                            for t in wave:
+                                queue.put_nowait(t)
+
+                            async def worker():
+                                while not queue.empty():
+                                    try:
+                                        self.budget_manager.check_and_harvest()
+                                    except BudgetExhaustedException:
+                                        while not queue.empty():
+                                            queue.get_nowait()
+                                            queue.task_done()
+                                        break
+
+                                    t = await queue.get()
+                                    try:
+                                        await self.execute_task(t['id'], t['desc'])
+                                    except BudgetExhaustedException:
+                                        while not queue.empty():
+                                            queue.get_nowait()
+                                            queue.task_done()
+                                        raise
+                                    finally:
                                         progress.advance(wave_task)
-                                        return res
-                                await asyncio.gather(*[run_with_sem(t) for t in wave])
-                            else:
-                                async def run_task(t):
-                                    res = await self.execute_task(t['id'], t['desc'])
-                                    progress.advance(wave_task)
-                                    return res
-                                await asyncio.gather(*[run_task(t) for t in wave])
+                                        queue.task_done()
+
+                            # Force a hard-cap of 3 concurrent workers to prevent API token flooding
+                            safe_parallel = 3 if max_parallel <= 0 else max_parallel
+                            num_workers = min(safe_parallel, len(wave))
+                            workers = [asyncio.create_task(worker()) for _ in range(num_workers)]
+
+                            res = await asyncio.gather(*workers, return_exceptions=True)
+
+                            for r in res:
+                                if isinstance(r, BudgetExhaustedException):
+                                    raise r
                     except BudgetExhaustedException:
                         await self._graceful_shutdown()
                         break
@@ -1824,7 +1921,7 @@ Mandatory rules:
                 cg_symbols = "0"
                 if os.path.exists(".codegraph"):
                     try:
-                        cg_out = subprocess.run(["npx", "-y", "--package=@colbymchenry/codegraph", "codegraph", "status"], capture_output=True, text=True).stdout
+                        cg_out = (await asyncio.to_thread(subprocess.run, ["npx", "-y", "--package=@colbymchenry/codegraph", "codegraph", "status"], capture_output=True, text=True)).stdout
                         sym_match = re.search(r"(\d+)\s+symbols", cg_out)
                         if sym_match: cg_symbols = sym_match.group(1)
                     except Exception: pass
@@ -2052,11 +2149,11 @@ Success Criteria: {success_criteria}
 # YOUR DIRECTIVE
 1. Evaluate the static analysis output and any other necessary context (using read_file or execute_bash for a single targeted test if needed).
 2. If the task passes its success criteria and has no critical static analysis errors, you MUST use the `update_memory_registry` tool to change its status from `awaiting-review` to `completed` in the Task Registry. Example target string: `| {t_id} | {title} | change | awaiting-review |`
-3. If the task fails, you MUST use the `add_task` tool to queue a specific `change` task to fix the bug. Do not change the current task's status (leave it as awaiting-review).
+3. If the task fails, you MUST use the `add_task` tool to queue a specific `change` task to fix the bug. **CRITICAL: Set the `deps` argument to "none". Do NOT make the new task depend on the failed task, or the execution engine will deadlock.** Do not change the current task's status (leave it as awaiting-review).
 4. Terminate your turn with a brief summary of your decision.
 """
                     
-                    chat_session = self.client.aio.chats.create(model=getattr(self, "model", "gemini-2.5-flash"), config={"tools": self._get_tools_for_command("audit"), "automatic_function_calling": {"disable": True}})
+                    chat_session = self.client.aio.chats.create(model=getattr(self, "model", "gemini-3.1-pro-preview"), config={"tools": self._get_tools_for_command("audit"), "automatic_function_calling": {"disable": True}})
                     
                     with console.status(f"[cyan]LLM Evaluator analyzing {t_id}...[/cyan]", spinner="dots") as status:
                         try:
@@ -2166,7 +2263,7 @@ Success Criteria: {success_criteria}
                 if os.path.exists(".codegraph"):
                     try:
                         import subprocess, re
-                        cg_out = subprocess.run(["npx", "-y", "--package=@colbymchenry/codegraph", "codegraph", "status"], capture_output=True, text=True).stdout
+                        cg_out = (await asyncio.to_thread(subprocess.run, ["npx", "-y", "--package=@colbymchenry/codegraph", "codegraph", "status"], capture_output=True, text=True)).stdout
                         sym_match = re.search(r"(\d+)\s+symbols", cg_out)
                         cg_symbols = sym_match.group(1) if sym_match else "unknown"
                         cg_healthy = "✅ healthy" if "healthy" in cg_out.lower() or "ok" in cg_out.lower() else "⚠ stale"
@@ -2297,7 +2394,7 @@ Success Criteria: {success_criteria}
 
                         for sym in symbols:
                             try:
-                                cg_out = subprocess.run(["npx", "-y", "--package=@colbymchenry/codegraph", "codegraph", "search", sym], capture_output=True, text=True).stdout
+                                cg_out = (await asyncio.to_thread(subprocess.run, ["npx", "-y", "--package=@colbymchenry/codegraph", "codegraph", "search", sym], capture_output=True, text=True)).stdout
                                 
                                 if "No results" in cg_out or not cg_out.strip():
                                     needs_update = True
@@ -2353,7 +2450,7 @@ Success Criteria: {success_criteria}
                 return
 
             else:
-                self.chat_session = self.client.aio.chats.create(model=getattr(self, "model", "gemini-2.5-flash"), config={"tools": self._get_tools_for_command(command), "automatic_function_calling": {"disable": True}})
+                self.chat_session = self.client.aio.chats.create(model=getattr(self, "model", "gemini-3.5-flash"), config={"tools": self._get_tools_for_command(command), "automatic_function_calling": {"disable": True}})
                 sys_inst = await self._get_system_instructions(command)
                 payload = f"{sys_inst}\n\nUSER DIRECTIVE: Execute the `{command}` command with arguments {args}. Follow your COMMAND SPECIFIC INSTRUCTIONS strictly. Do not ask for user input if a tool can accomplish the task."
                 from rich.console import Console
@@ -2379,7 +2476,7 @@ Success Criteria: {success_criteria}
                 print(response.text)
 
         finally:
-            _teardown_warm_sandbox()
+            await _teardown_warm_sandbox()
             self._archive_stale_sessions()
             await self.exit_stack.aclose()
 
@@ -2577,7 +2674,7 @@ async def main_async():
         choices=["start", "execute", "resume", "report", "rollback", "update-docs", "audit", "iterate", "status"],
         help="The dumbledoer command to run"
     )
-    parser.add_argument("--model", default=os.getenv("AGY_MODEL", "gemini-2.5-flash"), help="Model override")
+    parser.add_argument("--model", default=os.getenv("AGY_MODEL", "gemini-3.5-flash"), help="Model override")
     parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose mode (e.g. GUI diff-gate in VS Code)")
     parser.add_argument("--budget-limit", type=int, help="Override budget_limit for token tracking")
     parser.add_argument("--budget-threshold", type=int, help="Override budget_threshold_pct (e.g. 80)")

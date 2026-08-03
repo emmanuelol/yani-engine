@@ -42,8 +42,9 @@ def setup_test_env(tmp_path):
     os.chdir(original_cwd)
 
 # 1. test_parallel_sandbox_isolation()
+@pytest.mark.asyncio
 @patch("subprocess.run")
-def test_parallel_sandbox_isolation(mock_run, setup_test_env):
+async def test_parallel_sandbox_isolation(mock_run, setup_test_env):
     """Asserts that _ensure_warm_sandbox allocates unique containers per task_id."""
     
     # Clear global state for test
@@ -58,7 +59,7 @@ def test_parallel_sandbox_isolation(mock_run, setup_test_env):
     task_ids = ["T-101", "T-102", "T-103"]
     
     for t_id in task_ids:
-        _ensure_warm_sandbox(task_id=t_id)
+        await _ensure_warm_sandbox(task_id=t_id)
         
     assert len(_WARM_SANDBOXES) == 3
     assert "T-101" in _WARM_SANDBOXES

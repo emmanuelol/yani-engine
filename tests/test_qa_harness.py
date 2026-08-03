@@ -18,11 +18,11 @@ def setup_memory_md():
 | T-1 | Test | pending |
 
 ## Change Log
-| Timestamp | Checkpoint ID | Task ID | Target Path | Action | Status | Rationale |
-|---|---|---|---|---|---|---|
-| 2026-07-22T00:00:00Z | C-1 | T-1 | file1.txt | modify | planned | Test |
-| 2026-07-22T00:00:00Z | C-2 | T-1 | file2.txt | modify | planned | Test |
-| 2026-07-22T00:00:00Z | C-3 | T-1 | file3.txt | modify | planned | Test |
+| Timestamp | Task ID | Target Path | Summary | Status | Rationale |
+|---|---|---|---|---|---|
+| 2026-07-22T00:00:00Z | T-1 | file1.txt | modify | planned | Test |
+| 2026-07-22T00:00:00Z | T-1 | file2.txt | modify | planned | Test |
+| 2026-07-22T00:00:00Z | T-1 | file3.txt | modify | planned | Test |
 """
     with open("memory.md", "w", encoding="utf-8") as f:
         f.write(initial_content)
@@ -67,27 +67,28 @@ async def test_suite_1_ledger_sync_lock():
 
 @pytest.mark.asyncio
 async def test_suite_2_orphan_recovery():
+    uuid_base = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d"
     for i in range(1, 4):
-        with open(f".dumbledoer/tmp/C-{i}_file{i}.txt.tmp", "w") as f:
+        with open(f".dumbledoer/tmp/{uuid_base}{i}_file{i}.txt.tmp", "w") as f:
             f.write("new content")
-        with open(f"file{i}.txt", "w") as f:
-            f.write("old content")
-        with open(f".dumbledoer/rollbacks/C-{i}_file{i}.bak", "w") as f:
+            with open(f"file{i}.txt", "w") as f:
+                f.write("new content")
+        with open(f".dumbledoer/rollbacks/{uuid_base}{i}_file{i}.txt.bak", "w") as f:
             f.write("old content")
 
     cli = DumbleDoerCLI()
     
     with patch("subprocess.run"):
         with patch("rich.prompt.Prompt.ask", side_effect=["S", "file2.txt"]):
-            await cli.batch_diff_review([
-                ".dumbledoer/tmp/C-1_file1.txt.tmp",
-                ".dumbledoer/tmp/C-2_file2.txt.tmp",
-                ".dumbledoer/tmp/C-3_file3.txt.tmp"
-            ])
-            
-    with open("memory.md", "r", encoding="utf-8") as f:
-        content = f.read()
-    
-    assert "| C-2 | T-1 | file2.txt | modify | rolled-back |" in content
-    assert "| C-1 | T-1 | file1.txt | modify | applied |" in content
-    assert "| C-3 | T-1 | file3.txt | modify | applied |" in content
+            with patch("dumbledoer.dumbledoer_cli.GUI_DIFF_ENABLED", True):
+                await cli.batch_diff_review([
+                    f".dumbledoer/tmp/{uuid_base}1_file1.txt.tmp",
+                    f".dumbledoer/tmp/{uuid_base}2_file2.txt.tmp",
+                    f".dumbledoer/tmp/{uuid_base}3_file3.txt.tmp"
+                ])
+                with open("memory.md", "r", encoding="utf-8") as f:
+                    content = f.read()
+
+    assert "| T-1 | file2.txt | modify | rolled-back |" in content
+    assert "| T-1 | file1.txt | modify | applied |" in content
+    assert "| T-1 | file3.txt | modify | applied |" in content

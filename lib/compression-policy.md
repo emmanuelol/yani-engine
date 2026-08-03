@@ -39,8 +39,8 @@ level and may locally suspend compression without changing session state.
 
 | Category | Compression level | Sub-agent model tier |
 |---|---|---|
-| `simple` | caveman `full` | standard — request `gemini-2.0-flash` at spawn |
-| `complex` | caveman `lite` | premium — request `gemini-2.0-pro` at spawn |
+| `simple` | caveman `full` | standard — request `gemini-3.5-flash` at spawn |
+| `complex` | caveman `lite` | premium — request `gemini-3.1-pro-preview` at spawn |
 | `planning` / persisted artifacts | off (normal prose) | main session model (premium where spawned) |
 
 ### Classification rules
@@ -106,7 +106,7 @@ Note: preferred model tier unavailable — continuing on the session default mod
 When start/resume Section 8 spawns a sub-agent, the spawn MUST:
 
 1. Classify the task per the rules above.
-2. Request the mapped model tier (`gemini-2.0-flash` for `simple`, `gemini-2.0-pro` for `complex`).
+2. Request the mapped model tier (`gemini-3.5-flash` for `simple`, `gemini-3.1-pro-preview` for `complex`).
 3. Include in the sub-agent prompt: the task's compression level (`full`, `lite`,
    or `off`) and the byte-preservation + artifact-override invariants.
 
