@@ -54,7 +54,17 @@ export GOOGLE_API_KEY="your-api-key-here"
 
 DumbleDoer prioritizes safety during execution with two primary mechanisms:
 * **VS Code Diff-Gate**: File changes are written to a shadow `.tmp` copy while the original is backed up. If you reject a change during review, DumbleDoer automatically restores the original file. If VS Code is unavailable, a terminal-native `rich` diff is used.
-* **Zero-Trust Docker Sandbox**: Sub-agents execute testing and validation within an isolated Docker sandbox. *(Requires the host Docker daemon to be running).*
+* **Zero-Trust Docker Sandbox (Shadow Clone Isolation)**: Sub-agents execute testing and validation within a fully isolated Docker container using the "Shadow Clone" pattern. The codebase is safely cloned into the sandbox, providing agents with a fully mutable playground that prevents container crashes when installing packages or writing cache files, all while perfectly isolating the host repository from hallucinated destructive commands.
+
+---
+
+## 🏗️ Core Architecture (Decoupled & Modular)
+
+DumbleDoer has moved past the monolithic "God Object" phase into a strictly decoupled architecture designed for scale:
+* **`core/orchestrator.py`**: The central hub managing parallel execution waves, LLM chat sessions, and the Native QA Harness Loop.
+* **`core/state.py`**: Handles all disk-level mutations, locking mechanisms, memory extraction logic, and orphan recovery.
+* **`core/sandbox.py`**: Manages dynamic, stateless validation of the Zero-Trust execution containers.
+* **`cli/main.py`**: A lean entrypoint specifically dedicated to command routing and argument parsing.
 
 ---
 
@@ -71,8 +81,8 @@ DumbleDoer employs advanced strategies to minimize API token consumption:
 ## 🔒 Concurrency Safety
 
 DumbleDoer executes tasks in parallel waves via `asyncio.gather`. To prevent state corruption:
-* **Unified Locking**: `memory.md` updates acquire both a thread-level `RLock` and a process-level `FileLock`.
-* **Ambiguity Guard**: Prevents silent state corruption from ambiguous `str.replace()` calls in the registry.
+* **Unified Locking**: `memory.md` updates acquire both a thread-level `threading.Lock()` (for synchronous I/O boundaries) and an `asyncio.Lock()` (for asynchronous queues) via a unified `_MEMORY_MUTEX` to completely eliminate race conditions.
+* **AST DOM Manipulation**: DumbleDoer utilizes a custom `ASTMemoryMapper` to parse markdown files into a structural DOM model. State updates rely on surgically precise block location rather than fragile `str.replace()` calls, guaranteeing the registry won't silently corrupt itself under heavy load.
 * **Import Coupling Analysis**: Pre-write file ownership checks prevent race conditions between sub-agents modifying interrelated files.
 
 ---
