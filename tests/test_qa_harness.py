@@ -4,7 +4,9 @@ import os
 import shutil
 from unittest.mock import patch
 
-from dumbledoer.dumbledoer_cli import TaskRegistryState, execute_bash, DumbleDoerCLI
+from dumbledoer.core.state import TaskRegistryState
+from dumbledoer.core.sandbox import execute_bash
+from dumbledoer.core.orchestrator import LLMOrchestrator as DumbleDoerCLI
 
 @pytest.fixture(autouse=True)
 def setup_memory_md():
@@ -80,7 +82,7 @@ async def test_suite_2_orphan_recovery():
     
     with patch("subprocess.run"):
         with patch("rich.prompt.Prompt.ask", side_effect=["S", "file2.txt"]):
-            with patch("dumbledoer.dumbledoer_cli.GUI_DIFF_ENABLED", True):
+            with patch("dumbledoer.cli.main.GUI_DIFF_ENABLED", True):
                 await cli.batch_diff_review([
                     f".dumbledoer/tmp/{uuid_base}1_file1.txt.tmp",
                     f".dumbledoer/tmp/{uuid_base}2_file2.txt.tmp",

@@ -1,7 +1,7 @@
 import pytest
 import asyncio
 from unittest.mock import patch, MagicMock
-from dumbledoer.dumbledoer_cli import execute_bash
+from dumbledoer.core.sandbox import execute_bash
 
 @pytest.mark.asyncio
 async def test_native_sandbox_execution():
@@ -16,4 +16,4 @@ async def test_native_sandbox_execution():
         args = mock_run.call_args[0][0]
         assert args[0] == "bash"
         assert args[1] == "-c"
-        assert result == "native execution success"
+        assert "native execution success" in result

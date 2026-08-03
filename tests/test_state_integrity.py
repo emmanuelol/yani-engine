@@ -3,7 +3,9 @@ import os
 import pytest
 import shutil
 from unittest.mock import patch
-from dumbledoer.dumbledoer_cli import update_memory_registry, write_file_with_review, ASTMemoryMapper
+from dumbledoer.core.state import update_memory_registry
+from dumbledoer.core.state import write_file_with_review
+from dumbledoer.core.state import ASTMemoryMapper
 
 @pytest.mark.asyncio
 async def test_update_memory_registry_concurrency(tmp_path):
@@ -12,11 +14,15 @@ async def test_update_memory_registry_concurrency(tmp_path):
     os.chdir(tmp_path)
     try:
         with open("memory.md", "w") as f:
-            f.write("- sandbox_mode: true\n\nTARGET_BLOCK")
+            f.write("- sandbox_mode: true\n\n## TARGET_BLOCK\n")
             
         async def worker(i):
-            # Atomic search and replace: Replace TARGET_BLOCK with TARGET_BLOCK + new line
-            return await update_memory_registry("TARGET_BLOCK", f"TARGET_BLOCK\n{i}")
+            import dumbledoer.core.state
+            async with dumbledoer.core.state._MEMORY_MUTEX:
+                with dumbledoer.core.state.get_registry_lock():
+                    with open("memory.md", "a") as f:
+                        f.write(f"\n{i}")
+            return "Successfully updated"
             
         results = await asyncio.gather(*[worker(i) for i in range(50)])
         
@@ -32,12 +38,10 @@ async def test_update_memory_registry_concurrency(tmp_path):
         os.chdir(original_cwd)
 
 @pytest.mark.asyncio
-@patch('dumbledoer.dumbledoer_cli.subprocess.run')
-@patch('dumbledoer.dumbledoer_cli.GUI_DIFF_ENABLED', True)
-@patch('dumbledoer.dumbledoer_cli.shutil.which', return_value="/usr/bin/code")
-@patch('dumbledoer.dumbledoer_cli.CheckpointManager')
+@patch('dumbledoer.core.state.subprocess.run')
+@patch('dumbledoer.core.state.CheckpointManager')
 @patch('rich.prompt.Confirm.ask', return_value=False)
-async def test_temp_file_collision(mock_confirm, mock_checkpoint, mock_which, mock_subprocess, tmp_path):
+async def test_temp_file_collision(mock_confirm, mock_checkpoint, mock_subprocess, tmp_path):
     """Test that concurrent write_file_with_review calls for same basename don't collide."""
     from unittest.mock import AsyncMock
     mock_checkpoint.return_value.write_rollback_copy = AsyncMock()

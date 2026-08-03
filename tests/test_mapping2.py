@@ -1,7 +1,7 @@
 import os
 from unittest.mock import patch, MagicMock
 
-from dumbledoer.dumbledoer_cli import DumbleDoerCLI
+from dumbledoer.core.orchestrator import LLMOrchestrator as DumbleDoerCLI
 
 @patch.dict(os.environ, {"GEMINI_API_KEY": "dummy_key"})
 def test_mcp_wrapper_sanitizes_dashes():

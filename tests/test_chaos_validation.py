@@ -2,13 +2,14 @@ import pytest
 import os
 import asyncio
 from unittest.mock import patch, MagicMock
-from dumbledoer.dumbledoer_cli import TaskRegistryState, DumbleDoerCLI
+from dumbledoer.core.state import TaskRegistryState
+from dumbledoer.core.orchestrator import LLMOrchestrator as DumbleDoerCLI
 
 @pytest.fixture(autouse=True)
 def mock_env_and_gui():
     with patch.dict(os.environ, {"GEMINI_API_KEY": "dummy_key", "AGY_MODEL": "gemini-3.6-flash"}):
-        import dumbledoer.dumbledoer_cli
-        dumbledoer.dumbledoer_cli.GUI_DIFF_ENABLED = False
+        import dumbledoer.cli.main
+        dumbledoer.cli.main.GUI_DIFF_ENABLED = False
         yield
 
 @pytest.mark.asyncio

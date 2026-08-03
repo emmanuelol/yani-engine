@@ -1,5 +1,5 @@
 import pytest
-from dumbledoer.dumbledoer_cli import ASTMemoryMapper
+from dumbledoer.core.state import ASTMemoryMapper
 
 def test_locate_heading_block_irregular_whitespace():
     mock_memory = """# DumbleDoer Memory
