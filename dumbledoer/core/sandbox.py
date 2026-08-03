@@ -30,12 +30,9 @@ async def _ensure_warm_sandbox(task_id: str = None, image: str = "dumbledoer-bas
                 shutil.rmtree(shadow_dir)
             os.makedirs(shadow_dir, exist_ok=True)
             
-            # Fast sync using rsync (excluding git and heavy caches)
-            subprocess.run([
-                "rsync", "-a", "--exclude=.git", "--exclude=.venv", 
-                "--exclude=.pytest_cache", "--exclude=__pycache__",
-                f"{os.getcwd()}/", f"{shadow_dir}/"
-            ], check=True)
+            # Native Python shadow clone
+            ignore_patterns = shutil.ignore_patterns(".git", ".venv", ".pytest_cache", "__pycache__", "node_modules")
+            shutil.copytree(os.getcwd(), shadow_dir, ignore=ignore_patterns, dirs_exist_ok=True)
             
             sandbox_proc = subprocess.Popen(
                 ["docker", "run", "--rm", "-i", "--name", container_name,

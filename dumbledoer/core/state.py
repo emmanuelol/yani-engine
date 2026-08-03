@@ -2,6 +2,9 @@ import sys
 import os
 import subprocess
 import asyncio
+
+_KNOWLEDGE_MUTEX = asyncio.Lock()
+_MEMORY_MUTEX = asyncio.Lock()
 import re
 import glob
 import shutil
@@ -405,9 +408,9 @@ async def write_file_with_review(path: str, content: str, task_id: str) -> str:
 
 async def add_task(title: str, task_type: str = "change", deps: str = "none", description: str = "", outputs: str = "none", success_criteria: str = "TBD") -> str:
     """Registers a new atomic task to the memory.md Task Registry. Auto-generates the Task ID."""
-    def _write():
-        with get_registry_lock():
-            with FileLock("memory.md.lock", timeout=60):
+    async with _MEMORY_MUTEX:
+        def _write():
+            with get_registry_lock():
                 try:
                     with open("memory.md", "r", encoding="utf-8") as f:
                         content = f.read()
@@ -455,14 +458,14 @@ async def add_task(title: str, task_type: str = "change", deps: str = "none", de
                     return f"Successfully registered task {task_id}."
                 except Exception as e:
                     return f"Error adding task: {e}"
-    return await asyncio.to_thread(_write)
+        return await asyncio.to_thread(_write)
 
 
 async def record_knowledge(title: str, entry_type: str, description: str, rationale: str, supersedes: str = "none") -> str:
-    """Saves a durable learning to the Markdown Knowledge Vault safely, handling sequential IDs and supersession."""
-    def _write():
-        with get_registry_lock():
-            with FileLock("knowledge.lock", timeout=60):
+    """Saves a durable learning securely to the Vault using an Async Mutex."""
+    async with _KNOWLEDGE_MUTEX:
+        def _write():
+            with get_registry_lock():
                 try:
                     os.makedirs("knowledge/entries", exist_ok=True)
                     
@@ -558,135 +561,6 @@ class DumbleDoerCLI:
         if budget_threshold is not None:
             self.budget_manager.threshold_pct = budget_threshold
             self.budget_manager.shutdown_threshold = int(self.budget_manager.budget_limit * (self.budget_manager.threshold_pct / 100.0))
-
-
-async def add_task(title: str, task_type: str = "change", deps: str = "none", description: str = "", outputs: str = "none", success_criteria: str = "TBD") -> str:
-    """Registers a new atomic task to the memory.md Task Registry. Auto-generates the Task ID."""
-    def _write():
-        with get_registry_lock():
-            with FileLock("memory.md.lock", timeout=60):
-                try:
-                    with open("memory.md", "r", encoding="utf-8") as f:
-                        content = f.read()
-                    
-                    # 1. Native ID Generation (Enforces Rule 7)
-                    import re
-                    existing_ids = re.findall(r'T-(\d{3,4})', content)
-                    if existing_ids:
-                        next_num = max([int(x) for x in existing_ids]) + 1
-                    else:
-                        next_num = 1
-                    task_id = f"T-{next_num:03d}"
-
-                    # 2. Native Dependency Validation (Enforces Rule 8)
-                    if deps.lower() not in ["none", "—", "-", ""]:
-                        dep_list = [d.strip() for d in deps.split(",")]
-                        for d in dep_list:
-                            # Verify the dependency actually exists in the registry
-                            if f"| {d} |" not in content and f"### {d}" not in content:
-                                return f"Error: Dependency {d} does not exist in memory.md. Task creation rejected. Check your dependencies."
-
-                    # 3. Append to Task Registry
-                    row = f"| {task_id} | {title} | {task_type} | pending | — | {deps} | — | none |"
-                    try:
-                        ASTMemoryMapper.append_to_markdown_table("memory.md", "Task Registry", row)
-                    except ValueError as e:
-                        return f"Error appending to Task Registry: {e}"
-                    
-                    # 4. Append to Task Details
-                    with open("memory.md", "r", encoding="utf-8") as f:
-                        content = f.read()
-                    
-                    details = f"\n### {task_id}: {title}\n- **Type**: {task_type}\n- **Status**: pending\n- **Owner**: —\n- **Depends On**: {deps}\n- **Assigned Session**: —\n- **Description**: {description}\n- **Inputs**: none\n- **Outputs**: {outputs}\n- **Success Criteria**: {success_criteria}\n- **Estimated Effort**: small\n- **Parallelizable**: yes\n- **CodeGraph Impact**: —\n- **Checkpoint**: none\n- **Resume Instructions**: none\n- **Notes**: —\n"
-                    
-                    start_idx, end_idx = ASTMemoryMapper.locate_heading_block(content, "##", "Task Details")
-                    if start_idx != -1:
-                        lines = content.splitlines()
-                        lines.insert(end_idx, details)
-                        with open("memory.md", "w", encoding="utf-8") as f:
-                            f.write("\n".join(lines) + "\n")
-                    else:
-                        return f"Error appending Task Details: Header '## Task Details' not found in memory.md"
-                            
-                    # 5. Return the native ID so the LLM knows what was created
-                    return f"Successfully registered task {task_id}."
-                except Exception as e:
-                    return f"Error adding task: {e}"
-    return await asyncio.to_thread(_write)
-
-
-async def record_knowledge(title: str, entry_type: str, description: str, rationale: str, supersedes: str = "none") -> str:
-    """Saves a durable learning to the Markdown Knowledge Vault safely, handling sequential IDs and supersession."""
-    def _write():
-        with get_registry_lock():
-            with FileLock("knowledge.lock", timeout=60):
-                try:
-                    os.makedirs("knowledge/entries", exist_ok=True)
-                    
-                    # 1. Native Sequential ID Generation
-                    import glob, re
-                    existing_entries = glob.glob("knowledge/entries/*.md")
-                    highest_num = 0
-                    for entry in existing_entries:
-                        match = re.search(r'K-(\d+)', os.path.basename(entry))
-                        if match:
-                            num = int(match.group(1))
-                            if num > highest_num:
-                                highest_num = num
-                                
-                    k_id = f"K-{(highest_num + 1):03d}"
-                    slug = title.lower().replace(" ", "-")
-                    slug = "".join(c for c in slug if c.isalnum() or c == "-")[:25]
-                    filename = f"knowledge/entries/{k_id}-{slug}.md"
-
-                    # 2. Handle Supersession (OP-7)
-                    if supersedes and supersedes.lower() not in ["none", "—", "-", ""]:
-                        sup_list = [s.strip() for s in supersedes.split(",")]
-                        for sup_id in sup_list:
-                            # Find the file that matches this ID
-                            target_files = glob.glob(f"knowledge/entries/{sup_id}-*.md")
-                            for tf in target_files:
-                                with open(tf, "r", encoding="utf-8") as f_sup:
-                                    sup_content = f_sup.read()
-                                # Demote status to superseded
-                                sup_content = re.sub(r'status:\s*active', 'status: superseded', sup_content, count=1)
-                                with open(tf, "w", encoding="utf-8") as f_sup:
-                                    f_sup.write(sup_content)
-
-                    # 3. Write New Entry
-                    from datetime import datetime
-                    content = f"""---
-id: {k_id}
-title: "{title}"
-type: {entry_type}
-status: active
-created: {datetime.utcnow().isoformat()}Z
-session: manual
-tags: [knowledge-registry]
----
-
-## Description
-{description}
-
-## Rationale
-{rationale}
-"""
-                    with open(filename, "w", encoding="utf-8") as f:
-                        f.write(content)
-
-                    # 4. Synchronous Index Update
-                    if os.path.exists("sync_knowledge.py"):
-                        import subprocess
-                        subprocess.run([sys.executable, "sync_knowledge.py"], capture_output=True)
-
-                    msg = f"Successfully recorded learning to {filename}"
-                    if supersedes and supersedes.lower() not in ["none", "—", "-", ""]:
-                        msg += f" (Superseded: {supersedes})"
-                    return msg
-                except Exception as e:
-                    return f"Error recording knowledge: {e}"
-                    
-    return await asyncio.to_thread(_write)
 
 
 async def read_code_block(file_path: str, symbol_name: str) -> str:
