@@ -13,16 +13,6 @@ import filecmp
 from filelock import FileLock
 import filelock
 
-_REGISTRY_LOCK = __import__('threading').Lock()
-_ASYNC_REGISTRY_LOCK = None
-
-
-
-def get_async_registry_lock():
-    global _ASYNC_REGISTRY_LOCK
-    if _ASYNC_REGISTRY_LOCK is None:
-        _ASYNC_REGISTRY_LOCK = asyncio.Lock()
-    return _ASYNC_REGISTRY_LOCK
 
 class ASTMemoryMapper:
     @staticmethod

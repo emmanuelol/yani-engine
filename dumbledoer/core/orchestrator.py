@@ -11,31 +11,20 @@ import re
 from contextlib import AsyncExitStack
 import shutil
 import difflib
-from filelock import FileLock
-import filelock
 
-_REGISTRY_LOCK = __import__('threading').Lock()
 
+from dumbledoer.core.locks import _MEMORY_MUTEX, _REGISTRY_LOCK, get_registry_lock
 from dumbledoer.core.sandbox import execute_bash, _ensure_warm_sandbox, _teardown_warm_sandbox, run_rtk
 from dumbledoer.core.state import (
     append_handoff_summary,
-    get_registry_lock, get_async_registry_lock, ASTMemoryMapper, 
+    get_registry_lock, ASTMemoryMapper, 
     update_memory_registry, CheckpointManager, OrphanRecoveryScanner, 
     TaskRegistryState, read_file, write_file_with_review,
     add_task, read_code_block, record_knowledge
 )
 
 
-_ASYNC_REGISTRY_LOCK = None
 
-def get_registry_lock():
-    return _REGISTRY_LOCK
-
-def get_async_registry_lock():
-    global _ASYNC_REGISTRY_LOCK
-    if _ASYNC_REGISTRY_LOCK is None:
-        _ASYNC_REGISTRY_LOCK = asyncio.Lock()
-    return _ASYNC_REGISTRY_LOCK
 
 # GUI_DIFF_ENABLED will be set dynamically in main_async
 GUI_DIFF_ENABLED = True
@@ -249,50 +238,29 @@ class LLMOrchestrator:
 
     async def _graceful_shutdown(self, task_id: str = None):
         print("CRITICAL: Budget Exhausted. Initiating Graceful Shutdown Sequence...")
-        def _shutdown():
-            with get_registry_lock():
-                # --- NEW GUARDRAIL: Prevent FileNotFoundError if bootstrapping fails ---
-                if not os.path.exists("memory.md"):
-                    print("Shutdown intercepted: memory.md has not been initialized yet. Aborting cleanly without saving state.")
-                    return
-                # -----------------------------------------------------------------------
+        
+        # 1. Update task statuses safely via the state manager
+        state = TaskRegistryState()
+        tasks = await state.get_tasks()
+        interrupted_ids = []
+        for tid, t in tasks.items():
+            if t['status'].strip() == 'in_progress':
+                await state.update_task_status(tid, 'interrupted')
+                interrupted_ids.append(tid)
 
-                # 1. ROBUST STATUS SWEEP (Replaces the broken string replacement)
-                state = TaskRegistryState()
-                tasks = state.load_tasks()
-                interrupted_ids = []
-                for tid, t in tasks.items():
-                    if t['status'].strip() == 'in_progress':
-                        t['status'] = 'interrupted'
-                        interrupted_ids.append(tid)
-                
-                if interrupted_ids:
-                    state.save_tasks(tasks)
-
-                with FileLock("memory.md.lock", timeout=60):
-                    with open("memory.md", "r", encoding="utf-8") as f:
-                        content = f.read()
-                
-                summary = f"## Session Handoff Summary\n- Outcome: interrupted-budget\n"
-                if task_id:
-                    summary += f"- Interrupted Task: {task_id}\n"
-                elif interrupted_ids:
-                    summary += f"- Interrupted Tasks: {', '.join(interrupted_ids)}\n"
-                summary += "- Recommended Next Scope: Resume interrupted tasks\n"
-                
-                start_idx, end_idx = ASTMemoryMapper.locate_heading_block(content, "##", "Session Handoff Summary")
-                if start_idx != -1:
-                    lines = content.splitlines()
-                    content = "\n".join(lines[:start_idx] + [summary.strip()] + lines[end_idx:])
-                else:
-                    content += f"\n\n{summary}"
-                    
-                with open("memory.md", "w", encoding="utf-8") as f:
-                    f.write(content)
-                    
-        await asyncio.to_thread(_shutdown)
+        # 2. Build the summary string
+        summary = f"## Session Handoff Summary\n- Outcome: interrupted-budget\n"
+        if task_id:
+            summary += f"- Interrupted Task: {task_id}\n"
+        elif interrupted_ids:
+            summary += f"- Interrupted Tasks: {', '.join(interrupted_ids)}\n"
+        summary += "- Recommended Next Scope: Resume interrupted tasks\n"
+        
+        # 3. Dispatch to the async-safe state writer
+        await append_handoff_summary(summary)
+        
         _teardown_warm_sandbox()
-        print("Graceful Shutdown Sequence Complete. State preserved in memory.md (if initialized).")
+        print("Graceful Shutdown Sequence Complete. State preserved in memory.md.")
 
     async def _get_sliced_memory(self, sections: list) -> str:
         """Extracts only specified sections from memory.md to minimize token consumption."""
