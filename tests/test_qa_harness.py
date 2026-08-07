@@ -1,3 +1,5 @@
+import os
+os.environ['GEMINI_API_KEY'] = 'mock'
 import pytest
 import asyncio
 import os

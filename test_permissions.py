@@ -1,7 +1,7 @@
 import asyncio
 import os
 import stat
-from dumbledoer.dumbledoer_cli import execute_bash
+from dumbledoer.core.sandbox import execute_bash
 
 async def test_permissions():
     result = await execute_bash("touch /workspace/test_perm.txt")

@@ -19,7 +19,7 @@ async def test_update_memory_registry_concurrency(tmp_path):
         async def worker(i):
             import dumbledoer.core.state
             async with dumbledoer.core.state._MEMORY_MUTEX:
-                with dumbledoer.core.state.get_registry_lock():
+                async with dumbledoer.core.state.get_registry_lock():
                     with open("memory.md", "a") as f:
                         f.write(f"\n{i}")
             return "Successfully updated"

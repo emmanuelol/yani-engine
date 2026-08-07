@@ -24,7 +24,7 @@ async def test_schema_compliant_wave_resolution(tmp_path):
         f.write("| T-002 | B | change | pending | — | T-001 | — | none |\n")
         
     cli = DumbleDoerCLI()
-    waves = cli.get_pending_waves()
+    waves = await cli.get_pending_waves()
     
     assert len(waves) == 2
     assert waves[0][0]['id'] == "T-001"

@@ -66,6 +66,24 @@ async def _teardown_warm_sandbox(task_id: str = None):
             pass
     await asyncio.to_thread(_do_teardown)
 
+import atexit
+import glob
+
+def _cleanup_all_sandboxes():
+    try:
+        # stop all running dumbledoer-sandbox containers
+        res = subprocess.run(["docker", "ps", "-q", "-f", "name=dumbledoer-sandbox-"], capture_output=True, text=True)
+        if res.stdout.strip():
+            for cid in res.stdout.strip().splitlines():
+                subprocess.run(["docker", "rm", "-f", cid], capture_output=True)
+        # remove all shadow dirs
+        for shadow_dir in glob.glob(".dumbledoer/shadow_*"):
+            shutil.rmtree(shadow_dir, ignore_errors=True)
+    except Exception:
+        pass
+
+atexit.register(_cleanup_all_sandboxes)
+
 async def execute_bash(command: str, sandbox_mode: str = None, task_id: str = None) -> str:
     def _run():
         try:
@@ -89,7 +107,7 @@ async def execute_bash(command: str, sandbox_mode: str = None, task_id: str = No
                     return f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
                 else:
                     result = subprocess.run(
-                        ["docker", "run", "--rm", "-i", image, "/bin/bash", "-c", command],
+                        ["docker", "run", "--rm", "-i", "-v", f"{os.getcwd()}:/workspace", "-w", "/workspace", image, "/bin/bash", "-c", command],
                         capture_output=True,
                         text=True,
                         timeout=120

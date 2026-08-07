@@ -1,7 +1,7 @@
 import threading
 import asyncio
 
-_REGISTRY_LOCK = threading.Lock()
+_REGISTRY_LOCK = asyncio.Lock()
 _MEMORY_MUTEX = asyncio.Lock()
 _KNOWLEDGE_MUTEX = asyncio.Lock()
 

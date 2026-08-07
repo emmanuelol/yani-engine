@@ -80,9 +80,8 @@ class LLMOrchestrator:
         self.local_tools = [read_file, read_code_block, write_file_with_review, execute_bash, update_memory_registry, run_rtk, add_task, record_knowledge]
         self.gemini_tools = list(self.local_tools)
         try:
-            with get_registry_lock():
-                with open("memory.md", "r", encoding="utf-8") as f:
-                    self.budget_manager = BudgetManager(f.read())
+            with open("memory.md", "r", encoding="utf-8") as f:
+                self.budget_manager = BudgetManager(f.read())
         except Exception:
             self.budget_manager = BudgetManager("")
             
@@ -445,20 +444,7 @@ class LLMOrchestrator:
                 while abs(slice_index) < len(chat_session._history):
                     item = chat_session._history[slice_index]
                     item_role = getattr(item, 'role', None) or (item.get('role') if isinstance(item, dict) else None)
-                    
-                    is_func_resp = False
-                    parts = getattr(item, 'parts', None)
-                    if parts is None and isinstance(item, dict):
-                        parts = item.get('parts', [])
-                        
-                    if parts:
-                        for p in parts:
-                            if getattr(p, 'function_response', None) is not None:
-                                is_func_resp = True
-                            elif isinstance(p, dict) and ('function_response' in p or 'functionResponse' in p):
-                                is_func_resp = True
-                                
-                    if item_role == 'user' and not is_func_resp:
+                    if item_role == 'model':
                         found_safe_boundary = True
                         break
                     slice_index -= 1
@@ -565,9 +551,9 @@ Mandatory rules:
         except Exception:
             return False  # Fail open: don't block parallelism on parse errors
 
-    def get_pending_waves(self) -> list[list[dict]]:
+    async def get_pending_waves(self) -> list[list[dict]]:
         state = TaskRegistryState()
-        tasks_dict = state.load_tasks()
+        tasks_dict = await state.load_tasks()
         tasks = list(tasks_dict.values())
         
         pending_tasks = {t['id']: t for t in tasks if "pending" in t['status']}
@@ -789,7 +775,7 @@ Mandatory rules:
                     await state.update_task_status(task_id, "completed")
 
         if rejected_files:
-            await asyncio.to_thread(OrphanRecoveryScanner().run, True)
+            await OrphanRecoveryScanner().run(True)
 
     async def run(self, command: str, args: list, model: str = "gemini-3.5-flash"):
         # Pro Brain / Cost-Efficient Hands: iterate and audit always use pro reasoning
@@ -802,7 +788,7 @@ Mandatory rules:
             OrphanRecoveryScanner().run()
             
             state = TaskRegistryState()
-            tasks = state.load_tasks()
+            tasks = await state.load_tasks()
             
             # Detect interrupted tasks or stale locks natively
             interrupted = [t_id for t_id, t in tasks.items() if t['status'] in ["interrupted", "in_progress"]]
@@ -848,7 +834,7 @@ Mandatory rules:
                 target = args[0]
                 tasks_to_rollback = []
                 state = TaskRegistryState()
-                all_tasks = state.load_tasks()
+                all_tasks = await state.load_tasks()
 
                 if target == "--all":
                     tasks_to_rollback = sorted([t_id for t_id, t in all_tasks.items() if "completed" in t["status"]], reverse=True)
@@ -946,32 +932,39 @@ Mandatory rules:
                 return
     
             if command == "execute":
-                OrphanRecoveryScanner().run(unattended=True)
+                await OrphanRecoveryScanner().run(unattended=True)
                 import glob
                 existing_tmps = set(glob.glob(".dumbledoer/tmp/*.tmp"))
                 if existing_tmps:
                     print(f"Found {len(existing_tmps)} unreviewed files from a previous run. Starting review...")
                     await self.batch_diff_review(list(existing_tmps))
                 
-                waves = self.get_pending_waves()
-                if not waves:
-                    print("No pending tasks to execute.")
                 # Fetch max_parallel_tasks from memory.md
                 max_parallel = 0
                 try:
-                    with get_registry_lock():
-                        with open("memory.md", "r", encoding="utf-8") as f:
-                            content = f.read()
-                        config_start, config_end = ASTMemoryMapper.locate_heading_block(content, "##", "Config")
-                        if config_start != -1:
-                            for line in content.splitlines()[config_start:config_end]:
-                                if "- max_parallel_tasks:" in line:
-                                    max_parallel = int(line.split(":")[1].strip())
+                    # Async lock handled correctly or we can just read
+                    with open("memory.md", "r", encoding="utf-8") as f:
+                        mem_content = f.read()
+                    config_start, config_end = ASTMemoryMapper.locate_heading_block(mem_content, "##", "Config")
+                    if config_start != -1:
+                        for line in mem_content.splitlines()[config_start:config_end]:
+                            if "- max_parallel_tasks:" in line:
+                                max_parallel = int(line.split(":")[1].strip())
                 except Exception:
                     pass
 
-                for i, wave in enumerate(waves):
-                    print(f"Starting execution wave {i+1} with {len(wave)} tasks...")
+                wave_index = 0
+                while True:
+                    waves = await self.get_pending_waves()
+                    if not waves:
+                        if wave_index == 0:
+                            print("No pending tasks to execute.")
+                        break
+                    wave = waves[0]
+                    wave_index += 1
+                    i = wave_index - 1
+                    
+                    print(f"Starting execution wave {wave_index} with {len(wave)} tasks...")
                     before_tmps = set(glob.glob(".dumbledoer/tmp/*.tmp"))
                     try:
                         from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
@@ -1077,7 +1070,7 @@ Mandatory rules:
                 project_goal = mem_content.splitlines()[goal_start+1:goal_end][0] if goal_start != -1 and goal_end > goal_start + 1 else "No goal defined."
 
                 state = TaskRegistryState()
-                all_tasks = state.load_tasks()
+                all_tasks = await state.load_tasks()
                 completed_changes = [t for t in all_tasks.values() if t['status'] == 'completed' and 'change' in t.get('original_line', '')]
                 pending_tasks = [t for t in all_tasks.values() if t['status'] in ['pending', 'deferred']]
 
@@ -1218,10 +1211,10 @@ Mandatory rules:
                 with open("memory.md", "r", encoding="utf-8") as f:
                     mem_content = f.read()
 
-                OrphanRecoveryScanner().run(unattended=True)
+                await OrphanRecoveryScanner().run(unattended=True)
 
                 state = TaskRegistryState()
-                all_tasks = state.load_tasks()
+                all_tasks = await state.load_tasks()
                 # 1. State Parsing: Target only awaiting-review
                 review_tasks = [t for t in all_tasks.values() if t['status'].strip() == 'awaiting-review']
 

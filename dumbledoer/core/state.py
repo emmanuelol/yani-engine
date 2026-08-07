@@ -71,8 +71,7 @@ class ASTMemoryMapper:
 async def update_memory_registry(section_header: str, new_content: str) -> str:
     """Updates a specific section of memory.md securely using AST parsing."""
     async with _MEMORY_MUTEX:
-        def _do_update():
-            with get_registry_lock():
+        async with get_registry_lock():
                 try:
                     with open("memory.md", "r", encoding="utf-8") as f:
                         content = f.read()
@@ -90,17 +89,14 @@ async def update_memory_registry(section_header: str, new_content: str) -> str:
                 except Exception as e:
                     raise IOError(f"Critical State Error: Failed to sync {section_header} to memory.md: {e}")
         
-        return await asyncio.to_thread(_do_update)
 
 class CheckpointManager:
     async def write_rollback_copy(self, target_path: str, rollback_path: str):
-        def _do_write():
-            if os.path.exists(rollback_path):
-                return
-            if os.path.exists(target_path):
-                os.makedirs(os.path.dirname(rollback_path), exist_ok=True)
-                shutil.copy2(target_path, rollback_path)
-        await asyncio.to_thread(_do_write)
+        if os.path.exists(rollback_path):
+            return
+        if os.path.exists(target_path):
+            os.makedirs(os.path.dirname(rollback_path), exist_ok=True)
+            shutil.copy2(target_path, rollback_path)
             
     async def log_planned_change(self, target_path: str, metadata: dict):
         timestamp = metadata.get("Timestamp", "")
@@ -108,39 +104,31 @@ class CheckpointManager:
         summary = metadata.get("Change Summary", "")
         rationale = metadata.get("Rationale", "")
         row = f"| {timestamp} | {task_id} | {target_path} | {summary} | planned | {rationale} |"
-        def _do_log():
-            with get_registry_lock():
-                ASTMemoryMapper.append_to_markdown_table("memory.md", "Change Log", row)
-        await asyncio.to_thread(_do_log)
+        async with get_registry_lock():
+            ASTMemoryMapper.append_to_markdown_table("memory.md", "Change Log", row)
         
     async def write_checkpoint_json(self, checkpoint_path: str, metadata: dict):
-        def _do_write():
-            os.makedirs(os.path.dirname(checkpoint_path), exist_ok=True)
-            with open(checkpoint_path, "w") as f:
-                import json
-                json.dump(metadata, f, indent=2)
-                
-            checkpoint_id = metadata.get("Checkpoint ID", "")
-            task_id = metadata.get("Task ID", "")
-            step = metadata.get("Step", "")
-            session_id = metadata.get("Session ID", "")
-            files_snapshotted = metadata.get("Files Snapshotted", "")
-            row = f"| {checkpoint_id} | {task_id} | {step} | {session_id} | {files_snapshotted} |"
-            with get_registry_lock():
-                ASTMemoryMapper.append_to_markdown_table("memory.md", "Checkpoint Registry", row)
-        await asyncio.to_thread(_do_write)
+        os.makedirs(os.path.dirname(checkpoint_path), exist_ok=True)
+        with open(checkpoint_path, "w") as f:
+            import json
+            json.dump(metadata, f, indent=2)
+            
+        checkpoint_id = metadata.get("Checkpoint ID", "")
+        task_id = metadata.get("Task ID", "")
+        step = metadata.get("Step", "")
+        session_id = metadata.get("Session ID", "")
+        files_snapshotted = metadata.get("Files Snapshotted", "")
+        row = f"| {checkpoint_id} | {task_id} | {step} | {session_id} | {files_snapshotted} |"
+        async with get_registry_lock():
+            ASTMemoryMapper.append_to_markdown_table("memory.md", "Checkpoint Registry", row)
             
     async def stage_tmp_write(self, tmp_path: str, content: str):
-        def _do_write():
-            os.makedirs(os.path.dirname(tmp_path), exist_ok=True)
-            with open(tmp_path, "w") as f:
-                f.write(content)
-        await asyncio.to_thread(_do_write)
+        os.makedirs(os.path.dirname(tmp_path), exist_ok=True)
+        with open(tmp_path, "w") as f:
+            f.write(content)
             
     async def atomic_rename_to_target(self, tmp_path: str, target_path: str):
-        def _do_rename():
-            os.replace(tmp_path, target_path)
-        await asyncio.to_thread(_do_rename)
+        os.replace(tmp_path, target_path)
         
     async def log_applied_change(self, target_path: str, metadata: dict):
         timestamp = metadata.get("Timestamp", "")
@@ -148,14 +136,12 @@ class CheckpointManager:
         summary = metadata.get("Change Summary", "")
         rationale = metadata.get("Rationale", "")
         row = f"| {timestamp} | {task_id} | {target_path} | {summary} | applied | {rationale} |"
-        def _do_log():
-            with get_registry_lock():
-                ASTMemoryMapper.append_to_markdown_table("memory.md", "Change Log", row)
-        await asyncio.to_thread(_do_log)
+        async with get_registry_lock():
+            ASTMemoryMapper.append_to_markdown_table("memory.md", "Change Log", row)
 
 class OrphanRecoveryScanner:
-    def run(self, unattended=False):
-        with get_registry_lock():
+    async def run(self, unattended=False):
+        async with get_registry_lock():
             tmp_dir = ".dumbledoer/tmp"
             chk_dir = ".dumbledoer/checkpoints"
             bak_dir = ".dumbledoer/rollbacks"
@@ -236,8 +222,8 @@ class TaskRegistryState:
         self.md_path = md_path
         self.lock_path = md_path + ".lock"
 
-    def load_tasks(self):
-        with get_registry_lock():
+    async def load_tasks(self):
+        async with get_registry_lock():
             return self._load_tasks_unlocked()
 
     def _load_tasks_unlocked(self):
@@ -275,13 +261,11 @@ class TaskRegistryState:
             return {}
 
     async def get_tasks(self):
-        def _do_get():
-            with get_registry_lock():
-                return self._load_tasks_unlocked()
-        return await asyncio.to_thread(_do_get)
+        async with get_registry_lock():
+            return self._load_tasks_unlocked()
 
-    def _sync_to_markdown(self, tasks: dict):
-        with get_registry_lock():
+    async def _sync_to_markdown(self, tasks: dict):
+        async with get_registry_lock():
             self._sync_to_markdown_unlocked(tasks)
 
     def _sync_to_markdown_unlocked(self, tasks: dict):
@@ -323,13 +307,11 @@ class TaskRegistryState:
             raise IOError(f"Critical State Error: Failed to sync task registry to memory.md: {e}")
 
     async def update_task_status(self, task_id: str, new_status: str):
-        def _do_update():
-            with get_registry_lock():
-                tasks = self._load_tasks_unlocked()
-                if task_id in tasks:
-                    tasks[task_id]["status"] = new_status
-                    self._sync_to_markdown_unlocked(tasks)
-        await asyncio.to_thread(_do_update)
+        async with get_registry_lock():
+            tasks = self._load_tasks_unlocked()
+            if task_id in tasks:
+                tasks[task_id]["status"] = new_status
+                self._sync_to_markdown_unlocked(tasks)
 
 async def read_file(path: str) -> str:
     def _read():
@@ -447,14 +429,12 @@ async def add_task(title: str, task_type: str = "change", deps: str = "none", de
                     return f"Successfully registered task {task_id}."
                 except Exception as e:
                     return f"Error adding task: {e}"
-        return await asyncio.to_thread(_write)
-
+    
 
 async def record_knowledge(title: str, entry_type: str, description: str, rationale: str, supersedes: str = "none") -> str:
     """Saves a durable learning securely to the Vault using an Async Mutex."""
     async with _KNOWLEDGE_MUTEX:
-        def _write():
-            with get_registry_lock():
+        async with get_registry_lock():
                 try:
                     os.makedirs("knowledge/entries", exist_ok=True)
                     
@@ -521,13 +501,11 @@ tags: [knowledge-registry]
                 except Exception as e:
                     return f"Error recording knowledge: {e}"
                     
-    return await asyncio.to_thread(_write)
 
 
 async def append_handoff_summary(summary: str):
     async with _MEMORY_MUTEX:
-        def _write():
-            with get_registry_lock():
+        async with get_registry_lock():
                 with open("memory.md", "r", encoding="utf-8") as f:
                     content = f.read()
                 start_idx, end_idx = ASTMemoryMapper.locate_heading_block(content, "##", "Session Handoff Summary")
@@ -538,7 +516,6 @@ async def append_handoff_summary(summary: str):
                     content += f"\n\n{summary}"
                 with open("memory.md", "w", encoding="utf-8") as f:
                     f.write(content)
-        await asyncio.to_thread(_write)
 
 
 async def read_code_block(file_path: str, symbol_name: str) -> str:

@@ -63,8 +63,9 @@ async def test_parallel_sandbox_isolation(mock_run, setup_test_env):
 
 
 # 2. test_unattended_orphan_recovery_deadlock()
+@pytest.mark.asyncio
 @patch("rich.prompt.Confirm.ask")
-def test_unattended_orphan_recovery_deadlock(mock_confirm, setup_test_env):
+async def test_unattended_orphan_recovery_deadlock(mock_confirm, setup_test_env):
     """Asserts that unattended scanner deletes orphaned .tmp files and never prompts."""
     
     tmp_file_path = ".dumbledoer/tmp/T-999_fake__file.py.tmp"
@@ -81,7 +82,7 @@ def test_unattended_orphan_recovery_deadlock(mock_confirm, setup_test_env):
         f.write("| 2026-07-30 | T-999 | fake/file.py | orphaned change | planned | crash test |\n")
 
     scanner = OrphanRecoveryScanner()
-    scanner.run(unattended=True)
+    await scanner.run(unattended=True)
     
     # Assert Confirm.ask was NEVER called
     mock_confirm.assert_not_called()
