@@ -119,11 +119,6 @@ class LLMOrchestrator:
                 filtered.append(t)
         return filtered
 
-    def _get_tools_for_command(self, command: str):
-        allowed = self.COMMAND_TOOL_WHITELIST.get(command)
-        if not allowed:
-            return self.gemini_tools
-        return [t for t in self.gemini_tools if getattr(t, "__name__", "") in allowed]
 
     def _create_mcp_wrapper(self, server_name: str, tool):
         async def mcp_wrapper(**kwargs):
@@ -198,10 +193,7 @@ class LLMOrchestrator:
             
             # Enterprise-grade safeguard: limit tools per server
             tools_to_add = cg_tools.tools
-            if len(tools_to_add) > 50:
-                print(f"Warning: codegraph MCP provided {len(tools_to_add)} tools. Truncating to 50 to prevent context bloat.", file=sys.stderr)
-                tools_to_add = tools_to_add[:50]
-                
+
             for tool in tools_to_add:
                 self.gemini_tools.append(self._create_mcp_wrapper("codegraph", tool))
             self.mcp_sessions["codegraph"] = codegraph_session
@@ -222,10 +214,7 @@ class LLMOrchestrator:
             
             # Enterprise-grade safeguard: limit tools per server
             tools_to_add = c7_tools.tools
-            if len(tools_to_add) > 50:
-                print(f"Warning: context7 MCP provided {len(tools_to_add)} tools. Truncating to 50 to prevent context bloat.", file=sys.stderr)
-                tools_to_add = tools_to_add[:50]
-                
+
             for tool in tools_to_add:
                 self.gemini_tools.append(self._create_mcp_wrapper("context7", tool))
             self.mcp_sessions["context7"] = context7_session
@@ -246,23 +235,6 @@ class LLMOrchestrator:
             if missing_tool not in existing_tools:
                 def create_dummy(name):
                     async def dummy_fallback(*args, **kwargs) -> str:
-                        return f"Error: [{name} Degraded] Tool not available. DO NOT retry this tool — use read_file or execute_bash instead."
-                    dummy_fallback.__name__ = name
-                    dummy_fallback.__qualname__ = name
-                    dummy_fallback.__doc__ = f"Fallback dummy for {name}."
-                    return dummy_fallback
-                
-                self.gemini_tools.append(create_dummy(missing_tool))
-
-        # --- DYNAMIC FALLBACK INJECTION ---
-        # Prevent SDK KeyErrors if MCP servers degrade and drop critical tools
-        existing_tools = [getattr(t, "__name__", "") for t in self.gemini_tools]
-        
-        for missing_tool in ["codegraph_impact", "codegraph_search", "codegraph_callers", "codegraph_affected", "codegraph_context", "codegraph_node"]:
-            if missing_tool not in existing_tools:
-                # Late binding requires a factory to capture the name correctly in the closure
-                def create_dummy(name):
-                    async def dummy_fallback(query: str = "", target: str = "", symbol: str = "", depth: int = 3, **kwargs) -> str:
                         return f"Error: [{name} Degraded] Tool not available. DO NOT retry this tool — use read_file or execute_bash instead."
                     dummy_fallback.__name__ = name
                     dummy_fallback.__qualname__ = name
