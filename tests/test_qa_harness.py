@@ -49,7 +49,7 @@ async def test_suite_1_ledger_sync_lock():
     state = TaskRegistryState()
     
     async def sync_task(i):
-        await asyncio.to_thread(state._sync_to_markdown, {f"T-1": {"status": f"completed-{i}"}})
+        await state._sync_to_markdown({f"T-1": {"status": f"completed-{i}"}})
         
     async def bash_task(i):
         await execute_bash("echo 'ok'")

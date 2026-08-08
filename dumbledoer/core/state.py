@@ -375,60 +375,52 @@ async def write_file_with_review(path: str, content: str, task_id: str) -> str:
     except Exception as e:
         return f"Error in write_file_with_review for {path}: {e}"
 
-
-
 async def add_task(title: str, task_type: str = "change", deps: str = "none", description: str = "", outputs: str = "none", success_criteria: str = "TBD") -> str:
     """Registers a new atomic task to the memory.md Task Registry. Auto-generates the Task ID."""
     async with _MEMORY_MUTEX:
-        def _write():
-            with get_registry_lock():
-                try:
-                    with open("memory.md", "r", encoding="utf-8") as f:
-                        content = f.read()
-                    
-                    # 1. Native ID Generation (Enforces Rule 7)
-                    import re
-                    existing_ids = re.findall(r'T-(\d{3,4})', content)
-                    if existing_ids:
-                        next_num = max([int(x) for x in existing_ids]) + 1
-                    else:
-                        next_num = 1
-                    task_id = f"T-{next_num:03d}"
+        async with get_registry_lock():
+            try:
+                with open("memory.md", "r", encoding="utf-8") as f:
+                    content = f.read()
+                
+                import re
+                existing_ids = re.findall(r'T-(\d{3,4})', content)
+                next_num = max([int(x) for x in existing_ids]) + 1 if existing_ids else 1
+                task_id = f"T-{next_num:03d}"
 
-                    # 2. Native Dependency Validation (Enforces Rule 8)
-                    if deps.lower() not in ["none", "—", "-", ""]:
-                        dep_list = [d.strip() for d in deps.split(",")]
-                        for d in dep_list:
-                            # Verify the dependency actually exists in the registry
-                            if f"| {d} |" not in content and f"### {d}" not in content:
-                                return f"Error: Dependency {d} does not exist in memory.md. Task creation rejected. Check your dependencies."
+                if deps.lower() not in ["none", "—", "-", ""]:
+                    for d in [d.strip() for d in deps.split(",")]:
+                        if f"| {d} |" not in content and f"### {d}" not in content:
+                            return f"Error: Dependency {d} does not exist in memory.md. Task creation rejected."
 
-                    # 3. Append to Task Registry
-                    row = f"| {task_id} | {title} | {task_type} | pending | — | {deps} | — | none |"
-                    try:
-                        ASTMemoryMapper.append_to_markdown_table("memory.md", "Task Registry", row)
-                    except ValueError as e:
-                        return f"Error appending to Task Registry: {e}"
+                reg_start, reg_end = ASTMemoryMapper.locate_heading_block(content, "##", "Task Registry")
+                det_start, det_end = ASTMemoryMapper.locate_heading_block(content, "##", "Task Details")
+                
+                if det_start == -1 or reg_start == -1:
+                    return "Error: Header '## Task Registry' or '## Task Details' not found in memory.md"
+
+                lines = content.splitlines()
+                
+                row = f"| {task_id} | {title} | {task_type} | pending | — | {deps} | — | none |"
+                details = f"\n### {task_id}: {title}\n- **Type**: {task_type}\n- **Status**: pending\n- **Owner**: —\n- **Depends On**: {deps}\n- **Assigned Session**: —\n- **Description**: {description}\n- **Inputs**: none\n- **Outputs**: {outputs}\n- **Success Criteria**: {success_criteria}\n- **Estimated Effort**: small\n- **Parallelizable**: yes\n- **CodeGraph Impact**: —\n- **Checkpoint**: none\n- **Resume Instructions**: none\n- **Notes**: —\n"
+
+                # Calculate precise insertion to avoid index drift
+                lines.insert(det_end, details)
+                
+                # Insert registry row at the end of the markdown table
+                reg_insert = reg_end
+                for i in range(reg_end - 1, reg_start, -1):
+                    if lines[i].strip():
+                        reg_insert = i + 1
+                        break
+                lines.insert(reg_insert, row)
+
+                with open("memory.md", "w", encoding="utf-8") as f:
+                    f.write("\n".join(lines) + "\n")
                     
-                    # 4. Append to Task Details
-                    with open("memory.md", "r", encoding="utf-8") as f:
-                        content = f.read()
-                    
-                    details = f"\n### {task_id}: {title}\n- **Type**: {task_type}\n- **Status**: pending\n- **Owner**: —\n- **Depends On**: {deps}\n- **Assigned Session**: —\n- **Description**: {description}\n- **Inputs**: none\n- **Outputs**: {outputs}\n- **Success Criteria**: {success_criteria}\n- **Estimated Effort**: small\n- **Parallelizable**: yes\n- **CodeGraph Impact**: —\n- **Checkpoint**: none\n- **Resume Instructions**: none\n- **Notes**: —\n"
-                    
-                    start_idx, end_idx = ASTMemoryMapper.locate_heading_block(content, "##", "Task Details")
-                    if start_idx != -1:
-                        lines = content.splitlines()
-                        lines.insert(end_idx, details)
-                        with open("memory.md", "w", encoding="utf-8") as f:
-                            f.write("\n".join(lines) + "\n")
-                    else:
-                        return f"Error appending Task Details: Header '## Task Details' not found in memory.md"
-                            
-                    # 5. Return the native ID so the LLM knows what was created
-                    return f"Successfully registered task {task_id}."
-                except Exception as e:
-                    return f"Error adding task: {e}"
+                return f"Successfully registered task {task_id}."
+            except Exception as e:
+                return f"Error adding task: {e}"
     
 
 async def record_knowledge(title: str, entry_type: str, description: str, rationale: str, supersedes: str = "none") -> str:

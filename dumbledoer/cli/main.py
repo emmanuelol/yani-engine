@@ -14,7 +14,7 @@ async def main_async():
         choices=["start", "execute", "resume", "report", "rollback", "update-docs", "audit", "iterate", "status"],
         help="The dumbledoer command to run"
     )
-    parser.add_argument("--model", default=os.getenv("AGY_MODEL", "gemini-3.5-flash"), help="Model override")
+    parser.add_argument("--model", default=os.getenv("AGY_MODEL", "gemini-3.6-flash"), help="Model override")
     parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose mode (e.g. GUI diff-gate in VS Code)")
     parser.add_argument("--budget-limit", type=int, help="Override budget_limit for token tracking")
     parser.add_argument("--budget-threshold", type=int, help="Override budget_threshold_pct (e.g. 80)")

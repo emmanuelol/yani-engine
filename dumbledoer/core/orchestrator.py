@@ -94,15 +94,30 @@ class LLMOrchestrator:
 
     # Dynamic tool filtering per command to reduce token consumption
     COMMAND_TOOL_WHITELIST = {
-        "start":   {"read_file", "execute_bash", "add_task", "write_file_with_review", "codegraph_status", "context7_resolve_library_id", "context7_query_docs", "update_memory_registry"},
-        "iterate": {"add_task", "read_file", "codegraph_search", "codegraph_impact", "context7_resolve_library_id", "context7_query_docs", "update_memory_registry"},
+        "start":   {"read_file", "execute_bash", "add_task", "write_file_with_review", "update_memory_registry", "codegraph_*", "context7_*"},
+        "iterate": {"add_task", "read_file", "update_memory_registry", "codegraph_*", "context7_*"},
         "status":  {"read_file", "execute_bash"},
         "rollback": {"read_file", "execute_bash"},
         "report":  {"read_file", "execute_bash", "update_memory_registry"},
-        "audit":   {"read_file", "read_code_block", "execute_bash", "codegraph_callers", "codegraph_affected", "codegraph_search", "add_task", "context7_resolve_library_id", "context7_query_docs", "update_memory_registry"},
+        "audit":   {"read_file", "read_code_block", "execute_bash", "add_task", "update_memory_registry", "codegraph_*", "context7_*"},
         "resume":  {"read_file", "execute_bash"},
-        "update-docs": {"read_file", "execute_bash", "codegraph_search", "codegraph_impact", "codegraph_node", "codegraph_context"}
+        "update-docs": {"read_file", "execute_bash", "codegraph_*", "context7_*"}
     }
+
+    def _get_tools_for_command(self, command: str):
+        allowed = self.COMMAND_TOOL_WHITELIST.get(command)
+        if not allowed:
+            return self.gemini_tools
+        
+        filtered = []
+        for t in self.gemini_tools:
+            t_name = getattr(t, "__name__", "")
+            if t_name in allowed:
+                filtered.append(t)
+            # Support dynamic capabilities via wildcard prefixes
+            elif any(t_name.startswith(a.replace("*", "")) for a in allowed if a.endswith("*")):
+                filtered.append(t)
+        return filtered
 
     def _get_tools_for_command(self, command: str):
         allowed = self.COMMAND_TOOL_WHITELIST.get(command)
@@ -217,6 +232,27 @@ class LLMOrchestrator:
         except Exception as e:
             import sys
             print(f"Context7 MCP degraded: {e}", file=sys.stderr)
+
+        existing_tools = [getattr(t, "__name__", "") for t in self.gemini_tools]
+        
+        EXPECTED_FALLBACKS = [
+            "codegraph_impact", "codegraph_search", "codegraph_callers", 
+            "codegraph_affected", "codegraph_context", "codegraph_node",
+            "codegraph_callees", "codegraph_files", "codegraph_status",
+            "context7_resolve_library_id", "context7_query_docs", "context7_search_codebase"
+        ]
+        
+        for missing_tool in EXPECTED_FALLBACKS:
+            if missing_tool not in existing_tools:
+                def create_dummy(name):
+                    async def dummy_fallback(*args, **kwargs) -> str:
+                        return f"Error: [{name} Degraded] Tool not available. DO NOT retry this tool — use read_file or execute_bash instead."
+                    dummy_fallback.__name__ = name
+                    dummy_fallback.__qualname__ = name
+                    dummy_fallback.__doc__ = f"Fallback dummy for {name}."
+                    return dummy_fallback
+                
+                self.gemini_tools.append(create_dummy(missing_tool))
 
         # --- DYNAMIC FALLBACK INJECTION ---
         # Prevent SDK KeyErrors if MCP servers degrade and drop critical tools
@@ -492,7 +528,7 @@ class LLMOrchestrator:
         except Exception:
             pass
             
-        base_model = getattr(self, "model", "gemini-3.5-flash")
+        base_model = getattr(self, "model", "gemini-3.6-flash")
         
         # Pro Brain / Cost-Efficient Hands: only large tasks get pro reasoning
         if effort == "large" and "flash" in base_model:
@@ -777,7 +813,7 @@ Mandatory rules:
         if rejected_files:
             await OrphanRecoveryScanner().run(True)
 
-    async def run(self, command: str, args: list, model: str = "gemini-3.5-flash"):
+    async def run(self, command: str, args: list, model: str = "gemini-3.6-flash"):
         # Pro Brain / Cost-Efficient Hands: iterate and audit always use pro reasoning
         if command in ["iterate", "audit"]:
             self.model = "gemini-3.1-pro-preview"
@@ -1592,7 +1628,7 @@ Success Criteria: {success_criteria}
                 return
 
             else:
-                self.chat_session = self.client.aio.chats.create(model=getattr(self, "model", "gemini-3.5-flash"), config={"tools": self._get_tools_for_command(command), "automatic_function_calling": {"disable": True}})
+                self.chat_session = self.client.aio.chats.create(model=getattr(self, "model", "gemini-3.6-flash"), config={"tools": self._get_tools_for_command(command), "automatic_function_calling": {"disable": True}})
                 sys_inst = await self._get_system_instructions(command)
                 payload = f"{sys_inst}\n\nUSER DIRECTIVE: Execute the `{command}` command with arguments {args}. Follow your COMMAND SPECIFIC INSTRUCTIONS strictly. Do not ask for user input if a tool can accomplish the task."
                 from rich.console import Console
