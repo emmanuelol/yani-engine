@@ -1,9 +1,8 @@
 # memory-archive-prompt: Session Memory Archive Prompt
 
 Prompts the user at normal session close to archive the full `memory.md` file and
-reinitialize it for the next session. Loaded lazily at Section 10 of
-`skills/start/SKILL.md` (and, by delegation, at Section 8 of
-`skills/resume/SKILL.md`).
+reinitialize it for the next session. Natively triggered by the Orchestrator
+in the finally block of the run() execution loop.
 
 ---
 
