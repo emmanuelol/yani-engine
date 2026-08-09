@@ -182,17 +182,19 @@ class LocalProvider(AbstractLLMProvider):
         message = data["choices"][0]["message"]
         session["_history"].append(message)
         
-        # Mocking the response object structure expected by the orchestrator
+        # FIX: Mock an object instance so getattr() works correctly in _run_with_tools
         usage_data = data.get("usage", {})
         class MockUsage:
-            total_token_count = usage_data.get("total_tokens", 0)
-            
+            def __init__(self, count):
+                self.total_token_count = count
+        
         class LocalResponse:
-            text = message.get("content", "") or ""
-            function_calls = message.get("tool_calls", None)
-            usage_metadata = MockUsage()
+            def __init__(self, msg, usage_obj):
+                self.text = msg.get("content", "") or ""
+                self.function_calls = msg.get("tool_calls", None)
+                self.usage_metadata = usage_obj
             
-        return LocalResponse()
+        return LocalResponse(message, MockUsage(usage_data.get("total_tokens", 0)))
 
     def parse_tool_calls(self, response: Any) -> List[Dict]:
         calls = []

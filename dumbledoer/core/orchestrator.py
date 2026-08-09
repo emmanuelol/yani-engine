@@ -715,7 +715,8 @@ Mandatory rules:
             self.model = config.model
         print(f"DumbleDoer running command: {command}")
         if command == "resume":
-            OrphanRecoveryScanner().run()
+            # ADD AWAIT HERE
+            await OrphanRecoveryScanner().run()
             
             state = TaskRegistryState()
             tasks = await state.load_tasks()
@@ -1242,7 +1243,7 @@ Success Criteria: {success_criteria}
                             self.budget_manager.check_and_harvest()
                             
                             # Reload tasks to detect what the LLM decided
-                            new_tasks = TaskRegistryState().load_tasks()
+                            new_tasks = await TaskRegistryState().load_tasks()
                             current_status = new_tasks.get(t_id, {}).get('status', 'awaiting-review')
                             
                             if current_status == 'completed':

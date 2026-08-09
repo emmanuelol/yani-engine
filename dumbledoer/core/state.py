@@ -313,11 +313,13 @@ class TaskRegistryState:
             raise IOError(f"Critical State Error: Failed to sync task registry to memory.md: {e}")
 
     async def update_task_status(self, task_id: str, new_status: str):
-        async with get_registry_lock():
-            tasks = self._load_tasks_unlocked()
-            if task_id in tasks:
-                tasks[task_id]["status"] = new_status
-                self._sync_to_markdown_unlocked(tasks)
+        # FIX: Add _MEMORY_MUTEX to perfectly align with update_task_registry_row
+        async with _MEMORY_MUTEX:
+            async with get_registry_lock():
+                tasks = self._load_tasks_unlocked()
+                if task_id in tasks:
+                    tasks[task_id]["status"] = new_status
+                    self._sync_to_markdown_unlocked(tasks)
 
 async def read_file(path: str) -> str:
     def _read():
