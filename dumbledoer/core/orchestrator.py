@@ -93,7 +93,8 @@ class LLMOrchestrator:
     # Dynamic tool filtering per command to reduce token consumption
     COMMAND_TOOL_WHITELIST = {
         "start":   {"read_file", "execute_bash", "add_task", "write_file_with_review", "update_task_registry_row", "codegraph_*", "context7_*"},
-        "iterate": {"add_task", "read_file", "update_task_registry_row", "codegraph_*", "context7_*"},
+        # STRICT iterate WHITELIST: Block broad AST node/explore tools to force targeted reads
+        "iterate": {"add_task", "read_file", "read_code_block", "update_task_registry_row", "codegraph_search", "codegraph_impact", "context7_*"},
         "status":  {"read_file", "execute_bash"},
         "rollback": {"read_file", "execute_bash"},
         "report":  {"read_file", "execute_bash", "update_task_registry_row"},
