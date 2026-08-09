@@ -1567,8 +1567,6 @@ Success Criteria: {success_criteria}
                 except Exception as e:
                     print(f"CRITICAL: Failed to bootstrap memory.md: {e}")
                     return
-
-                await self.connect_mcp()
                 
                 self.chat_session = await self.provider.create_chat_session(
                     model_name=self.model, 
