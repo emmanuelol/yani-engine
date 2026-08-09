@@ -64,7 +64,8 @@ class BudgetManager:
 
 class LLMOrchestrator:
     def __init__(self):
-        self.plugin_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        # FIX: Add an extra ".." to correctly resolve the repository root
+        self.plugin_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
         self.exit_stack = AsyncExitStack()
         self.mcp_sessions = {}
         self.mcp_locks = {}
