@@ -146,8 +146,11 @@ async def test_native_qa_intercept_syntax_error(setup_test_env):
         
     mock_chat_session.send_message = fake_send_message
     
-    cli.client = MagicMock()
-    cli.client.aio.chats.create.return_value = mock_chat_session
+    # FIX: Mock the decoupled provider interface instead of the deleted client
+    from unittest.mock import AsyncMock
+    cli.provider = MagicMock()
+    cli.provider.create_chat_session = AsyncMock(return_value=mock_chat_session)
+    cli.provider.parse_tool_calls.return_value = [] # Return empty to exit the loop
     
     # Run the audit command
     await cli.run("audit", [])

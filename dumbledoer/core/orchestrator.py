@@ -494,10 +494,15 @@ class LLMOrchestrator:
             
         # The Hands: Simple file changes and audits hit the local hardware
         else:
-            target_model = "llama3.1" # Or whichever model you are serving locally
-            # Fallback to cloud if the local provider isn't initialized
-            active_provider = self.providers.get("local", self.providers.get("cloud"))
-            print(f"[Cost Saver] Task {task_id} requires {effort} effort. Spawning sub-agent locally.")
+            if "local" in self.providers:
+                target_model = "llama3.1" # Or whichever model you are serving locally
+                active_provider = self.providers["local"]
+                print(f"[Cost Saver] Task {task_id} requires {effort} effort. Spawning sub-agent locally.")
+            else:
+                # FIX: Safely fallback to the cloud model if the local daemon isn't configured
+                target_model = getattr(self, "model", config.model)
+                active_provider = self.providers.get("cloud", list(self.providers.values())[0])
+                print(f"[Cloud Fallback] Local provider unavailable for task {task_id}. Spawning on {target_model}.")
             
             
         # Initialize the session using the selected provider interface
