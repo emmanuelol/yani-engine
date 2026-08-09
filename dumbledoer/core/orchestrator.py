@@ -1525,9 +1525,15 @@ Success Criteria: {success_criteria}
                 return
 
             else:
-                self.chat_session = self.client.aio.chats.create(model=getattr(self, "model", "gemini-3.6-flash"), config={"tools": self._get_tools_for_command(command), "automatic_function_calling": {"disable": True}})
+                # FIX 1: Use the provider interface instead of hardcoded self.client
+                self.chat_session = await self.provider.create_chat_session(
+                    model_name=getattr(self, "model", "gemini-3.6-flash"), 
+                    tools=self._get_tools_for_command(command)
+                )
+                
                 sys_inst = await self._get_system_instructions(command)
                 payload = f"{sys_inst}\n\nUSER DIRECTIVE: Execute the `{command}` command with arguments {args}. Follow your COMMAND SPECIFIC INSTRUCTIONS strictly. Do not ask for user input if a tool can accomplish the task."
+                
                 from rich.console import Console
                 console = Console()
                 with console.status(f"[bold cyan]Running {command} agent...", spinner="dots") as status:
@@ -1546,9 +1552,15 @@ Success Criteria: {success_criteria}
                             print(f"Task failed or budget threshold blocked retry: {e}")
                             await self._graceful_shutdown()
                             return
-                if response.function_calls:
-                    print("Function Calls that were not handled:", response.function_calls)
-                print(response.text)
+                            
+                # FIX 2: Use provider parser instead of raw Gemini property to maintain decoupling
+                unhandled_calls = self.provider.parse_tool_calls(response)
+                if unhandled_calls:
+                    print("Function Calls that were not handled:", unhandled_calls)
+                    
+                # Safely extract text depending on provider response structure
+                final_text = getattr(response, 'text', '') if hasattr(response, 'text') else str(response)
+                print(final_text)
 
         finally:
             await _teardown_warm_sandbox()
