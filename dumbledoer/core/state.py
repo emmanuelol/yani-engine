@@ -90,9 +90,13 @@ async def update_task_registry_row(task_id: str, new_status: str, new_owner: str
                 
                 # 2. Write exactly the parsed row back out
                 state._sync_to_markdown_unlocked(tasks)
-                return f"Successfully updated {task_id} to {new_status}."
+                success_msg = f"Successfully updated {task_id} to {new_status}."
+                print(f"💾 [STATE] {success_msg}")
+                return success_msg
             except Exception as e:
-                return f"Error updating registry: {e}"
+                error_msg = f"Error updating registry: {e}"
+                print(f"❌ [STATE ERROR] {error_msg}")
+                return error_msg
         
 
 class CheckpointManager:
@@ -458,9 +462,13 @@ async def register_task_batch(tasks: list[dict]) -> str:
                 with open("memory.md", "w", encoding="utf-8") as f:
                     f.write("\n".join(lines) + "\n")
                     
-                return f"Successfully registered tasks {', '.join(incoming_task_ids)}."
+                success_msg = f"Successfully registered tasks {', '.join(incoming_task_ids)}."
+                print(f"💾 [STATE] {success_msg}")
+                return success_msg
             except Exception as e:
-                return f"Error adding task batch: {e}"
+                error_msg = f"Error adding task batch: {e}"
+                print(f"❌ [STATE ERROR] {error_msg}")
+                return error_msg
 
 async def add_task(title: str, task_type: str = "change", deps: str = "none", description: str = "", outputs: str = "none", success_criteria: str = "TBD", estimated_effort: str = "small", codegraph_impact: str = "—") -> str:
     """DEPRECATED. Use register_task_batch instead. Registers a new atomic task to the memory.md Task Registry."""
