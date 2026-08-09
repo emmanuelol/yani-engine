@@ -17,3 +17,11 @@ memory.md.lock
 
 # OS Generated
 .DS_Store
+.obsidian/
+.dumbledoer/
+
+# DumbleDoer Runtime State & Sandbox
+.dumbledoer/
+
+# Local IDE Configurations
+.obsidian/

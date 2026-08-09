@@ -360,7 +360,7 @@ class LLMOrchestrator:
         # [CONTEXT MANAGEMENT CONFIG]
         MAX_HISTORY_TURNS = 6  # Aggressive prune
         MAX_TOOL_OUTPUT_CHARS = 8000  # Hard cap
-        MAX_TOOL_ITERATIONS = 40  # Increased to handle deep discovery loops
+        MAX_TOOL_ITERATIONS = 15  # Decreased to handle deep discovery loops
 
         iteration_count = 0
 
@@ -426,9 +426,13 @@ class LLMOrchestrator:
                     except Exception as e:
                         msg = f"Tool {tool_name} failed: {e}"
                         if not status: print(msg)
+                        safe_e = str(e)
+                        import re
+                        safe_e = re.sub(r'(api_key|password|secret|token)=[\w\d\-]+', r'\1=[REDACTED]', safe_e, flags=re.IGNORECASE)
+                        safe_e = re.sub(r'(sk-[a-zA-Z0-9]{32,})', '[REDACTED]', safe_e)
                         parts.append(active_provider.format_tool_error(
                             tool_name,
-                            str(e)
+                            safe_e
                         ))
                 else:
                     msg = f"Tool {tool_name} not found"
@@ -951,8 +955,7 @@ Mandatory rules:
                             safe_parallel = 3 if max_parallel <= 0 else max_parallel
                             num_workers = min(safe_parallel, len(wave))
                             workers = [asyncio.create_task(worker()) for _ in range(num_workers)]
-
-                            res = await asyncio.gather(*workers, return_exceptions=True)
+                            res = await asyncio.gather(*workers, return_exceptions=False)
 
                             for r in res:
                                 if isinstance(r, BudgetExhaustedException):

@@ -146,6 +146,16 @@ class GeminiProvider(AbstractLLMProvider):
                 return new_session, True
         return session, False
 
+class MockUsage:
+    def __init__(self, count):
+        self.total_token_count = count
+
+class LocalResponse:
+    def __init__(self, msg, usage_obj):
+        self.text = msg.get("content", "") or ""
+        self.function_calls = msg.get("tool_calls", None)
+        self.usage_metadata = usage_obj
+
 class LocalProvider(AbstractLLMProvider):
     """Interfaces with a local Ollama or vLLM instance using standard OpenAI schema."""
     def __init__(self, base_url: str = "http://localhost:11434/v1"):
@@ -196,15 +206,6 @@ class LocalProvider(AbstractLLMProvider):
         
         # FIX: Mock an object instance so getattr() works correctly in _run_with_tools
         usage_data = data.get("usage", {})
-        class MockUsage:
-            def __init__(self, count):
-                self.total_token_count = count
-        
-        class LocalResponse:
-            def __init__(self, msg, usage_obj):
-                self.text = msg.get("content", "") or ""
-                self.function_calls = msg.get("tool_calls", None)
-                self.usage_metadata = usage_obj
             
         return LocalResponse(message, MockUsage(usage_data.get("total_tokens", 0)))
 

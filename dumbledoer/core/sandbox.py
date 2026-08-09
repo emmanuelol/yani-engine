@@ -8,7 +8,9 @@ import shutil
 
 def _is_sandbox_warm_sync(task_id: str) -> bool:
     try:
-        result = subprocess.run(["docker", "ps", "-q", "-f", f"name=dumbledoer-sandbox-{task_id}"], capture_output=True, text=True)
+        import hashlib
+        project_hash = hashlib.md5(os.getcwd().encode()).hexdigest()[:8]
+        result = subprocess.run(["docker", "ps", "-q", "-f", f"name=dumbledoer-sandbox-{project_hash}-{task_id}"], capture_output=True, text=True)
         return bool(result.stdout.strip())
     except Exception:
         return False
@@ -18,7 +20,9 @@ async def _ensure_warm_sandbox(task_id: str = None, image: str = "dumbledoer-bas
     
     def _do_warm():
         try:
-            container_name = f"dumbledoer-sandbox-{task_id}"
+            import hashlib
+            project_hash = hashlib.md5(os.getcwd().encode()).hexdigest()[:8]
+            container_name = f"dumbledoer-sandbox-{project_hash}-{task_id}"
             
             # Check if already running
             chk = subprocess.run(["docker", "ps", "-q", "-f", f"name={container_name}"], capture_output=True, text=True)
@@ -57,7 +61,9 @@ async def _teardown_warm_sandbox(task_id: str = None):
     if not task_id: return
     def _do_teardown():
         try:
-            container_name = f"dumbledoer-sandbox-{task_id}"
+            import hashlib
+            project_hash = hashlib.md5(os.getcwd().encode()).hexdigest()[:8]
+            container_name = f"dumbledoer-sandbox-{project_hash}-{task_id}"
             subprocess.run(["docker", "rm", "-f", container_name], capture_output=True)
             shadow_dir = os.path.abspath(f".dumbledoer/shadow_{task_id}")
             if os.path.exists(shadow_dir):
@@ -97,7 +103,9 @@ async def execute_bash(command: str, sandbox_mode: str = None, task_id: str = No
             else:
                 image = "dumbledoer-base:latest" if sandbox_mode == "dumbledoer-base" else "ubuntu:latest"
                 if task_id and _is_sandbox_warm_sync(task_id):
-                    container_name = f"dumbledoer-sandbox-{task_id}"
+                    import hashlib
+                    project_hash = hashlib.md5(os.getcwd().encode()).hexdigest()[:8]
+                    container_name = f"dumbledoer-sandbox-{project_hash}-{task_id}"
                     result = subprocess.run(
                         ["docker", "exec", "-i", container_name, "/bin/bash", "-c", command],
                         capture_output=True,
@@ -107,7 +115,7 @@ async def execute_bash(command: str, sandbox_mode: str = None, task_id: str = No
                     return f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
                 else:
                     result = subprocess.run(
-                        ["docker", "run", "--rm", "-i", "-v", f"{os.getcwd()}:/workspace", "-w", "/workspace", image, "/bin/bash", "-c", command],
+                        ["docker", "run", "--rm", "-i", "-v", f"{os.getcwd()}:/workspace:ro", "-w", "/workspace", image, "/bin/bash", "-c", command],
                         capture_output=True,
                         text=True,
                         timeout=120

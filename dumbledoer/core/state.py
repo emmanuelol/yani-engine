@@ -29,6 +29,7 @@ class ASTMemoryMapper:
                 in_code = not in_code
             if not in_code and line.startswith(f"{header_level} "):
                 clean_line = line[len(header_level)+1:].lower().strip().rstrip('#').strip()
+                clean_line = re.sub(r'[*_]{1,2}', '', clean_line).strip()
                 if clean_line == target_title:
                     start_idx = i
                     break
@@ -380,6 +381,7 @@ async def write_file_with_review(path: str, content: str, task_id: str) -> str:
         with open(tmp_path, "w") as f:
             f.write(content)
             
+        os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
         with open(path, "w") as f:
             f.write(content)
             
