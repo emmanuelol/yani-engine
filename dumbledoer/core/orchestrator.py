@@ -377,6 +377,7 @@ class LLMOrchestrator:
 
             parts = []
             for call in tool_calls:
+                call_id = call.get('id')
                 tool_name = call['name']
                 tool_func = None
                 for t in self.gemini_tools:
@@ -413,7 +414,8 @@ class LLMOrchestrator:
                             if degraded_consecutive >= 3:
                                 parts.append(active_provider.format_tool_error(
                                     tool_name,
-                                    f"STOP: {tool_name} is degraded. All codegraph tools are unavailable this session. Use read_file and execute_bash only."
+                                    f"STOP: {tool_name} is degraded. All codegraph tools are unavailable this session. Use read_file and execute_bash only.",
+                                    call_id
                                 ))
                                 continue
                         else:
@@ -421,7 +423,8 @@ class LLMOrchestrator:
 
                         parts.append(active_provider.format_tool_response(
                             tool_name,
-                            result_str
+                            result_str,
+                            call_id
                         ))
                     except Exception as e:
                         msg = f"Tool {tool_name} failed: {e}"
@@ -432,14 +435,16 @@ class LLMOrchestrator:
                         safe_e = re.sub(r'(sk-[a-zA-Z0-9]{32,})', '[REDACTED]', safe_e)
                         parts.append(active_provider.format_tool_error(
                             tool_name,
-                            safe_e
+                            safe_e,
+                            call_id
                         ))
                 else:
                     msg = f"Tool {tool_name} not found"
                     if not status: print(msg)
                     parts.append(active_provider.format_tool_error(
                         tool_name,
-                        "Tool not found"
+                        "Tool not found",
+                        call_id
                     ))
             
             if status:

@@ -70,7 +70,11 @@ class AbstractLLMProvider(ABC):
         pass
             
     @abstractmethod
-    def format_tool_response(self, tool_name: str, result: str) -> Any:
+    def format_tool_response(self, tool_name: str, result: str, call_id: str = None) -> Any:
+        pass
+
+    @abstractmethod
+    def format_tool_error(self, tool_name: str, error: str, call_id: str = None) -> Any:
         pass
 
     @abstractmethod
@@ -103,22 +107,23 @@ class GeminiProvider(AbstractLLMProvider):
         if response.function_calls:
             for call in response.function_calls:
                 calls.append({
+                    "id": getattr(call, "id", None), # Safely capture the ID
                     "name": call.name,
                     "args": dict(call.args) if call.args else {}
                 })
         return calls
         
-    def format_tool_response(self, tool_name: str, result: str) -> Any:
-        return Part.from_function_response(
-            name=tool_name,
-            response={"result": result}
-        )
+    def format_tool_response(self, tool_name: str, result: str, call_id: str = None) -> Any:
+        part = Part.from_function_response(name=tool_name, response={"result": result})
+        if call_id and hasattr(part.function_response, "id"):
+            part.function_response.id = call_id
+        return part
     
-    def format_tool_error(self, tool_name: str, error: str) -> Any:
-        return Part.from_function_response(
-            name=tool_name,
-            response={"error": error}
-        )
+    def format_tool_error(self, tool_name: str, error: str, call_id: str = None) -> Any:
+        part = Part.from_function_response(name=tool_name, response={"error": error})
+        if call_id and hasattr(part.function_response, "id"):
+            part.function_response.id = call_id
+        return part
 
     def prune_history(self, session: Any, max_turns: int) -> tuple[Any, bool]:
         history = getattr(session, '_history', None)
@@ -220,16 +225,23 @@ class LocalProvider(AbstractLLMProvider):
                     args_raw = func_data.get("arguments", "{}")
                     args = json.loads(args_raw) if isinstance(args_raw, str) else args_raw
                     calls.append({
+                        "id": call.get("id"), # Capture OpenAI schema ID
                         "name": func_data.get("name"),
                         "args": args
                     })
         return calls
 
-    def format_tool_response(self, tool_name: str, result: str) -> Any:
-        return {"role": "tool", "name": tool_name, "content": result}
+    def format_tool_response(self, tool_name: str, result: str, call_id: str = None) -> Any:
+        resp = {"role": "tool", "name": tool_name, "content": result}
+        if call_id:
+            resp["tool_call_id"] = call_id
+        return resp
 
-    def format_tool_error(self, tool_name: str, error: str) -> Any:
-        return {"role": "tool", "name": tool_name, "content": f"Error: {error}"}
+    def format_tool_error(self, tool_name: str, error: str, call_id: str = None) -> Any:
+        resp = {"role": "tool", "name": tool_name, "content": f"Error: {error}"}
+        if call_id:
+            resp["tool_call_id"] = call_id
+        return resp
 
     def prune_history(self, session: Any, max_turns: int) -> tuple[Any, bool]:
         history = session["_history"]
@@ -281,19 +293,20 @@ class AntigravityProvider(AbstractLLMProvider):
         if getattr(response, 'tool_calls', None):
             for call in response.tool_calls:
                 calls.append({
+                    "id": getattr(call, "id", None),
                     "name": call.name,
                     "args": call.arguments if isinstance(call.arguments, dict) else json.loads(call.arguments)
                 })
         return calls
 
-    def format_tool_response(self, tool_name: str, result: str) -> Any:
+    def format_tool_response(self, tool_name: str, result: str, call_id: str = None) -> Any:
         # Import agy's specific tool response class
         from agy.core.types import ToolResult
-        return ToolResult(name=tool_name, content=result)
+        return ToolResult(name=tool_name, content=result, tool_call_id=call_id)
 
-    def format_tool_error(self, tool_name: str, error: str) -> Any:
+    def format_tool_error(self, tool_name: str, error: str, call_id: str = None) -> Any:
         from agy.core.types import ToolResult
-        return ToolResult(name=tool_name, content=f"Error: {error}", is_error=True)
+        return ToolResult(name=tool_name, content=f"Error: {error}", is_error=True, tool_call_id=call_id)
 
     def prune_history(self, session: Any, max_turns: int) -> tuple[Any, bool]:
         if hasattr(session, 'truncate_context'):
