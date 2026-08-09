@@ -2,6 +2,12 @@ import os
 from pydantic_settings import BaseSettings
 from typing import Dict, Any
 from dumbledoer.core.llm_provider import AbstractLLMProvider, GeminiProvider, LocalProvider, AntigravityProvider
+import socket
+
+def _is_local_alive(port=11434):
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(0.2)
+        return s.connect_ex(('127.0.0.1', port)) == 0
 
 class AppConfig(BaseSettings):
     # API Keys & Auth
@@ -24,9 +30,7 @@ class AppConfig(BaseSettings):
 
     @property
     def providers(self) -> Dict[str, AbstractLLMProvider]:
-        """Lazy-loads and returns the configured providers."""
         provs = {}
-        # 1. Cloud Provider (The Brain)
         try:
             import agy
             provs["cloud"] = AntigravityProvider()
@@ -35,10 +39,9 @@ class AppConfig(BaseSettings):
             if key:
                 provs["cloud"] = GeminiProvider(api_key=key)
                 
-        # 2. Local Provider (The Hands)
-        # Pointing to standard Ollama OpenAI compatibility endpoint
-        provs["local"] = LocalProvider(base_url="http://localhost:11434/v1")
-        
+        if _is_local_alive():
+            provs["local"] = LocalProvider(base_url="http://localhost:11434/v1")
+            
         if not provs:
             raise RuntimeError("CRITICAL: No LLM providers could be initialized. Check API keys.")
             

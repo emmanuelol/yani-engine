@@ -92,7 +92,8 @@ class LLMOrchestrator:
 
     # Dynamic tool filtering per command to reduce token consumption
     COMMAND_TOOL_WHITELIST = {
-        "start":   {"read_file", "execute_bash", "add_task", "write_file_with_review", "update_task_registry_row", "codegraph_*", "context7_*"},
+        # ADDED: execute_bash and wildcard codegraph_* so the LLM can actually discover the repo
+        "start":   {"read_file", "add_task", "write_file_with_review", "execute_bash", "codegraph_*", "context7_*"},
         # STRICT iterate WHITELIST: Block broad AST node/explore tools to force targeted reads
         "iterate": {"add_task", "read_file", "read_code_block", "update_task_registry_row", "codegraph_search", "codegraph_impact", "context7_*"},
         "status":  {"read_file", "execute_bash"},
@@ -723,8 +724,8 @@ Mandatory rules:
             await OrphanRecoveryScanner().run(True)
 
     async def run(self, command: str, args: list):
-        # Pro Brain / Cost-Efficient Hands: iterate and audit always use pro reasoning
-        if command in ["iterate", "audit"]:
+        # FIX: Ensure start also uses the premium tier for architectural planning
+        if command in ["iterate", "audit", "start"]:
             self.model = "gemini-3.1-pro-preview"
         else:
             self.model = config.model
@@ -1542,6 +1543,58 @@ Success Criteria: {success_criteria}
 
                 console.print("\n[bold green]Tasks successfully queued! Run /dumbledoer:execute to trigger the LLM patch wave.[/bold green]")
                 return
+
+            elif command == "start":
+                if os.path.exists("memory.md"):
+                    print("Error: memory.md already exists. Run /dumbledoer:resume to continue.")
+                    return
+                    
+                print("Bootstrapping native memory.md state machine...")
+                from datetime import datetime
+                template_path = os.path.join(self.plugin_root, "templates", "memory-template.md")
+                
+                try:
+                    with open(template_path, "r", encoding="utf-8") as f:
+                        init_content = f.read()
+                    
+                    init_content = init_content.replace("{{DATE}}", datetime.utcnow().strftime("%Y-%m-%d"))
+                    init_content = init_content.replace("{{PROJECT_GOAL}}", "Pending LLM analysis...")
+                    init_content = init_content.replace("{{SCOPE_ITEMS}}", "- Pending LLM analysis...")
+                    
+                    with open("memory.md", "w", encoding="utf-8") as f:
+                        f.write(init_content)
+                except Exception as e:
+                    print(f"CRITICAL: Failed to bootstrap memory.md: {e}")
+                    return
+
+                await self.connect_mcp()
+                
+                self.chat_session = await self.provider.create_chat_session(
+                    model_name=self.model, 
+                    tools=self._get_tools_for_command(command)
+                )
+                
+                sys_inst = await self._get_system_instructions(command)
+                payload = f"{sys_inst}\n\nUSER DIRECTIVE: Execute the `start` command with arguments {args}. Follow your COMMAND SPECIFIC INSTRUCTIONS strictly."
+                
+                from rich.console import Console
+                console = Console()
+                with console.status(f"[bold cyan]Running {command} agent...", spinner="dots") as status:
+                    try:
+                        response = await self._run_with_tools(self.chat_session, payload, self.provider, status=status)
+                    except Exception as e:
+                        print(f"\n[bold red]Agent execution aborted: {e}[/bold red]")
+                        return
+
+                # FIX: Catch Diff-Gate Orphans generated during start
+                import glob
+                existing_tmps = set(glob.glob(".dumbledoer/tmp/*.tmp"))
+                if existing_tmps:
+                    print(f"\nFound {len(existing_tmps)} unreviewed files from initialization. Starting review...")
+                    await self.batch_diff_review(list(existing_tmps))
+
+                final_text = getattr(response, 'text', '') if hasattr(response, 'text') else str(response)
+                print(final_text)
 
             else:
                 # FIX: Use the decoupled provider interface
