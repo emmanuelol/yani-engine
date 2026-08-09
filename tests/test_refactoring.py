@@ -32,6 +32,9 @@ class MockLLMProvider(AbstractLLMProvider):
     def format_tool_error(self, tool_name: str, error: str) -> any:
         return Part.from_function_response(name=tool_name, response={"error": error})
 
+    def prune_history(self, session: any, max_turns: int) -> tuple[any, bool]:
+        return session, False
+
 @pytest.mark.asyncio
 async def test_update_task_registry_concurrency():
     state = TaskRegistryState()

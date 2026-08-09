@@ -154,7 +154,7 @@ async def test_native_qa_intercept_syntax_error(setup_test_env):
     async def wrapper(session, payload):
         return await fake_send_message(payload)
     cli.provider.send_message = AsyncMock(side_effect=wrapper)
-    cli.provider.prune_history = MagicMock(return_value=mock_chat_session)
+    cli.provider.prune_history = MagicMock(return_value=(mock_chat_session, False))
     
     # Run the audit command
     await cli.run("audit", [])

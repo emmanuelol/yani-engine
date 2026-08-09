@@ -444,7 +444,7 @@ class LLMOrchestrator:
             response = await self._send_message_with_backoff(chat_session, parts, active_provider)
 
             # [THE SLIDING WINDOW: History Pruning]
-            chat_session = active_provider.prune_history(chat_session, MAX_HISTORY_TURNS)
+            chat_session, pruned = active_provider.prune_history(chat_session, MAX_HISTORY_TURNS)
             if status:
                 if pruned:
                     status.update("[bold magenta]Context optimization: Pruned stale chat history...")
