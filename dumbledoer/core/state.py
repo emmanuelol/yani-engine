@@ -389,50 +389,86 @@ async def write_file_with_review(path: str, content: str, task_id: str) -> str:
     except Exception as e:
         return f"Error in write_file_with_review for {path}: {e}"
 
-async def add_task(title: str, task_type: str = "change", deps: str = "none", description: str = "", outputs: str = "none", success_criteria: str = "TBD", estimated_effort: str = "small", codegraph_impact: str = "—") -> str:
-    """Registers a new atomic task to the memory.md Task Registry with explicit effort and impact scoring."""
+async def register_task_batch(tasks: list[dict]) -> str:
+    """Registers a batch of atomic tasks to the memory.md Task Registry safely and atomically."""
     async with _MEMORY_MUTEX:
         async with get_registry_lock():
             try:
                 with open("memory.md", "r", encoding="utf-8") as f:
                     content = f.read()
                 
-                import re
-                existing_ids = re.findall(r'T-(\d{3,4})', content)
-                next_num = max([int(x) for x in existing_ids]) + 1 if existing_ids else 1
-                task_id = f"T-{next_num:03d}"
-
-                if deps.lower() not in ["none", "—", "-", ""]:
-                    for d in [d.strip() for d in deps.split(",")]:
-                        if f"| {d} |" not in content and f"### {d}" not in content:
-                            return f"Error: Dependency {d} does not exist in memory.md. Task creation rejected."
-
                 reg_start, reg_end = ASTMemoryMapper.locate_heading_block(content, "##", "Task Registry")
+                arc_start, arc_end = ASTMemoryMapper.locate_heading_block(content, "##", "Archive Index")
+                
+                search_blocks = ""
+                if reg_start != -1 and reg_end != -1:
+                    search_blocks += "\n".join(content.splitlines()[reg_start:reg_end])
+                if arc_start != -1 and arc_end != -1:
+                    search_blocks += "\n".join(content.splitlines()[arc_start:arc_end])
+                
+                import re
+                existing_ids = re.findall(r'T-(\d{3,4})', search_blocks)
+                next_num = max([int(x) for x in existing_ids]) + 1 if existing_ids else 1
+                
+                existing_task_ids = set([f"T-{int(x):03d}" for x in existing_ids])
+                incoming_task_ids = [f"T-{next_num + i:03d}" for i in range(len(tasks))]
+                union_task_ids = existing_task_ids.union(incoming_task_ids)
+                
                 det_start, det_end = ASTMemoryMapper.locate_heading_block(content, "##", "Task Details")
                 
                 if det_start == -1 or reg_start == -1:
                     return "Error: Header '## Task Registry' or '## Task Details' not found in memory.md"
-
+                    
                 lines = content.splitlines()
                 
-                row = f"| {task_id} | {title} | {task_type} | pending | — | {deps} | — | none |"
-                details = f"\n### {task_id}: {title}\n- **Type**: {task_type}\n- **Status**: pending\n- **Owner**: —\n- **Depends On**: {deps}\n- **Assigned Session**: —\n- **Description**: {description}\n- **Inputs**: none\n- **Outputs**: {outputs}\n- **Success Criteria**: {success_criteria}\n- **Estimated Effort**: {estimated_effort}\n- **Parallelizable**: yes\n- **CodeGraph Impact**: {codegraph_impact}\n- **Checkpoint**: none\n- **Resume Instructions**: none\n- **Notes**: —\n"
-
-                lines.insert(det_end, details)
+                rows_to_insert = []
+                details_to_insert = []
                 
-                reg_insert = reg_end
-                for i in range(reg_end - 1, reg_start, -1):
+                for i, task in enumerate(tasks):
+                    task_id = incoming_task_ids[i]
+                    title = task.get("title", "Untitled")
+                    task_type = task.get("task_type", "change")
+                    deps = task.get("deps", "none")
+                    description = task.get("description", "")
+                    outputs = task.get("outputs", "none")
+                    success_criteria = task.get("success_criteria", "TBD")
+                    estimated_effort = task.get("estimated_effort", "small")
+                    codegraph_impact = task.get("codegraph_impact", "—")
+                    
+                    if deps.lower() not in ["none", "—", "-", ""]:
+                        for d in [d.strip() for d in deps.split(",")]:
+                            if d not in union_task_ids:
+                                return f"Error: Dependency {d} does not exist in registry or current batch. Task batch creation rejected."
+
+                    rows_to_insert.append(f"| {task_id} | {title} | {task_type} | pending | — | {deps} | — | none |")
+                    details_to_insert.append(f"\n### {task_id}: {title}\n- **Type**: {task_type}\n- **Status**: pending\n- **Owner**: —\n- **Depends On**: {deps}\n- **Assigned Session**: —\n- **Description**: {description}\n- **Inputs**: none\n- **Outputs**: {outputs}\n- **Success Criteria**: {success_criteria}\n- **Estimated Effort**: {estimated_effort}\n- **Parallelizable**: yes\n- **CodeGraph Impact**: {codegraph_impact}\n- **Checkpoint**: none\n- **Resume Instructions**: none\n- **Notes**: —\n")
+
+                lines = lines[:det_end] + details_to_insert + lines[det_end:]
+                
+                reg_start_new, reg_end_new = ASTMemoryMapper.locate_heading_block("\n".join(lines), "##", "Task Registry")
+                
+                reg_insert = reg_end_new
+                for i in range(reg_end_new - 1, reg_start_new, -1):
                     if lines[i].strip():
                         reg_insert = i + 1
                         break
-                lines.insert(reg_insert, row)
+                
+                lines = lines[:reg_insert] + rows_to_insert + lines[reg_insert:]
 
                 with open("memory.md", "w", encoding="utf-8") as f:
                     f.write("\n".join(lines) + "\n")
                     
-                return f"Successfully registered task {task_id}."
+                return f"Successfully registered tasks {', '.join(incoming_task_ids)}."
             except Exception as e:
-                return f"Error adding task: {e}"
+                return f"Error adding task batch: {e}"
+
+async def add_task(title: str, task_type: str = "change", deps: str = "none", description: str = "", outputs: str = "none", success_criteria: str = "TBD", estimated_effort: str = "small", codegraph_impact: str = "—") -> str:
+    """DEPRECATED. Use register_task_batch instead. Registers a new atomic task to the memory.md Task Registry."""
+    return await register_task_batch([{
+        "title": title, "task_type": task_type, "deps": deps, "description": description,
+        "outputs": outputs, "success_criteria": success_criteria, "estimated_effort": estimated_effort,
+        "codegraph_impact": codegraph_impact
+    }])
     
 
 async def record_knowledge(title: str, entry_type: str, description: str, rationale: str, supersedes: str = "none") -> str:

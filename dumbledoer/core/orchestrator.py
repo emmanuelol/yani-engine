@@ -20,7 +20,7 @@ from dumbledoer.core.state import (
     get_registry_lock, ASTMemoryMapper, 
     update_task_registry_row, CheckpointManager, OrphanRecoveryScanner, 
     TaskRegistryState, read_file, write_file_with_review,
-    add_task, read_code_block, record_knowledge
+    add_task, read_code_block, record_knowledge, register_task_batch
 )
 from dumbledoer.core.planner import WavePlanner
 from dumbledoer.core.llm_provider import AbstractLLMProvider
@@ -76,7 +76,7 @@ class LLMOrchestrator:
         # Determine the primary provider for backwards compatibility in tools
         self.provider = self.providers.get("cloud", list(self.providers.values())[0])
 
-        self.local_tools = [read_file, read_code_block, write_file_with_review, execute_bash, update_task_registry_row, run_rtk, add_task, record_knowledge]
+        self.local_tools = [read_file, read_code_block, write_file_with_review, execute_bash, update_task_registry_row, run_rtk, add_task, register_task_batch, record_knowledge]
         self.gemini_tools = list(self.local_tools)
         try:
             with open("memory.md", "r", encoding="utf-8") as f:
@@ -94,13 +94,13 @@ class LLMOrchestrator:
     # Dynamic tool filtering per command to reduce token consumption
     COMMAND_TOOL_WHITELIST = {
         # ADDED: execute_bash and wildcard codegraph_* so the LLM can actually discover the repo
-        "start":   {"read_file", "add_task", "write_file_with_review", "execute_bash", "codegraph_*", "context7_*"},
+        "start":   {"read_file", "add_task", "register_task_batch", "write_file_with_review", "execute_bash", "codegraph_*", "context7_*"},
         # STRICT iterate WHITELIST: Block broad AST node/explore tools to force targeted reads
-        "iterate": {"add_task", "read_file", "read_code_block", "update_task_registry_row", "codegraph_search", "codegraph_impact", "context7_*"},
+        "iterate": {"add_task", "register_task_batch", "read_file", "read_code_block", "update_task_registry_row", "codegraph_search", "codegraph_impact", "context7_*"},
         "status":  {"read_file", "execute_bash"},
         "rollback": {"read_file", "execute_bash"},
         "report":  {"read_file", "execute_bash", "update_task_registry_row"},
-        "audit":   {"read_file", "read_code_block", "execute_bash", "add_task", "update_task_registry_row", "codegraph_*", "context7_*"},
+        "audit":   {"read_file", "read_code_block", "execute_bash", "add_task", "register_task_batch", "update_task_registry_row", "codegraph_*", "context7_*"},
         "resume":  {"read_file", "execute_bash"},
         "update-docs": {"read_file", "execute_bash", "codegraph_*", "context7_*"}
     }
@@ -293,7 +293,7 @@ class LLMOrchestrator:
     async def _get_system_instructions(self, command: str = None):
         # For iterate, inject Goal/Scope/Task Registry + Edge Cases to preserve architectural awareness
         if command == "iterate":
-            memory_content = await self._get_sliced_memory(["Project Goal", "Scope", "Edge Case Coverage", "Task Registry"])
+            memory_content = await self._get_sliced_memory(["Project Goal", "Scope", "Edge Case Coverage", "Task Registry", "Task Details"])
         else:
             memory_content = await self.local_tools[0]("memory.md") or "No memory.md found. Start a new project."
 
@@ -360,14 +360,14 @@ class LLMOrchestrator:
                     raise
         raise RuntimeError("Max retries exceeded for API rate limit")
 
-    async def _run_with_tools(self, chat_session, initial_payload, active_provider, status=None, task_id=None):
+    async def _run_with_tools(self, chat_session, initial_payload, active_provider, status=None, task_id=None, max_iterations=15):
         response = await self._send_message_with_backoff(chat_session, initial_payload, active_provider)
         degraded_consecutive = 0  # Track consecutive degraded tool calls
 
         # [CONTEXT MANAGEMENT CONFIG]
         MAX_HISTORY_TURNS = 6  # Aggressive prune
         MAX_TOOL_OUTPUT_CHARS = 8000  # Hard cap
-        MAX_TOOL_ITERATIONS = 15  # Decreased to handle deep discovery loops
+        MAX_TOOL_ITERATIONS = max_iterations  # Decreased to handle deep discovery loops
 
         iteration_count = 0
 
@@ -1612,7 +1612,8 @@ Success Criteria: {success_criteria}
                 console = Console()
                 with console.status(f"[bold cyan]Running {command} agent...", spinner="dots") as status:
                     try:
-                        response = await self._run_with_tools(self.chat_session, payload, self.provider, status=status)
+                        max_iters = 30 if command in ("start", "iterate") else 15
+                        response = await self._run_with_tools(self.chat_session, payload, self.provider, status=status, max_iterations=max_iters)
                     except RuntimeError as e:
                         # FIX: Catch max iterations gracefully to prevent stack trace crash
                         print(f"\n[bold red]Agent execution aborted: {e}[/bold red]")
