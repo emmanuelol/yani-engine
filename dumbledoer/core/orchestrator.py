@@ -126,8 +126,12 @@ class LLMOrchestrator:
             lock = self.mcp_locks.setdefault(server_name, asyncio.Lock())
             async with lock:
                 session = self.mcp_sessions[server_name]
-                result = await session.call_tool(tool.name, arguments=kwargs)
-                return "\n".join([x.text for x in result.content if hasattr(x, 'text')])
+                try:
+                    # FIX: Force a 45-second timeout on all MCP queries to prevent AST deadlocks
+                    result = await asyncio.wait_for(session.call_tool(tool.name, arguments=kwargs), timeout=45.0)
+                    return "\n".join([x.text for x in result.content if hasattr(x, 'text')])
+                except asyncio.TimeoutError:
+                    return f"Error: Tool '{tool.name}' timed out after 45 seconds. The query was too broad or the server hung. Narrow your target symbol."
         
         # 1. Strip slashes and hyphens for Gemini compatibility
         safe_name = tool.name.replace("-", "_").replace("/", "_")

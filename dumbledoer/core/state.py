@@ -342,7 +342,7 @@ async def write_file_with_review(path: str, content: str, task_id: str) -> str:
             impact_proc = await asyncio.to_thread(
                 subprocess.run, 
                 ["npx", "--yes", "--package=@colbymchenry/codegraph", "codegraph", "impact", path], 
-                capture_output=True, text=True
+                capture_output=True, text=True, timeout=30
             )
             match = re.search(r"—\s*(\d+)\s+affected symbol", impact_proc.stdout if hasattr(impact_proc, 'stdout') else str(impact_proc))
             if match and int(match.group(1)) > 20:
