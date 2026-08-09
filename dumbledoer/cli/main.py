@@ -1,50 +1,30 @@
-import sys
-import os
-import asyncio
 import argparse
+import asyncio
+import sys
 from dumbledoer.core.orchestrator import LLMOrchestrator
-from dumbledoer.core.state import ASTMemoryMapper
-
-GUI_DIFF_ENABLED = False
+from dumbledoer.core.config import config
 
 async def main_async():
     parser = argparse.ArgumentParser(description="DumbleDoer CLI")
-    parser.add_argument(
-        "command",
-        choices=["start", "execute", "resume", "report", "rollback", "update-docs", "audit", "iterate", "status"],
-        help="The dumbledoer command to run"
-    )
-    parser.add_argument("--model", default=os.getenv("AGY_MODEL", "gemini-3.6-flash"), help="Model override")
-    parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose mode (e.g. GUI diff-gate in VS Code)")
-    parser.add_argument("--budget-limit", type=int, help="Override budget_limit for token tracking")
-    parser.add_argument("--budget-threshold", type=int, help="Override budget_threshold_pct (e.g. 80)")
+    parser.add_argument("command", choices=["start", "execute", "resume", "report", "rollback", "update-docs", "audit", "iterate", "status"])
+    parser.add_argument("--model", help="Model override")
+    parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose mode")
+    parser.add_argument("--budget-limit", type=int)
+    parser.add_argument("--budget-threshold", type=int)
+    parser.add_argument("--start-at", type=int)
     
-    import shlex
-    flat_args = []
-    for arg in sys.argv[1:]:
-        if " " in arg and (arg.startswith("-") or "--" in arg):
-            flat_args.extend(shlex.split(arg))
-        else:
-            flat_args.append(arg)
-    args, unknown = parser.parse_known_args(flat_args)
+    args, unknown = parser.parse_known_args()
 
-    global GUI_DIFF_ENABLED
-    GUI_DIFF_ENABLED = args.verbose
+    # Hydrate the global config singleton with CLI overrides
+    if args.model: config.model = args.model
+    if args.verbose: config.verbose = args.verbose
+    if args.budget_limit: config.budget_limit = args.budget_limit
+    if args.budget_threshold: config.budget_threshold_pct = args.budget_threshold
+    if args.start_at: config.start_at_index = args.start_at
 
-    if GUI_DIFF_ENABLED:
-        try:
-            with open("memory.md", "r", encoding="utf-8") as f:
-                content = f.read()
-            start, end = ASTMemoryMapper.locate_heading_block(content, "##", "Config")
-            if start != -1:
-                config_lines = content.splitlines()[start:end]
-                if any("gui_diff_enabled: false" in line.lower() for line in config_lines):
-                    GUI_DIFF_ENABLED = False
-        except FileNotFoundError:
-            pass
-
-    cli = LLMOrchestrator(budget_limit=args.budget_limit, budget_threshold=args.budget_threshold)
-    await cli.run(args.command, unknown, model=args.model)
+    # Orchestrator no longer needs initialization parameters!
+    cli = LLMOrchestrator()
+    await cli.run(args.command, unknown)
 
 def main():
     try:

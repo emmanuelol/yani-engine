@@ -68,26 +68,30 @@ class ASTMemoryMapper:
         except Exception:
             return False
 
-async def update_memory_registry(section_header: str, new_content: str) -> str:
-    """Updates a specific section of memory.md securely using AST parsing."""
+# Deprecate the old block-replace tool
+# async def update_memory_registry(section_header: str, new_content: str) -> str: ...
+
+# Create a surgical row-update tool exposed to the LLM
+async def update_task_registry_row(task_id: str, new_status: str, new_owner: str = "—") -> str:
+    """Surgically updates a task's status in the registry without overwriting sibling tasks."""
     async with _MEMORY_MUTEX:
         async with get_registry_lock():
-                try:
-                    with open("memory.md", "r", encoding="utf-8") as f:
-                        content = f.read()
-                    
-                    start_idx, end_idx = ASTMemoryMapper.locate_heading_block(content, "##", section_header)
-                    if start_idx == -1:
-                        raise ValueError(f"Section {section_header} not found.")
-                    
-                    lines = content.splitlines()
-                    updated_lines = lines[:start_idx + 1] + new_content.splitlines() + lines[end_idx:]
-                    
-                    with open("memory.md", "w", encoding="utf-8") as f:
-                        f.write("\n".join(updated_lines) + "\n")
-                    return f"Successfully updated {section_header}."
-                except Exception as e:
-                    raise IOError(f"Critical State Error: Failed to sync {section_header} to memory.md: {e}")
+            try:
+                # 1. We read the fresh state inside the lock, immune to stale LLM context
+                state = TaskRegistryState()
+                tasks = state._load_tasks_unlocked()
+                
+                if task_id not in tasks:
+                    return f"Error: Task {task_id} not found."
+                
+                tasks[task_id]["status"] = new_status
+                tasks[task_id]["owner"] = new_owner
+                
+                # 2. Write exactly the parsed row back out
+                state._sync_to_markdown_unlocked(tasks)
+                return f"Successfully updated {task_id} to {new_status}."
+            except Exception as e:
+                return f"Error updating registry: {e}"
         
 
 class CheckpointManager:
@@ -294,6 +298,8 @@ class TaskRegistryState:
                             parts[stat_idx] = f" {tasks[tid]['status']} "
                         else:
                             parts[4] = f" {tasks[tid]['status']} "
+                        if len(parts) >= 6 and 'owner' in tasks[tid]:
+                            parts[5] = f" {tasks[tid]['owner']} "
                         new_block.append("|".join(parts))
                     else:
                         new_block.append(line)

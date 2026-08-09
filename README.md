@@ -37,16 +37,16 @@ That's it! DumbleDoer is now hooked into your `agy` environment. 🎉
 
 ---
 
-## 🔑 Authentication & Prerequisites
+## 🔑 Authentication & Configuration
 
-DumbleDoer operates on a **Bring Your Own Key (BYOK)** model. You must export a Google API key globally in your terminal profile so the Antigravity client can pass it down.
+DumbleDoer uses `pydantic-settings` to inject dependencies efficiently. You can define a `.env` file or export variables globally:
 
 ```bash
 export GOOGLE_API_KEY="your-api-key-here"
+export GEMINI_API_KEY="your-api-key-here"
 ```
 
-* **Node.js (v20+):** Required to run `npx` commands for MCP servers.
-* **Model Tiering:** DumbleDoer defaults to lightweight models, but you can override this for complex tasks using `export AGY_MODEL="gemini-2.5-pro"`.
+DumbleDoer also supports **Native Antigravity Integration**. If the plugin detects it is running inside an active `agy` environment, it will automatically use the `AntigravityProvider` to consume native account credits without requiring explicit keys.
 
 ---
 
@@ -54,17 +54,36 @@ export GOOGLE_API_KEY="your-api-key-here"
 
 DumbleDoer prioritizes safety during execution with two primary mechanisms:
 * **VS Code Diff-Gate**: File changes are written to a shadow `.tmp` copy while the original is backed up. If you reject a change during review, DumbleDoer automatically restores the original file. If VS Code is unavailable, a terminal-native `rich` diff is used.
-* **Zero-Trust Docker Sandbox (Shadow Clone Isolation)**: Sub-agents execute testing and validation within a fully isolated Docker container using the "Shadow Clone" pattern. The codebase is safely cloned into the sandbox, providing agents with a fully mutable playground that prevents container crashes when installing packages or writing cache files, all while perfectly isolating the host repository from hallucinated destructive commands.
+* **Zero-Trust Docker Sandbox (Shadow Clone Isolation)**: Sub-agents execute testing within a fully isolated Docker container using the "Shadow Clone" pattern. The codebase is safely cloned into the sandbox, providing agents with a fully mutable playground that prevents container crashes when installing packages or writing cache files.
 
 ---
 
 ## 🏗️ Core Architecture (Decoupled & Modular)
 
-DumbleDoer has moved past the monolithic "God Object" phase into a strictly decoupled architecture designed for scale:
-* **`core/orchestrator.py`**: The central hub managing parallel execution waves, LLM chat sessions, and the Native QA Harness Loop.
-* **`core/state.py`**: Handles all disk-level mutations, locking mechanisms, memory extraction logic, and orphan recovery.
-* **`core/sandbox.py`**: Manages dynamic, stateless validation of the Zero-Trust execution containers.
-* **`cli/main.py`**: A lean entrypoint specifically dedicated to command routing and argument parsing.
+DumbleDoer has a strictly decoupled architecture designed for scale and clarity.
+
+```mermaid
+graph TD
+    CLI[cli/main.py] -->|Hydrates| CFG[core/config.py]
+    CLI -->|Dispatches| ORC[core/orchestrator.py]
+    
+    CFG -->|Injects Providers| ORC
+    
+    ORC -->|State Mutation| ST[core/state.py]
+    ORC -->|Execution Waves| PL[core/planner.py]
+    ORC -->|Tools & Sandbox| SB[core/sandbox.py]
+    
+    ORC -->|Provider Interface| LLM[core/llm_provider.py]
+    LLM --> Gemini[GeminiProvider]
+    LLM --> Local[LocalProvider]
+    LLM --> Agy[AntigravityProvider]
+```
+
+### Dynamic Vendor Tiering
+
+DumbleDoer automatically balances cost and performance by routing tasks based on their estimated effort:
+* **The Brain (Cloud):** Heavy architectural refactors (`large` effort) are routed to powerful cloud models like `gemini-3.1-pro-preview`.
+* **The Hands (Local):** Simple file changes and audits (`small`/`medium` effort) are routed to local inference hardware via Ollama or vLLM to conserve API credits.
 
 ---
 
@@ -81,15 +100,29 @@ DumbleDoer employs advanced strategies to minimize API token consumption:
 ## 🔒 Concurrency Safety
 
 DumbleDoer executes tasks in parallel waves via `asyncio.gather`. To prevent state corruption:
-* **Unified Locking**: `memory.md` updates acquire both a thread-level `threading.Lock()` (for synchronous I/O boundaries) and an `asyncio.Lock()` (for asynchronous queues) via a unified `_MEMORY_MUTEX` to completely eliminate race conditions.
-* **AST DOM Manipulation**: DumbleDoer utilizes a custom `ASTMemoryMapper` to parse markdown files into a structural DOM model. State updates rely on surgically precise block location rather than fragile `str.replace()` calls, guaranteeing the registry won't silently corrupt itself under heavy load.
-* **Import Coupling Analysis**: Pre-write file ownership checks prevent race conditions between sub-agents modifying interrelated files.
+
+```mermaid
+sequenceDiagram
+    participant Worker
+    participant Orchestrator
+    participant ASTMemoryMapper
+    participant memory.md
+
+    Worker->>Orchestrator: execute_task()
+    Orchestrator->>ASTMemoryMapper: update_task_status("in_progress")
+    ASTMemoryMapper->>memory.md: Acquire Lock & Write DOM
+    Orchestrator->>Worker: LLM Tool Loop
+    Worker->>Orchestrator: Task Complete
+    Orchestrator->>ASTMemoryMapper: update_task_status("awaiting-review")
+    ASTMemoryMapper->>memory.md: Acquire Lock & Write DOM
+```
+
+* **Unified Locking**: `memory.md` updates acquire both a thread-level `threading.Lock()` and an `asyncio.Lock()` to completely eliminate race conditions.
+* **AST DOM Manipulation**: DumbleDoer utilizes a custom `ASTMemoryMapper` to parse markdown files into a structural DOM model. State updates rely on surgically precise block location rather than fragile string replacements.
 
 ---
 
 ## 🔄 The Workflow & Command Summary
-
-DumbleDoer integrates deeply into your development lifecycle with a suite of native slash commands.
 
 * **/dumbledoer start**: Ingests documentation and maps out an atomic task plan.
 * **/dumbledoer execute**: Executes registered tasks in dependency order.
@@ -101,16 +134,3 @@ DumbleDoer integrates deeply into your development lifecycle with a suite of nat
 * **/dumbledoer update-docs**: Syncs documentation with the current codebase.
 * **/dumbledoer status**: Shows the Task Registry and CodeGraph health.
 
----
-
-## 🗺️ Roadmap: Next Stage (The Unified CLI)
-
-Our ultimate vision for DumbleDoer is to seamlessly fuse the conversational UX of traditional chatbots (like Antigravity) with DumbleDoer's powerful, parallel execution factory into a single, unified standalone CLI application.
-
-### The Fused Architecture
-
-1. **The Unified Entrypoint**: A persistent conversational loop with full Context7 and CodeGraph access.
-2. **The Tooling Handoff**: The LLM will dispatch execution waves dynamically.
-3. **The Parallel Factory Takes Over**: Headless parallel execution engine builds dependency graphs and fires off concurrent API calls.
-4. **Interactive Terminal Diff-Gate**: Review changes instantly in the terminal.
-5. **Context Flush**: Flushes chat history to prevent context bloat, returning control to the chat loop safely.

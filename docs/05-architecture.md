@@ -2,7 +2,42 @@
 
 This document visually outlines the core structural components and protocols of the DumbleDoer architecture.
 
-## 1. Session Lifecycle State Machine
+## 1. Core Decoupled Architecture
+
+```mermaid
+graph TD
+    CLI[cli/main.py] -->|Hydrates| CFG[core/config.py]
+    CLI -->|Dispatches| ORC[core/orchestrator.py]
+    
+    CFG -->|Injects Providers| ORC
+    
+    ORC -->|State Mutation| ST[core/state.py]
+    ORC -->|Execution Waves| PL[core/planner.py]
+    ORC -->|Tools & Sandbox| SB[core/sandbox.py]
+    
+    ORC -->|Provider Interface| LLM[core/llm_provider.py]
+    LLM --> Gemini[GeminiProvider]
+    LLM --> Local[LocalProvider]
+    LLM --> Agy[AntigravityProvider]
+```
+
+## 2. Dynamic Vendor Tiering
+
+DumbleDoer natively supports routing tasks to different LLM providers based on estimated effort. 
+
+```mermaid
+flowchart TD
+    A[Task Dispatched] --> B{Estimated Effort}
+    B -- Large --> C[Cloud Provider]
+    B -- Medium/Small --> D[Local Provider]
+    
+    C --> E(Gemini / OpenAI Pro Models)
+    D --> F(Ollama / vLLM Local Hardware)
+    
+    C -->|Fallback| G[Antigravity Native Session]
+```
+
+## 3. Session Lifecycle State Machine
 
 ```mermaid
 stateDiagram-v2
@@ -38,7 +73,7 @@ stateDiagram-v2
     Completion --> [*]
 ```
 
-## 2. Task Execution & Checkpoint Protocol Sequence
+## 4. Task Execution & Checkpoint Protocol Sequence
 
 ```mermaid
 sequenceDiagram
@@ -61,7 +96,7 @@ sequenceDiagram
     SubAgent->>ParentSession: Awaiting Review
 ```
 
-## 3. Sub-Agent Coordination & File Ownership Model
+## 5. Sub-Agent Coordination & File Ownership Model
 
 ```mermaid
 flowchart TD
@@ -84,7 +119,7 @@ flowchart TD
     J --> K
 ```
 
-## 4. Knowledge Registry Evolution Flow
+## 6. Knowledge Registry Evolution Flow
 
 ```mermaid
 flowchart LR

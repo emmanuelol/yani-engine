@@ -34,17 +34,27 @@ This registers DumbleDoer globally in your `agy` client, seamlessly integrating 
 
 ### 3. Model Configuration & BYOK
 
-DumbleDoer requires a Gemini API key. Ensure `GOOGLE_API_KEY` is exported in your environment. You must export this key globally in your terminal profile so the Antigravity client can automatically hand it down to DumbleDoer as a child process.
+DumbleDoer uses `pydantic-settings` to inject configurations via `.env` files or system environment variables. You must provide an API key for the cloud provider, unless running inside the native `agy` client (which automatically passes down account credits via the `AntigravityProvider`).
 
 ```bash
 export GOOGLE_API_KEY="your-api-key-here"
+# or
+export GEMINI_API_KEY="your-api-key-here"
 ```
 
-By default, DumbleDoer uses a lightweight model. You can override this to use advanced reasoning models (like `gemini-2.5-pro`) by setting the `AGY_MODEL` environment variable or passing the `--model` flag:
+You can define overrides either via the `.env` file or CLI flags:
 
 ```bash
 export AGY_MODEL="gemini-2.5-pro"
+# or run the CLI directly
+dumbledoer start --model gemini-3.1-pro-preview
 ```
+
+### 4. Local Hardware Configuration (Optional)
+
+For dynamic vendor tiering (which routes "small" and "medium" effort tasks to local hardware to save cost), DumbleDoer expects a local provider running on `http://localhost:11434/v1` (the standard Ollama / vLLM OpenAI-compatible endpoint). 
+
+Make sure your local inference engine is running a tool-calling capable model (like `llama3.1` or `qwen2.5-coder:7b`) on that port. If unavailable, DumbleDoer falls back gracefully to the cloud provider.
 
 ### 4. Zero-Trust Sandbox Requirement
 

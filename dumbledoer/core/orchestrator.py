@@ -18,17 +18,14 @@ from dumbledoer.core.sandbox import execute_bash, _ensure_warm_sandbox, _teardow
 from dumbledoer.core.state import (
     append_handoff_summary,
     get_registry_lock, ASTMemoryMapper, 
-    update_memory_registry, CheckpointManager, OrphanRecoveryScanner, 
+    update_task_registry_row, CheckpointManager, OrphanRecoveryScanner, 
     TaskRegistryState, read_file, write_file_with_review,
     add_task, read_code_block, record_knowledge
 )
+from dumbledoer.core.planner import WavePlanner
+from dumbledoer.core.llm_provider import AbstractLLMProvider
 
-
-
-
-# GUI_DIFF_ENABLED will be set dynamically in main_async
-GUI_DIFF_ENABLED = True
-from google import genai
+from dumbledoer.core.config import config
 from mcp.client.session import ClientSession
 from mcp.client.stdio import stdio_client, StdioServerParameters
 
@@ -66,18 +63,19 @@ class BudgetManager:
             raise BudgetExhaustedException(f"Budget exhausted: {self.estimated_tokens} >= {self.shutdown_threshold}")
 
 class LLMOrchestrator:
-    def __init__(self, budget_limit=None, budget_threshold=None):
+    def __init__(self):
         self.plugin_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-        load_dotenv(dotenv_path=os.path.join(os.getcwd(), '.env'), override=False)
-        api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
-        if not api_key:
-            print("Error: GEMINI_API_KEY or GOOGLE_API_KEY not found in environment or local .env file.", file=sys.stderr)
-            sys.exit(1)
-        self.client = genai.Client(api_key=api_key)
         self.exit_stack = AsyncExitStack()
         self.mcp_sessions = {}
         self.mcp_locks = {}
-        self.local_tools = [read_file, read_code_block, write_file_with_review, execute_bash, update_memory_registry, run_rtk, add_task, record_knowledge]
+        
+        # Inject providers securely from the app config
+        self.providers = config.providers
+        
+        # Determine the primary provider for backwards compatibility in tools
+        self.provider = self.providers.get("cloud", list(self.providers.values())[0])
+
+        self.local_tools = [read_file, read_code_block, write_file_with_review, execute_bash, update_task_registry_row, run_rtk, add_task, record_knowledge]
         self.gemini_tools = list(self.local_tools)
         try:
             with open("memory.md", "r", encoding="utf-8") as f:
@@ -85,21 +83,21 @@ class LLMOrchestrator:
         except Exception:
             self.budget_manager = BudgetManager("")
             
-        if budget_limit is not None:
-            self.budget_manager.budget_limit = budget_limit
+        if config.budget_limit is not None:
+            self.budget_manager.budget_limit = config.budget_limit
             self.budget_manager.shutdown_threshold = int(self.budget_manager.budget_limit * (self.budget_manager.threshold_pct / 100.0))
-        if budget_threshold is not None:
-            self.budget_manager.threshold_pct = budget_threshold
+        if config.budget_threshold_pct is not None:
+            self.budget_manager.threshold_pct = config.budget_threshold_pct
             self.budget_manager.shutdown_threshold = int(self.budget_manager.budget_limit * (self.budget_manager.threshold_pct / 100.0))
 
     # Dynamic tool filtering per command to reduce token consumption
     COMMAND_TOOL_WHITELIST = {
-        "start":   {"read_file", "execute_bash", "add_task", "write_file_with_review", "update_memory_registry", "codegraph_*", "context7_*"},
-        "iterate": {"add_task", "read_file", "update_memory_registry", "codegraph_*", "context7_*"},
+        "start":   {"read_file", "execute_bash", "add_task", "write_file_with_review", "update_task_registry_row", "codegraph_*", "context7_*"},
+        "iterate": {"add_task", "read_file", "update_task_registry_row", "codegraph_*", "context7_*"},
         "status":  {"read_file", "execute_bash"},
         "rollback": {"read_file", "execute_bash"},
-        "report":  {"read_file", "execute_bash", "update_memory_registry"},
-        "audit":   {"read_file", "read_code_block", "execute_bash", "add_task", "update_memory_registry", "codegraph_*", "context7_*"},
+        "report":  {"read_file", "execute_bash", "update_task_registry_row"},
+        "audit":   {"read_file", "read_code_block", "execute_bash", "add_task", "update_task_registry_row", "codegraph_*", "context7_*"},
         "resume":  {"read_file", "execute_bash"},
         "update-docs": {"read_file", "execute_bash", "codegraph_*", "context7_*"}
     }
@@ -266,7 +264,7 @@ class LLMOrchestrator:
         # 3. Dispatch to the async-safe state writer
         await append_handoff_summary(summary)
         
-        _teardown_warm_sandbox()
+        await _teardown_warm_sandbox()
         print("Graceful Shutdown Sequence Complete. State preserved in memory.md.")
 
     async def _get_sliced_memory(self, sections: list) -> str:
@@ -326,7 +324,7 @@ class LLMOrchestrator:
 
 
 
-    async def _send_message_with_backoff(self, chat_session, payload):
+    async def _send_message_with_backoff(self, chat_session, payload, active_provider):
         import random
         import re
         max_retries = 8
@@ -335,7 +333,7 @@ class LLMOrchestrator:
         max_total_wait = 120  # Hard cap: 2 minutes total backoff
         for attempt in range(max_retries):
             try:
-                return await chat_session.send_message(payload)
+                return await active_provider.send_message(chat_session, payload)
             except Exception as e:
                 error_str = str(e)
                 if "429" in error_str or "RESOURCE_EXHAUSTED" in error_str or "Quota exceeded" in error_str:
@@ -355,8 +353,8 @@ class LLMOrchestrator:
                     raise
         raise RuntimeError("Max retries exceeded for API rate limit")
 
-    async def _run_with_tools(self, chat_session, initial_payload, status=None, task_id=None):
-        response = await self._send_message_with_backoff(chat_session, initial_payload)
+    async def _run_with_tools(self, chat_session, initial_payload, active_provider, status=None, task_id=None):
+        response = await self._send_message_with_backoff(chat_session, initial_payload, active_provider)
         degraded_consecutive = 0  # Track consecutive degraded tool calls
 
         # [CONTEXT MANAGEMENT CONFIG]
@@ -366,17 +364,20 @@ class LLMOrchestrator:
 
         iteration_count = 0
 
-        while response.function_calls:
+        while True:
+            tool_calls = active_provider.parse_tool_calls(response)
+            if not tool_calls:
+                break
+                
             iteration_count += 1
             if iteration_count > MAX_TOOL_ITERATIONS:
                 if status:
                     print(f"Task {task_id} aborted: Max tool iterations exceeded.", file=sys.stderr)
                 raise RuntimeError(f"Task {task_id} exceeded max tool iterations ({MAX_TOOL_ITERATIONS}). Aborting to prevent infinite loop.")
 
-            from google.genai.types import Part
             parts = []
-            for call in response.function_calls:
-                tool_name = call.name
+            for call in tool_calls:
+                tool_name = call['name']
                 tool_func = None
                 for t in self.gemini_tools:
                     if getattr(t, "__name__", "") == tool_name:
@@ -385,7 +386,7 @@ class LLMOrchestrator:
                 
                 if tool_func:
                     try:
-                        args = dict(call.args) if call.args else {}
+                        args = call['args']
                         msg = f"Executing tool: {tool_name} with args: {args}"
                         if status:
                             status.update(f"[bold yellow]{msg}...")
@@ -410,60 +411,45 @@ class LLMOrchestrator:
                         if isinstance(result_str, str) and "Degraded] Tool not available" in result_str:
                             degraded_consecutive += 1
                             if degraded_consecutive >= 3:
-                                parts.append(Part.from_function_response(
-                                    name=tool_name,
-                                    response={"error": f"STOP: {tool_name} is degraded. All codegraph tools are unavailable this session. Use read_file and execute_bash only."}
+                                parts.append(active_provider.format_tool_error(
+                                    tool_name,
+                                    f"STOP: {tool_name} is degraded. All codegraph tools are unavailable this session. Use read_file and execute_bash only."
                                 ))
                                 continue
                         else:
                             degraded_consecutive = 0
 
-                        parts.append(Part.from_function_response(
-                            name=tool_name,
-                            response={"result": result_str}
+                        parts.append(active_provider.format_tool_response(
+                            tool_name,
+                            result_str
                         ))
                     except Exception as e:
                         msg = f"Tool {tool_name} failed: {e}"
                         if not status: print(msg)
-                        parts.append(Part.from_function_response(
-                            name=tool_name,
-                            response={"error": str(e)}
+                        parts.append(active_provider.format_tool_error(
+                            tool_name,
+                            str(e)
                         ))
                 else:
                     msg = f"Tool {tool_name} not found"
                     if not status: print(msg)
-                    parts.append(Part.from_function_response(
-                        name=tool_name,
-                        response={"error": "Tool not found"}
+                    parts.append(active_provider.format_tool_error(
+                        tool_name,
+                        "Tool not found"
                     ))
             
             if status:
                 status.update("[bold cyan]Agent analyzing tool results...")
 
-            response = await self._send_message_with_backoff(chat_session, parts)
+            response = await self._send_message_with_backoff(chat_session, parts, active_provider)
 
             # [THE SLIDING WINDOW: History Pruning]
-            # Slice the SDK's internal history list to drop stale middle turns while preserving
-            # history[0] (system prompt + initial payload) and maintaining User/Model role parity.
-            if hasattr(chat_session, '_history') and len(chat_session._history) > MAX_HISTORY_TURNS:
-                # Ensure we slice at an even boundary so User/Model turn parity isn't broken
-                found_safe_boundary = False
-                slice_index = -(MAX_HISTORY_TURNS - 1)
-                while abs(slice_index) < len(chat_session._history):
-                    item = chat_session._history[slice_index]
-                    item_role = getattr(item, 'role', None) or (item.get('role') if isinstance(item, dict) else None)
-                    if item_role == 'model':
-                        found_safe_boundary = True
-                        break
-                    slice_index -= 1
-
-                if found_safe_boundary:
-                    chat_session._history = [chat_session._history[0]] + chat_session._history[slice_index:]
-                    if status:
-                        status.update("[bold magenta]Context optimization: Pruned stale chat history...")
+            pruned = active_provider.prune_history(chat_session, MAX_HISTORY_TURNS)
+            if status:
+                if pruned:
+                    status.update("[bold magenta]Context optimization: Pruned stale chat history...")
                 else:
-                    if status:
-                        status.update("[bold yellow]Context optimization: Skipped pruning (no safe boundary found)...")
+                    status.update("[bold yellow]Context optimization: Skipped pruning (no safe boundary found or under max)...")
 
             # Mid-loop budget check to prevent unbounded token consumption
             if hasattr(response, 'usage_metadata') and response.usage_metadata:
@@ -483,7 +469,7 @@ class LLMOrchestrator:
         # ACTUALLY CLAIM THE TASK SO RESUME CAN FIND IT
         await TaskRegistryState().update_task_status(task_id, "in_progress")
         
-        # --- DYNAMIC MODEL TIERING ---
+        # --- DYNAMIC VENDOR TIERING ---
         effort = "small"
         try:
             with open("memory.md", "r", encoding="utf-8") as f:
@@ -500,16 +486,22 @@ class LLMOrchestrator:
         except Exception:
             pass
             
-        base_model = getattr(self, "model", "gemini-3.6-flash")
-        
-        # Pro Brain / Cost-Efficient Hands: only large tasks get pro reasoning
-        if effort == "large" and "flash" in base_model:
+        # The Brain: Heavy architectural refactors go to the cloud
+        if effort == "large":
             target_model = "gemini-3.1-pro-preview"
-            print(f"[Tier Upgrade] Task {task_id} requires {effort} effort. Spawning sub-agent on {target_model}.")
-        else:
-            target_model = base_model
+            active_provider = self.providers.get("cloud")
+            print(f"[Tier Upgrade] Task {task_id} requires {effort} effort. Spawning sub-agent on Gemini Pro.")
             
-        chat_session = self.client.aio.chats.create(model=target_model, config={"tools": list(self.gemini_tools), "automatic_function_calling": {"disable": True}})
+        # The Hands: Simple file changes and audits hit the local hardware
+        else:
+            target_model = "llama3.1" # Or whichever model you are serving locally
+            # Fallback to cloud if the local provider isn't initialized
+            active_provider = self.providers.get("local", self.providers.get("cloud"))
+            print(f"[Cost Saver] Task {task_id} requires {effort} effort. Spawning sub-agent locally.")
+            
+            
+        # Initialize the session using the selected provider interface
+        chat_session = await active_provider.create_chat_session(model_name=target_model, tools=list(self.gemini_tools))
         system_instructions = await self._get_system_instructions()
         prompt_payload = f"""{system_instructions}
 
@@ -525,7 +517,7 @@ Mandatory rules:
 7. Documentation lookup: check if this task involves external dependencies and consult context7 if needed.
 8. **DO NOT USE BASH TO PARSE MEMORY.MD.** If you need to read `memory.md`, you MUST use the native `read_file` tool. If you need to update it, you MUST use the native `update_memory_registry` tool. Do not write python scripts via bash to parse the ledger."""
         try:
-            response = await self._run_with_tools(chat_session, prompt_payload, task_id=task_id)
+            response = await self._run_with_tools(chat_session, prompt_payload, active_provider, task_id=task_id)
             self.budget_manager.check_and_harvest()
             print(f"Task {task_id} completed: {response.text}")
             await TaskRegistryState().update_task_status(task_id, "awaiting-review")
@@ -535,82 +527,12 @@ Mandatory rules:
             await self._graceful_shutdown(task_id)
             raise
 
-    def _files_are_import_coupled(self, file_a: str, file_b: str) -> bool:
-        """Check if file_a imports file_b or vice versa using Python AST import analysis."""
-        try:
-            import ast
-            for src, target in [(file_a, file_b), (file_b, file_a)]:
-                if not os.path.exists(src) or not src.endswith(".py"):
-                    continue
-                with open(src, "r", encoding="utf-8") as f:
-                    tree = ast.parse(f.read())
-                # Derive module name from file path (e.g., "dumbledoer/cli.py" -> "cli", "dumbledoer.cli")
-                target_module = os.path.splitext(os.path.basename(target))[0]
-                target_dotpath = target.replace("/", ".").replace(".py", "")
-                for node in ast.walk(tree):
-                    if isinstance(node, ast.Import):
-                        for alias in node.names:
-                            if target_module in alias.name or target_dotpath in alias.name:
-                                return True
-                    elif isinstance(node, ast.ImportFrom):
-                        if node.module and (target_module in node.module or target_dotpath in node.module):
-                            return True
-            return False
-        except Exception:
-            return False  # Fail open: don't block parallelism on parse errors
 
-    async def get_pending_waves(self) -> list[list[dict]]:
-        state = TaskRegistryState()
-        tasks_dict = await state.load_tasks()
-        tasks = list(tasks_dict.values())
-        
-        pending_tasks = {t['id']: t for t in tasks if "pending" in t['status']}
-        completed_task_ids = {t['id'] for t in tasks if "completed" in t['status']}
-        
-        waves = []
-        while pending_tasks:
-            current_wave = []
-            claimed_files_in_wave = set()
-            
-            for t_id, t in list(pending_tasks.items()):
-                if all(d in completed_task_ids for d in t['deps']):
-                    task_files = set(t.get('outputs', []))
-
-                    # [SEMANTIC DEPENDENCY CHECK] Detect import coupling between task outputs
-                    import_coupled = False
-                    for claimed_file in claimed_files_in_wave:
-                        for task_file in task_files:
-                            if self._files_are_import_coupled(claimed_file, task_file):
-                                import_coupled = True
-                                break
-                        if import_coupled:
-                            break
-
-                    if not task_files or (not task_files.intersection(claimed_files_in_wave) and not import_coupled):
-                        current_wave.append(t)
-                        claimed_files_in_wave.update(task_files)
-                        
-            if not current_wave:
-                if pending_tasks:
-                    blocked = []
-                    for t_id, t in pending_tasks.items():
-                        unfulfilled = [d for d in t['deps'] if d not in completed_task_ids]
-                        blocked.append(f"{t_id} (missing: {', '.join(unfulfilled)})")
-                    print(f"Warning: Cannot schedule remaining pending tasks. They are blocked by uncompleted dependencies: {'; '.join(blocked)}")
-                    break
-                
-            waves.append(current_wave)
-            for t in current_wave:
-                del pending_tasks[t['id']]
-                completed_task_ids.add(t['id'])
-                
-        return waves
-        
     async def batch_diff_review(self, wave_tmp_files: list):
         if not wave_tmp_files: return
         import subprocess, shutil, sys, os
         has_code = shutil.which("code") is not None
-        if GUI_DIFF_ENABLED and has_code:
+        if config.verbose and has_code:
             print("Opening proposed changes in VS Code for review...", file=sys.stderr)
             
             # Read memory.md to map target to task ID
@@ -713,7 +635,7 @@ Mandatory rules:
         from rich.prompt import Prompt
         from rich.console import Console
         console = Console()
-        if GUI_DIFF_ENABLED:
+        if config.verbose:
             choice = await asyncio.to_thread(Prompt.ask, "Approve wave changes? [Y(all)/N(none)/S(select)]", choices=["Y", "N", "S"], default="Y")
         else:
             console.print("[green]Auto-approving wave changes (run with -v to review)[/green]")
@@ -785,12 +707,12 @@ Mandatory rules:
         if rejected_files:
             await OrphanRecoveryScanner().run(True)
 
-    async def run(self, command: str, args: list, model: str = "gemini-3.6-flash"):
+    async def run(self, command: str, args: list):
         # Pro Brain / Cost-Efficient Hands: iterate and audit always use pro reasoning
         if command in ["iterate", "audit"]:
             self.model = "gemini-3.1-pro-preview"
         else:
-            self.model = model
+            self.model = config.model
         print(f"DumbleDoer running command: {command}")
         if command == "resume":
             OrphanRecoveryScanner().run()
@@ -962,8 +884,11 @@ Mandatory rules:
                     pass
 
                 wave_index = 0
+                # Initialize planner
+                planner = WavePlanner(start_at_index=config.start_at_index)
+                
                 while True:
-                    waves = await self.get_pending_waves()
+                    waves = await planner.get_pending_waves()
                     if not waves:
                         if wave_index == 0:
                             print("No pending tasks to execute.")
@@ -1002,7 +927,7 @@ Mandatory rules:
 
                                     t = await queue.get()
                                     try:
-                                        await self.execute_task(t['id'], t['desc'])
+                                        await self.execute_task(t['id'], t.get('title', ''))
                                     except BudgetExhaustedException:
                                         while not queue.empty():
                                             queue.get_nowait()
@@ -1303,11 +1228,11 @@ Success Criteria: {success_criteria}
 4. Terminate your turn with a brief summary of your decision.
 """
                     
-                    chat_session = self.client.aio.chats.create(model=getattr(self, "model", "gemini-3.1-pro-preview"), config={"tools": self._get_tools_for_command("audit"), "automatic_function_calling": {"disable": True}})
+                    chat_session = await self.provider.create_chat_session(model_name=getattr(self, "model", "gemini-3.1-pro-preview"), tools=self._get_tools_for_command("audit"))
                     
                     with console.status(f"[cyan]LLM Evaluator analyzing {t_id}...[/cyan]", spinner="dots") as status:
                         try:
-                            response = await self._run_with_tools(chat_session, prompt_payload, status=status)
+                            response = await self._run_with_tools(chat_session, prompt_payload, self.provider, status=status)
                             if hasattr(response, 'usage_metadata') and response.usage_metadata:
                                 self.budget_manager.add_tokens(getattr(response.usage_metadata, 'total_token_count', 0))
                             self.budget_manager.check_and_harvest()
@@ -1607,7 +1532,7 @@ Success Criteria: {success_criteria}
                 console = Console()
                 with console.status(f"[bold cyan]Running {command} agent...", spinner="dots") as status:
                     try:
-                        response = await self._run_with_tools(self.chat_session, payload, status=status)
+                        response = await self._run_with_tools(self.chat_session, payload, self.provider, status=status)
                     except BudgetExhaustedException:
                         print(f"\n[bold red]Budget threshold reached during {command}. Attempting token clearance...[/bold red]")
                         rtk_out = await run_rtk("gain")
@@ -1616,7 +1541,7 @@ Success Criteria: {success_criteria}
                         rtk_savings = int(match.group(1)) if match else 50000
                         self.budget_manager.estimated_tokens = max(0, self.budget_manager.estimated_tokens - rtk_savings)
                         try:
-                            response = await self._run_with_tools(self.chat_session, payload, status=status)
+                            response = await self._run_with_tools(self.chat_session, payload, self.provider, status=status)
                         except (BudgetExhaustedException, RuntimeError) as e:
                             print(f"Task failed or budget threshold blocked retry: {e}")
                             await self._graceful_shutdown()
