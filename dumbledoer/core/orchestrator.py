@@ -933,6 +933,10 @@ Mandatory rules:
                                             queue.get_nowait()
                                             queue.task_done()
                                         raise
+                                    except Exception as e:
+                                        # FIX: Catch all other exceptions so tasks don't get stuck in 'in_progress'
+                                        print(f"\n[bold red]Task {t['id']} failed with exception: {e}[/bold red]")
+                                        await TaskRegistryState().update_task_status(t['id'], "error")
                                     finally:
                                         progress.advance(wave_task)
                                         queue.task_done()
@@ -1307,7 +1311,7 @@ Success Criteria: {success_criteria}
 
                 # 4. Parse and Format Task Registry
                 icons = {"completed": "✅", "in_progress": "🔄", "interrupted": "⏸", "pending": "⬜", "blocked": "🚫", "deferred": "💤"}
-                tasks = TaskRegistryState().load_tasks()
+                tasks = await TaskRegistryState().load_tasks()
                 
                 for t_id, t in tasks.items():
                     parts = [p.strip() for p in t.get('original_line', '').split("|")]
@@ -1527,7 +1531,7 @@ Success Criteria: {success_criteria}
             else:
                 # FIX 1: Use the provider interface instead of hardcoded self.client
                 self.chat_session = await self.provider.create_chat_session(
-                    model_name=getattr(self, "model", "gemini-3.6-flash"), 
+                    model_name=getattr(self, "model", config.model), 
                     tools=self._get_tools_for_command(command)
                 )
                 

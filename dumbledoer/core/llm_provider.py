@@ -183,10 +183,14 @@ class LocalProvider(AbstractLLMProvider):
         session["_history"].append(message)
         
         # Mocking the response object structure expected by the orchestrator
+        usage_data = data.get("usage", {})
+        class MockUsage:
+            total_token_count = usage_data.get("total_tokens", 0)
+            
         class LocalResponse:
             text = message.get("content", "") or ""
             function_calls = message.get("tool_calls", None)
-            usage_metadata = data.get("usage", None)
+            usage_metadata = MockUsage()
             
         return LocalResponse()
 
