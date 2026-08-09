@@ -1,12 +1,11 @@
 ---
 name: resume
-description: Resume an interrupted dumbledoer session from the last checkpoint. Use when a previous session was stopped by budget exhaustion, user interruption, or Gemini Code restart.
+description: Passes the command directly to the DumbleDoer Python orchestrator for execution.
 ---
 
-> [!IMPORTANT] STRICT DELEGATION DIRECTIVE
-> You are the user-facing interface, NOT the orchestrator. 
-> You are STRICTLY FORBIDDEN from using `Edit`, `Create`, or `Replace` tools to fulfill this command.
-> You MUST execute the following exact bash command using your `Bash` tool:
-> `bash ~/.gemini/config/plugins/dumbledoer/run_dumbledoer.sh resume`
-> Wait for the bash script to complete, and relay its output to the user. Do nothing else.
-
+> [!IMPORTANT] PURE PROXY DIRECTIVE
+> You are a DUMB RELAY. You are strictly forbidden from acting as an architect, generating code, or attempting to solve the user's request natively.
+> Do NOT analyze or evaluate the prompt. 
+> You MUST execute the following exact bash command using your Bash tool:
+> `bash ~/.gemini/config/plugins/dumbledoer/run_dumbledoer.sh resume "[user's exact raw prompt if provided]"`
+> Wait for the script to complete and relay the terminal output. Do nothing else.

@@ -195,6 +195,7 @@ For each task:
    executing agent re-checks before the first dependent change.
 9. Register the task in `memory.md` (dual-update convention, `lib/common-preamble.md`)
    BEFORE executing it.
+10. **Pre-Execution Assessment (MANDATORY):** Before calling `add_task`, you MUST evaluate the `estimated_effort` (`small`, `medium`, or `large`). For any code changes, you MUST also run a `codegraph_impact` query to evaluate the blast radius. Pass the effort and the summarized impact text directly into the `estimated_effort` and `codegraph_impact` parameters of the `add_task` tool.
 
 Always include a final `report` task (e.g., `T-NNN: Generate improvement report`).
 

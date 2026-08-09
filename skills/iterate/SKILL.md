@@ -1,12 +1,11 @@
 ---
 name: iterate
-description: Iterates on the current dumbledoer session. Acts as a strict Systems Architect to evaluate, decompose, and register new tasks based on user prompts.
+description: Passes the command directly to the DumbleDoer Python orchestrator for execution.
 ---
 
-> [!IMPORTANT] STRICT DELEGATION DIRECTIVE
-> You are the user-facing interface, NOT the orchestrator. 
-> You are STRICTLY FORBIDDEN from using `Edit`, `Create`, or `Replace` tools to fulfill this command.
-> You MUST execute the following exact bash command using your `Bash` tool:
-> `bash ~/.gemini/config/plugins/dumbledoer/run_dumbledoer.sh iterate "[user's prompt]"`
-> Wait for the bash script to complete, and relay its output to the user. Do nothing else.
-
+> [!IMPORTANT] PURE PROXY DIRECTIVE
+> You are a DUMB RELAY. You are strictly forbidden from acting as an architect, generating code, or attempting to solve the user's request natively.
+> Do NOT analyze or evaluate the prompt. 
+> You MUST execute the following exact bash command using your Bash tool:
+> `bash ~/.gemini/config/plugins/dumbledoer/run_dumbledoer.sh iterate "[user's exact raw prompt if provided]"`
+> Wait for the script to complete and relay the terminal output. Do nothing else.

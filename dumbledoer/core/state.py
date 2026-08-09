@@ -389,7 +389,7 @@ async def write_file_with_review(path: str, content: str, task_id: str) -> str:
     except Exception as e:
         return f"Error in write_file_with_review for {path}: {e}"
 
-async def add_task(title: str, task_type: str = "change", deps: str = "none", description: str = "", outputs: str = "none", success_criteria: str = "TBD") -> str:
+async def add_task(title: str, task_type: str = "change", deps: str = "none", description: str = "", outputs: str = "none", success_criteria: str = "TBD", estimated_effort: str = "small", codegraph_impact: str = "—") -> str:
     """Registers a new atomic task to the memory.md Task Registry. Auto-generates the Task ID."""
     async with _MEMORY_MUTEX:
         async with get_registry_lock():
@@ -416,7 +416,9 @@ async def add_task(title: str, task_type: str = "change", deps: str = "none", de
                 lines = content.splitlines()
                 
                 row = f"| {task_id} | {title} | {task_type} | pending | — | {deps} | — | none |"
-                details = f"\n### {task_id}: {title}\n- **Type**: {task_type}\n- **Status**: pending\n- **Owner**: —\n- **Depends On**: {deps}\n- **Assigned Session**: —\n- **Description**: {description}\n- **Inputs**: none\n- **Outputs**: {outputs}\n- **Success Criteria**: {success_criteria}\n- **Estimated Effort**: small\n- **Parallelizable**: yes\n- **CodeGraph Impact**: —\n- **Checkpoint**: none\n- **Resume Instructions**: none\n- **Notes**: —\n"
+                
+                # INJECTED DYNAMIC EFFORT AND IMPACT
+                details = f"\n### {task_id}: {title}\n- **Type**: {task_type}\n- **Status**: pending\n- **Owner**: —\n- **Depends On**: {deps}\n- **Assigned Session**: —\n- **Description**: {description}\n- **Inputs**: none\n- **Outputs**: {outputs}\n- **Success Criteria**: {success_criteria}\n- **Estimated Effort**: {estimated_effort}\n- **Parallelizable**: yes\n- **CodeGraph Impact**: {codegraph_impact}\n- **Checkpoint**: none\n- **Resume Instructions**: none\n- **Notes**: —\n"
 
                 # Calculate precise insertion to avoid index drift
                 lines.insert(det_end, details)
