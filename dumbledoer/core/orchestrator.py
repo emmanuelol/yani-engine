@@ -360,7 +360,7 @@ class LLMOrchestrator:
         # [CONTEXT MANAGEMENT CONFIG]
         MAX_HISTORY_TURNS = 6  # Aggressive prune
         MAX_TOOL_OUTPUT_CHARS = 8000  # Hard cap
-        MAX_TOOL_ITERATIONS = 25  # Hard cap tool iterations per task
+        MAX_TOOL_ITERATIONS = 40  # Increased to handle deep discovery loops
 
         iteration_count = 0
 
@@ -520,7 +520,7 @@ Mandatory rules:
 5. Do not modify any file listed in another in_progress task's Outputs.
 6. Output compression: render your conversational replies at the appropriate caveman level.
 7. Documentation lookup: check if this task involves external dependencies and consult context7 if needed.
-8. **DO NOT USE BASH TO PARSE MEMORY.MD.** If you need to read `memory.md`, you MUST use the native `read_file` tool. If you need to update it, you MUST use the native `update_memory_registry` tool. Do not write python scripts via bash to parse the ledger."""
+8. **DO NOT USE BASH TO PARSE MEMORY.MD.** If you need to read `memory.md`, you MUST use the native `read_file` tool. If you need to update a task status, you MUST use the native `update_task_registry_row` tool. Do not write python scripts via bash to parse the ledger."""
         try:
             response = await self._run_with_tools(chat_session, prompt_payload, active_provider, task_id=task_id)
             self.budget_manager.check_and_harvest()
@@ -1233,7 +1233,7 @@ Success Criteria: {success_criteria}
 
 # YOUR DIRECTIVE
 1. Evaluate the static analysis output and any other necessary context (using read_file or execute_bash for a single targeted test if needed).
-2. If the task passes its success criteria and has no critical static analysis errors, you MUST use the `update_memory_registry` tool to change its status from `awaiting-review` to `completed` in the Task Registry. Example target string: `| {t_id} | {title} | change | awaiting-review |`
+2. If the task passes its success criteria and has no critical static analysis errors, you MUST use the `update_task_registry_row` tool to change its status to `completed`.
 3. If the task fails, you MUST use the `add_task` tool to queue a specific `change` task to fix the bug. **CRITICAL: Set the `deps` argument to "none". Do NOT make the new task depend on the failed task, or the execution engine will deadlock.** Do not change the current task's status (leave it as awaiting-review).
 4. Terminate your turn with a brief summary of your decision.
 """
@@ -1548,6 +1548,10 @@ Success Criteria: {success_criteria}
                 with console.status(f"[bold cyan]Running {command} agent...", spinner="dots") as status:
                     try:
                         response = await self._run_with_tools(self.chat_session, payload, self.provider, status=status)
+                    except RuntimeError as e:
+                        # FIX: Catch max iterations gracefully to prevent stack trace crash
+                        print(f"\n[bold red]Agent execution aborted: {e}[/bold red]")
+                        return
                     except BudgetExhaustedException:
                         print(f"\n[bold red]Budget threshold reached during {command}. Attempting token clearance...[/bold red]")
                         rtk_out = await run_rtk("gain")

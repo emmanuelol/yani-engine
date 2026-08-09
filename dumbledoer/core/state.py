@@ -108,8 +108,9 @@ class CheckpointManager:
         summary = metadata.get("Change Summary", "")
         rationale = metadata.get("Rationale", "")
         row = f"| {timestamp} | {task_id} | {target_path} | {summary} | planned | {rationale} |"
-        async with get_registry_lock():
-            ASTMemoryMapper.append_to_markdown_table("memory.md", "Change Log", row)
+        async with _MEMORY_MUTEX:
+            async with get_registry_lock():
+                ASTMemoryMapper.append_to_markdown_table("memory.md", "Change Log", row)
         
     async def write_checkpoint_json(self, checkpoint_path: str, metadata: dict):
         os.makedirs(os.path.dirname(checkpoint_path), exist_ok=True)
@@ -123,8 +124,9 @@ class CheckpointManager:
         session_id = metadata.get("Session ID", "")
         files_snapshotted = metadata.get("Files Snapshotted", "")
         row = f"| {checkpoint_id} | {task_id} | {step} | {session_id} | {files_snapshotted} |"
-        async with get_registry_lock():
-            ASTMemoryMapper.append_to_markdown_table("memory.md", "Checkpoint Registry", row)
+        async with _MEMORY_MUTEX:
+            async with get_registry_lock():
+                ASTMemoryMapper.append_to_markdown_table("memory.md", "Checkpoint Registry", row)
             
     async def stage_tmp_write(self, tmp_path: str, content: str):
         os.makedirs(os.path.dirname(tmp_path), exist_ok=True)
@@ -140,12 +142,14 @@ class CheckpointManager:
         summary = metadata.get("Change Summary", "")
         rationale = metadata.get("Rationale", "")
         row = f"| {timestamp} | {task_id} | {target_path} | {summary} | applied | {rationale} |"
-        async with get_registry_lock():
-            ASTMemoryMapper.append_to_markdown_table("memory.md", "Change Log", row)
+        async with _MEMORY_MUTEX:
+            async with get_registry_lock():
+                ASTMemoryMapper.append_to_markdown_table("memory.md", "Change Log", row)
 
 class OrphanRecoveryScanner:
     async def run(self, unattended=False):
-        async with get_registry_lock():
+        async with _MEMORY_MUTEX:
+          async with get_registry_lock():
             tmp_dir = ".dumbledoer/tmp"
             chk_dir = ".dumbledoer/checkpoints"
             bak_dir = ".dumbledoer/rollbacks"

@@ -5,6 +5,10 @@ description: Start a new agent improvement session with discovery Q&A, CodeGraph
 
 Base directory for this skill: (project root where dumbledoer is installed)
 
+## Mission
+You are the Principal Systems Architect. Your job is strictly planning and initialization.
+**CRITICAL LATCH DIRECTIVE:** You are strictly forbidden from writing code, modifying repository source files, or attempting to execute any tasks in the codebase. Your sole responsibility during `/dumbledoer:start` is to map out the architecture, construct `memory.md`, and securely register the task plan.
+
 # /dumbledoer:start — Start an Agent Improvement Session
 
 **References** (read before Section 1): `dumbledoer/lib/common-preamble.md`, `dumbledoer/lib/memory-schema.md`, `dumbledoer/lib/codegraph-integration.md`, `dumbledoer/lib/budget-detection.md`, `dumbledoer/lib/compression-policy.md`
@@ -144,11 +148,11 @@ Based on the Q&A results (or the front-loaded prompt), compose:
 1. Generate a session ID (format and collision rules: `lib/common-preamble.md`).
 2. Create directories via bash: `mkdir -p .dumbledoer/sessions/ .dumbledoer/checkpoints/ .dumbledoer/rollbacks/ .dumbledoer/tmp/`
 3. Copy the template via bash (you MUST set the `sandbox_mode` argument to `"native"` for this specific command so it runs on the host): `cp ~/.gemini/config/plugins/dumbledoer/templates/memory-template.md memory.md`
-4. Use the `update_memory_registry` tool to inject your project specifics. Make independent tool calls to replace:
+4. Use the `read_file` tool to load the copied `memory.md`. Use the `write_file_with_review` tool to write the fully updated content back to `memory.md`, replacing the following placeholders:
    - `{{DATE}}` with today's date
    - `{{PROJECT_GOAL}}` with your composed Project Goal
    - `{{SCOPE_ITEMS}}` with your bulleted scope list
-5. Use `update_memory_registry` to update the Config block baseline metrics (from Section 3) and append the first Session Log row (`| {sessionId} | {ISO startTime} | — | — | active |`).
+5. In the same modified text, update the Config block baseline metrics (from Section 3) and append the first Session Log row (`| {sessionId} | {ISO startTime} | — | — | active |`).
 
 Wait for these updates to succeed before proceeding to Section 6b or 7.
 

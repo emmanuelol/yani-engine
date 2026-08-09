@@ -84,8 +84,9 @@ async def test_suite_2_orphan_recovery():
     
     with patch("subprocess.run"):
         with patch("rich.prompt.Prompt.ask", side_effect=["S", "file2.txt"]):
-            with patch("dumbledoer.cli.main.GUI_DIFF_ENABLED", True):
-                await cli.batch_diff_review([
+            with patch("dumbledoer.core.orchestrator.config.verbose", True):
+                with patch("dumbledoer.cli.main.GUI_DIFF_ENABLED", True, create=True):
+                    await cli.batch_diff_review([
                     f".dumbledoer/tmp/{uuid_base}1_file1.txt.tmp",
                     f".dumbledoer/tmp/{uuid_base}2_file2.txt.tmp",
                     f".dumbledoer/tmp/{uuid_base}3_file3.txt.tmp"

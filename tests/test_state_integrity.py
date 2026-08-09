@@ -3,7 +3,6 @@ import os
 import pytest
 import shutil
 from unittest.mock import patch
-from dumbledoer.core.state import update_memory_registry
 from dumbledoer.core.state import write_file_with_review
 from dumbledoer.core.state import ASTMemoryMapper
 

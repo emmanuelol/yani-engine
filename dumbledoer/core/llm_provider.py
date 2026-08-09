@@ -231,9 +231,23 @@ class LocalProvider(AbstractLLMProvider):
         return {"role": "tool", "name": tool_name, "content": f"Error: {error}"}
 
     def prune_history(self, session: Any, max_turns: int) -> tuple[Any, bool]:
-        if len(session["_history"]) > max_turns:
-            session["_history"] = [session["_history"][0]] + session["_history"][-(max_turns - 1):]
-            return session, True
+        history = session["_history"]
+        if len(history) > max_turns:
+            found_safe_boundary = False
+            slice_index = -(max_turns - 1)
+
+            # Walk backwards to find a clean 'user' boundary to prevent 400 Bad Requests
+            while abs(slice_index) < len(history):
+                item = history[slice_index]
+                if item.get("role") == "user":
+                    found_safe_boundary = True
+                    break
+                slice_index -= 1
+
+            if found_safe_boundary:
+                session["_history"] = [history[0]] + history[slice_index:]
+                return session, True
+
         return session, False
 
 class AntigravityProvider(AbstractLLMProvider):

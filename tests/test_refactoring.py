@@ -65,7 +65,9 @@ async def test_update_task_registry_concurrency():
 @pytest.mark.asyncio
 async def test_mock_llm_provider():
     provider = MockLLMProvider()
-    orchestrator = LLMOrchestrator(provider=provider)
+    orchestrator = LLMOrchestrator()
+    orchestrator.provider = provider
+    orchestrator.providers = {"cloud": provider}
     
     # Run the orchestrator with mock provider
     await orchestrator.execute_task("T-001", "Mock Task")
