@@ -74,8 +74,8 @@ class AbstractLLMProvider(ABC):
         pass
 
     @abstractmethod
-    def prune_history(self, session: Any, max_turns: int) -> bool:
-        """Prunes the session history to prevent context window bloat. Returns True if pruned."""
+    def prune_history(self, session: Any, max_turns: int) -> Any:
+        """Prunes the session history to prevent context window bloat. Returns the updated session."""
         pass
         
 class GeminiProvider(AbstractLLMProvider):
@@ -83,13 +83,17 @@ class GeminiProvider(AbstractLLMProvider):
         self.client = genai.Client(api_key=api_key)
         
     async def create_chat_session(self, model_name: str, tools: List[Any]) -> Any:
-        return self.client.aio.chats.create(
+        session = self.client.aio.chats.create(
             model=model_name,
             config={
                 "tools": tools,
                 "automatic_function_calling": {"disable": True}
             }
         )
+        # Store these so we can recreate the session during pruning
+        session._dumbledoer_model = model_name
+        session._dumbledoer_tools = tools
+        return session
         
     async def send_message(self, session: Any, payload: str | List[Any]) -> Any:
         return await session.send_message(payload)
@@ -116,13 +120,14 @@ class GeminiProvider(AbstractLLMProvider):
             response={"error": error}
         )
 
-    def prune_history(self, session: Any, max_turns: int) -> bool:
-        if hasattr(session, '_history') and len(session._history) > max_turns:
+    def prune_history(self, session: Any, max_turns: int) -> Any:
+        history = getattr(session, '_history', None)
+        if history is not None and len(history) > max_turns:
             # Ensure we slice at an even boundary so User/Model turn parity isn't broken
             found_safe_boundary = False
             slice_index = -(max_turns - 1)
-            while abs(slice_index) < len(session._history):
-                item = session._history[slice_index]
+            while abs(slice_index) < len(history):
+                item = history[slice_index]
                 item_role = getattr(item, 'role', None) or (item.get('role') if isinstance(item, dict) else None)
                 if item_role == 'model':
                     found_safe_boundary = True
@@ -130,9 +135,17 @@ class GeminiProvider(AbstractLLMProvider):
                 slice_index -= 1
 
             if found_safe_boundary:
-                session._history = [session._history[0]] + session._history[slice_index:]
-                return True
-        return False
+                new_history = [history[0]] + history[slice_index:]
+                # Recreate session cleanly instead of mutating private SDK state
+                new_session = self.client.aio.chats.create(
+                    model=getattr(session, '_dumbledoer_model', 'gemini-3.6-flash'),
+                    config={"tools": getattr(session, '_dumbledoer_tools', []), "automatic_function_calling": {"disable": True}},
+                    history=new_history
+                )
+                new_session._dumbledoer_model = getattr(session, '_dumbledoer_model', 'gemini-3.6-flash')
+                new_session._dumbledoer_tools = getattr(session, '_dumbledoer_tools', [])
+                return new_session
+        return session
 
 class LocalProvider(AbstractLLMProvider):
     """Interfaces with a local Ollama or vLLM instance using standard OpenAI schema."""
@@ -218,12 +231,11 @@ class LocalProvider(AbstractLLMProvider):
     def format_tool_error(self, tool_name: str, error: str) -> Any:
         return {"role": "tool", "name": tool_name, "content": f"Error: {error}"}
 
-    def prune_history(self, session: Any, max_turns: int) -> bool:
+    def prune_history(self, session: Any, max_turns: int) -> Any:
         if len(session["_history"]) > max_turns:
             # Keep system prompt/first instruction, prune the middle
             session["_history"] = [session["_history"][0]] + session["_history"][-(max_turns - 1):]
-            return True
-        return False
+        return session
 
 class AntigravityProvider(AbstractLLMProvider):
     """Hooks directly into the native 'agy' client to use native account credits."""
@@ -269,9 +281,8 @@ class AntigravityProvider(AbstractLLMProvider):
         from agy.core.types import ToolResult
         return ToolResult(name=tool_name, content=f"Error: {error}", is_error=True)
 
-    def prune_history(self, session: Any, max_turns: int) -> bool:
+    def prune_history(self, session: Any, max_turns: int) -> Any:
         # Utilize agy's internal memory management if available
         if hasattr(session, 'truncate_context'):
             session.truncate_context(keep_recent=max_turns)
-            return True
-        return False
+        return session

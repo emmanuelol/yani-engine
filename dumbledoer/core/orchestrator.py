@@ -444,7 +444,7 @@ class LLMOrchestrator:
             response = await self._send_message_with_backoff(chat_session, parts, active_provider)
 
             # [THE SLIDING WINDOW: History Pruning]
-            pruned = active_provider.prune_history(chat_session, MAX_HISTORY_TURNS)
+            chat_session = active_provider.prune_history(chat_session, MAX_HISTORY_TURNS)
             if status:
                 if pruned:
                     status.update("[bold magenta]Context optimization: Pruned stale chat history...")
@@ -1535,7 +1535,7 @@ Success Criteria: {success_criteria}
                 return
 
             else:
-                # FIX 1: Use the provider interface instead of hardcoded self.client
+                # FIX: Use the decoupled provider interface
                 self.chat_session = await self.provider.create_chat_session(
                     model_name=getattr(self, "model", config.model), 
                     tools=self._get_tools_for_command(command)
@@ -1543,7 +1543,6 @@ Success Criteria: {success_criteria}
                 
                 sys_inst = await self._get_system_instructions(command)
                 payload = f"{sys_inst}\n\nUSER DIRECTIVE: Execute the `{command}` command with arguments {args}. Follow your COMMAND SPECIFIC INSTRUCTIONS strictly. Do not ask for user input if a tool can accomplish the task."
-                
                 from rich.console import Console
                 console = Console()
                 with console.status(f"[bold cyan]Running {command} agent...", spinner="dots") as status:
@@ -1563,11 +1562,11 @@ Success Criteria: {success_criteria}
                             await self._graceful_shutdown()
                             return
                             
-                # FIX 2: Use provider parser instead of raw Gemini property to maintain decoupling
+                # FIX: Use provider parser instead of raw Gemini properties
                 unhandled_calls = self.provider.parse_tool_calls(response)
                 if unhandled_calls:
                     print("Function Calls that were not handled:", unhandled_calls)
-                    
+                
                 # Safely extract text depending on provider response structure
                 final_text = getattr(response, 'text', '') if hasattr(response, 'text') else str(response)
                 print(final_text)
