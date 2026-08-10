@@ -16,7 +16,7 @@ import difflib
 from dumbledoer.core.locks import _MEMORY_MUTEX, _REGISTRY_LOCK, get_registry_lock
 from dumbledoer.core.sandbox import execute_bash, _ensure_warm_sandbox, _teardown_warm_sandbox, run_rtk
 from dumbledoer.core.state import (
-    append_handoff_summary,
+    append_handoff_summary, append_session_log_row,
     get_registry_lock, ASTMemoryMapper, 
     update_task_registry_row, CheckpointManager, OrphanRecoveryScanner, 
     TaskRegistryState, read_file, write_file_with_review,
@@ -499,8 +499,11 @@ class LLMOrchestrator:
             await _ensure_warm_sandbox(task_id)
         print(f"Executing task {task_id}: {description}")
         
-        # ACTUALLY CLAIM THE TASK SO RESUME CAN FIND IT
-        await TaskRegistryState().update_task_status(task_id, "in_progress")
+        # Generate session ID and claim task with ownership
+        import datetime
+        session_id = f"S-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}"
+        await update_task_registry_row(task_id, "in_progress", session_id)
+        await append_session_log_row(session_id, task_id)
         
         # --- DYNAMIC VENDOR TIERING ---
         effort = "small"
@@ -565,9 +568,17 @@ Mandatory rules:
 6. Output compression: render your conversational replies at the appropriate caveman level.
 7. Documentation lookup: check if this task involves external dependencies and consult context7 if needed.
 8. **DO NOT USE BASH TO PARSE MEMORY.MD.** If you need to read `memory.md`, you MUST use the native `read_file` tool. If you need to update a task status, you MUST use the native `update_task_registry_row` tool. Do not write python scripts via bash to parse the ledger."""
+        # Map the parsed effort level to a safe iteration ceiling
+        effort_to_iterations = {
+            "small": 15,
+            "medium": 25,
+            "large": 40,
+        }
+        max_iters = effort_to_iterations.get(effort, 25)
+
         try:
-            # --- NEW FIX: CLAMP MAX ITERATIONS TO 7 ---
-            response = await self._run_with_tools(chat_session, prompt_payload, active_provider, task_id=task_id, max_iterations=7)
+            # Apply the dynamic iteration clamp
+            response = await self._run_with_tools(chat_session, prompt_payload, active_provider, task_id=task_id, max_iterations=max_iters)
             # ------------------------------------------
             self.budget_manager.check_and_harvest()
             print(f"Task {task_id} completed: {response.text}")
@@ -748,12 +759,16 @@ Mandatory rules:
                 if task_id:
                     await state.update_task_status(task_id, "pending")
             else:
-                # Option B: File already applied to disk, just clean up shadow .tmp
+                # Apply approved change: atomic rename from tmp to target
                 if os.path.exists(tmp_path):
-                    os.remove(tmp_path)
+                    os.makedirs(os.path.dirname(os.path.abspath(target_path)), exist_ok=True)
+                    await CheckpointManager().atomic_rename_to_target(tmp_path, target_path)
                 console.print(f"[green]Approved changes for {actual_filename}[/green]")
                 if task_id:
-                    await state.update_task_status(task_id, "completed")
+                    await update_task_registry_row(task_id, "completed")
+                    # Promote Change Log entry from planned to applied
+                    import datetime
+                    await CheckpointManager().log_applied_change(target_path, {"Task ID": task_id, "Timestamp": datetime.datetime.now().isoformat()})
 
         if rejected_files:
             await OrphanRecoveryScanner().run(True)
@@ -797,9 +812,30 @@ Mandatory rules:
                 console.print("[green]Tasks deferred.[/green]")
                 return
             else:
+                import json
                 for t_id in interrupted:
-                    await state.update_task_status(t_id, "pending")
-                console.print("[green]Locks cleared. Handing off to the native execution engine...[/green]")
+                    # Retrieve the task to find its linked Checkpoint ID
+                    task_data = tasks.get(t_id, {})
+                    checkpoint_id = task_data.get("checkpoint", "none").strip()
+                    
+                    if checkpoint_id != "none":
+                        chk_path = os.path.join(".dumbledoer", "checkpoints", f"{checkpoint_id}.json")
+                        if os.path.exists(chk_path):
+                            with open(chk_path, "r") as f:
+                                chk_data = json.load(f)
+                            # Restore files from the checkpoint JSON
+                            for file_path, file_content in chk_data.get("files", {}).items():
+                                os.makedirs(os.path.dirname(os.path.abspath(file_path)), exist_ok=True)
+                                with open(file_path, "w") as tf:
+                                    tf.write(file_content)
+                            console.print(f"[green]Restored file state from checkpoint {checkpoint_id} for {t_id}[/green]")
+                        else:
+                            console.print(f"[yellow]Checkpoint {checkpoint_id} referenced by {t_id} not found on disk. Resetting task.[/yellow]")
+                    
+                    # Clear owner and reset to pending for next wave
+                    await update_task_registry_row(t_id, "pending", "—")
+                
+                console.print("[green]Locks cleared and checkpoints restored. Handing off to execution engine...[/green]")
                 
                 # Natively chain into the execute command
                 command = "execute"
