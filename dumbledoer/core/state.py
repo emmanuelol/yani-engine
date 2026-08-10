@@ -158,6 +158,10 @@ class OrphanRecoveryScanner:
             tmp_dir = ".dumbledoer/tmp"
             chk_dir = ".dumbledoer/checkpoints"
             bak_dir = ".dumbledoer/rollbacks"
+            
+            if unattended:
+                from rich.console import Console
+                Console().print("[yellow]Unattended mode: Auto-resolving safe orphans, skipping interactive prompts.[/yellow]")
             os.makedirs(tmp_dir, exist_ok=True)
             os.makedirs(chk_dir, exist_ok=True)
             os.makedirs(bak_dir, exist_ok=True)
@@ -259,7 +263,8 @@ class TaskRegistryState:
                             "owner": parts[5],
                             "deps": [d.strip() for d in parts[6].split(',')] if parts[6] not in ('none', '—') else [],
                             "session": parts[7],
-                            "checkpoint": parts[8]
+                            "checkpoint": parts[8],
+                            "original_line": line
                         }
                     elif len(parts) >= 5:
                         tasks[parts[1]] = {
@@ -267,7 +272,8 @@ class TaskRegistryState:
                             "title": parts[2],
                             "type": parts[3] if len(parts) > 3 else "unknown",
                             "status": parts[4] if len(parts) > 4 else "unknown",
-                            "deps": []
+                            "deps": [],
+                            "original_line": line
                         }
             return tasks
         except FileNotFoundError:
@@ -394,7 +400,18 @@ async def write_file_with_review(path: str, content: str, task_id: str) -> str:
         return f"Error in write_file_with_review for {path}: {e}"
 
 async def register_task_batch(tasks: list[dict]) -> str:
-    """Registers a batch of atomic tasks to the memory.md Task Registry safely and atomically."""
+    """Registers a batch of atomic tasks to the memory.md Task Registry safely and atomically.
+    
+    CRITICAL: The 'tasks' array MUST contain dictionaries with EXACTLY these keys:
+    - 'title' (str)
+    - 'task_type' (str: 'change', 'analysis', 'validation')
+    - 'deps' (str: comma-separated IDs like 'T-001' or 'none')
+    - 'description' (str: detailed explanation)
+    - 'outputs' (str: comma-separated file paths)
+    - 'success_criteria' (str: concrete evaluation metric)
+    - 'estimated_effort' (str: 'small', 'medium', 'large')
+    - 'codegraph_impact' (str: blast radius summary)
+    """
     async with _MEMORY_MUTEX:
         async with get_registry_lock():
             try:

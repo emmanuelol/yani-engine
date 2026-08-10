@@ -492,6 +492,9 @@ class LLMOrchestrator:
         return response
 
     async def execute_task(self, task_id: str, description: str):
+        from dumbledoer.core.sandbox import _ensure_warm_sandbox
+        if "dumbledoer-base" in getattr(self, "sandbox_mode", "dumbledoer-base"):
+            await _ensure_warm_sandbox(task_id)
         print(f"Executing task {task_id}: {description}")
         
         # ACTUALLY CLAIM THE TASK SO RESUME CAN FIND IT
@@ -950,16 +953,20 @@ Mandatory rules:
                                 queue.put_nowait(t)
 
                             async def worker():
-                                while not queue.empty():
+                                while True:
+                                    try:
+                                        t = queue.get_nowait()
+                                    except asyncio.QueueEmpty:
+                                        break
                                     try:
                                         self.budget_manager.check_and_harvest()
                                     except BudgetExhaustedException:
+                                        queue.task_done()
                                         while not queue.empty():
                                             queue.get_nowait()
                                             queue.task_done()
                                         break
 
-                                    t = await queue.get()
                                     try:
                                         await self.execute_task(t['id'], t.get('title', ''))
                                     except BudgetExhaustedException:
@@ -979,11 +986,14 @@ Mandatory rules:
                             safe_parallel = 3 if max_parallel <= 0 else max_parallel
                             num_workers = min(safe_parallel, len(wave))
                             workers = [asyncio.create_task(worker()) for _ in range(num_workers)]
-                            res = await asyncio.gather(*workers, return_exceptions=False)
+                            done, pending = await asyncio.wait(workers, return_when=asyncio.FIRST_EXCEPTION)
 
-                            for r in res:
-                                if isinstance(r, BudgetExhaustedException):
-                                    raise r
+                            for p in pending:
+                                p.cancel()
+
+                            for d in done:
+                                if d.exception():
+                                    raise d.exception()
                     except BudgetExhaustedException:
                         await self._graceful_shutdown()
                         break

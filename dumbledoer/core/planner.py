@@ -35,10 +35,12 @@ class WavePlanner:
         tasks = list(tasks_dict.values())
         
         # Apply the explicit bounding index constraint
+        import re
+
         pending_tasks = {
             t['id']: t for t in tasks 
             if "pending" in t['status'] 
-            and int(t['id'].replace("T-", "")) >= self.start_at_index
+            and int(re.search(r'\d+', t['id']).group()) >= self.start_at_index
         }
         completed_task_ids = {t['id'] for t in tasks if "completed" in t['status']}
         
