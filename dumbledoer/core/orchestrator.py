@@ -1347,14 +1347,16 @@ Success Criteria: {success_criteria}
                 return
 
             elif command == "status":
-                is_verbose = "--verbose" in args or "-v" in args
+                is_verbose = config.verbose or "--verbose" in args or "-v" in args
                 
                 if not os.path.exists("memory.md"):
                     print("Error: memory.md not found. Run /dumbledoer:start to begin.")
                     return
 
-                with open("memory.md", "r", encoding="utf-8") as f:
-                    content = f.read()
+                from dumbledoer.core.locks import get_registry_lock
+                async with get_registry_lock():
+                    with open("memory.md", "r", encoding="utf-8") as f:
+                        content = f.read()
 
                 # 1. Parse Project Goal
                 goal_start, goal_end = ASTMemoryMapper.locate_heading_block(content, "##", "Project Goal")
@@ -1422,6 +1424,8 @@ Success Criteria: {success_criteria}
                         cg_symbols = sym_match.group(1) if sym_match else "unknown"
                         cg_healthy = "✅ healthy" if "healthy" in cg_out.lower() or "ok" in cg_out.lower() else "⚠ stale"
                         cg_sync = "recently" # Simplification for native speed
+                    except subprocess.TimeoutExpired:
+                        cg_healthy = "⚠ stale"
                     except Exception:
                         cg_healthy = "⚠ degraded"
 
@@ -1436,29 +1440,32 @@ Success Criteria: {success_criteria}
                 if not os.path.exists(know_path):
                     know_str = f"Knowledge: no registry — /dumbledoer:start creates it"
                 else:
-                    k_stats = {"decision": 0, "success": 0, "failure": 0, "constraint": 0, "insight": 0, "superseded": 0}
-                    k_total, k_last_date = 0, "N/A"
-                    import glob, re
-                    entries = glob.glob(os.path.join(know_path, "entries", "*.md"))
-                    dates = []
-                    for e in entries:
-                        try:
-                            with open(e, "r", encoding="utf-8") as kf:
-                                fm = re.match(r'^---\n(.*?)\n---', kf.read(), re.DOTALL)
-                                if fm:
-                                    fm_text = fm.group(1).lower()
-                                    t_match = re.search(r'type:\s*(\w+)', fm_text)
-                                    s_match = re.search(r'status:\s*(\w+)', fm_text)
-                                    d_match = re.search(r'created:\s*([^\n]+)', fm_text)
-                                    
-                                    if t_match and t_match.group(1) in k_stats: k_stats[t_match.group(1)] += 1
-                                    if s_match and "superseded" in s_match.group(1): k_stats["superseded"] += 1
-                                    if d_match: dates.append(d_match.group(1).strip())
-                                    k_total += 1
-                        except Exception: pass
-                        
-                    if dates: k_last_date = max(dates)
-                    know_str = f"Knowledge: {k_total} entries ({k_stats['decision']} decisions, {k_stats['success']} successes, {k_stats['failure']} failures, {k_stats['constraint']} constraints, {k_stats['insight']} insights; {k_stats['superseded']} superseded) | last entry {k_last_date} | {know_path}"
+                    def _parse_knowledge():
+                        k_stats = {"decision": 0, "success": 0, "failure": 0, "constraint": 0, "insight": 0, "superseded": 0}
+                        k_total, k_last_date = 0, "N/A"
+                        import glob, re
+                        entries = glob.glob(os.path.join(know_path, "entries", "*.md"))
+                        dates = []
+                        for e in entries:
+                            try:
+                                with open(e, "r", encoding="utf-8") as kf:
+                                    fm = re.match(r'^---\n(.*?)\n---', kf.read(), re.DOTALL)
+                                    if fm:
+                                        fm_text = fm.group(1).lower()
+                                        t_match = re.search(r'type:\s*(\w+)', fm_text)
+                                        s_match = re.search(r'status:\s*(\w+)', fm_text)
+                                        d_match = re.search(r'created:\s*([^\n]+)', fm_text)
+                                        
+                                        if t_match and t_match.group(1) in k_stats: k_stats[t_match.group(1)] += 1
+                                        if s_match and "superseded" in s_match.group(1): k_stats["superseded"] += 1
+                                        if d_match: dates.append(d_match.group(1).strip())
+                                        k_total += 1
+                            except Exception: pass
+                            
+                        if dates: k_last_date = max(dates)
+                        return f"Knowledge: {k_total} entries ({k_stats['decision']} decisions, {k_stats['success']} successes, {k_stats['failure']} failures, {k_stats['constraint']} constraints, {k_stats['insight']} insights; {k_stats['superseded']} superseded) | last entry {k_last_date} | {know_path}"
+                    
+                    know_str = await asyncio.to_thread(_parse_knowledge)
 
                 # 7. Print Footers
                 print(f"\nLast session: {last_session_id} — {last_outcome} ({last_end})")
