@@ -1417,7 +1417,7 @@ Success Criteria: {success_criteria}
                 if os.path.exists(".codegraph"):
                     try:
                         import subprocess, re
-                        cg_out = (await asyncio.to_thread(subprocess.run, ["npx", "-y", "--package=@colbymchenry/codegraph", "codegraph", "status"], capture_output=True, text=True)).stdout
+                        cg_out = (await asyncio.to_thread(subprocess.run, ["npx", "-y", "--package=@colbymchenry/codegraph", "codegraph", "status"], capture_output=True, text=True, timeout=3)).stdout
                         sym_match = re.search(r"(\d+)\s+symbols", cg_out)
                         cg_symbols = sym_match.group(1) if sym_match else "unknown"
                         cg_healthy = "✅ healthy" if "healthy" in cg_out.lower() or "ok" in cg_out.lower() else "⚠ stale"
