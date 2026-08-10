@@ -493,6 +493,7 @@ class LLMOrchestrator:
 
     async def execute_task(self, task_id: str, description: str):
         from dumbledoer.core.sandbox import _ensure_warm_sandbox
+        print(f"Initializing isolated sandbox for task {task_id}...") # NEW: Visibility
         if "dumbledoer-base" in getattr(self, "sandbox_mode", "dumbledoer-base"):
             await _ensure_warm_sandbox(task_id)
         print(f"Executing task {task_id}: {description}")
@@ -929,6 +930,13 @@ Mandatory rules:
                     if not waves:
                         if wave_index == 0:
                             print("No pending tasks to execute.")
+                            # NEW: Detect ghosted tasks from a manual kill
+                            state = TaskRegistryState()
+                            tasks_dict = await state.load_tasks()
+                            stuck = [t_id for t_id, t in tasks_dict.items() if t['status'] in ['in_progress', 'interrupted']]
+                            if stuck:
+                                print(f"⚠ Found tasks stuck in 'in_progress' from a previous aborted run: {', '.join(stuck)}")
+                                print("Run '/dumbledoer resume' to safely clear the locks and execute them.")
                         break
                     wave = waves[0]
                     wave_index += 1
@@ -958,26 +966,42 @@ Mandatory rules:
                                         t = queue.get_nowait()
                                     except asyncio.QueueEmpty:
                                         break
+                                        
+                                    task_id = t['id']
+                                    task_title = t.get('title', '')
+
                                     try:
                                         self.budget_manager.check_and_harvest()
                                     except BudgetExhaustedException:
                                         queue.task_done()
-                                        while not queue.empty():
-                                            queue.get_nowait()
-                                            queue.task_done()
+                                        while True:
+                                            try:
+                                                queue.get_nowait()
+                                                queue.task_done()
+                                            except asyncio.QueueEmpty:
+                                                break
                                         break
 
+                                    # Visual Log: Task Claimed / Starting
+                                    console.print(f"  [bold yellow]🔄 [IN_PROGRESS][/bold yellow] [cyan]{task_id}[/cyan]: {task_title}")
+
                                     try:
-                                        await self.execute_task(t['id'], t.get('title', ''))
+                                        await self.execute_task(task_id, task_title)
+                                        # Visual Log: Task Successfully Completed & Awaiting Review
+                                        console.print(f"  [bold green]✅ [AWAITING_REVIEW][/bold green] [cyan]{task_id}[/cyan]: {task_title}")
                                     except BudgetExhaustedException:
-                                        while not queue.empty():
-                                            queue.get_nowait()
-                                            queue.task_done()
+                                        console.print(f"  [bold magenta]⏸ [INTERRUPTED][/bold magenta] [cyan]{task_id}[/cyan]: Budget exhausted")
+                                        while True:
+                                            try:
+                                                queue.get_nowait()
+                                                queue.task_done()
+                                            except asyncio.QueueEmpty:
+                                                break
                                         raise
                                     except Exception as e:
-                                        # FIX: Catch all other exceptions so tasks don't get stuck in 'in_progress'
-                                        print(f"\n[bold red]Task {t['id']} failed with exception: {e}[/bold red]")
-                                        await TaskRegistryState().update_task_status(t['id'], "error")
+                                        # Visual Log: Task Failure
+                                        console.print(f"  [bold red]❌ [ERROR][/bold red] [cyan]{task_id}[/cyan]: {e}")
+                                        await TaskRegistryState().update_task_status(task_id, "error")
                                     finally:
                                         progress.advance(wave_task)
                                         queue.task_done()

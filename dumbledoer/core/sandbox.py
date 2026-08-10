@@ -36,7 +36,7 @@ async def _ensure_warm_sandbox(task_id: str = None, image: str = "dumbledoer-bas
             os.makedirs(shadow_dir, exist_ok=True)
             
             # Native Python shadow clone
-            ignore_patterns = shutil.ignore_patterns(".git", ".venv", ".pytest_cache", "__pycache__", "node_modules")
+            ignore_patterns = shutil.ignore_patterns(".git", ".venv", "venv", "env", ".pytest_cache", "__pycache__", "node_modules", ".dumbledoer", ".codegraph")
             shutil.copytree(os.getcwd(), shadow_dir, ignore=ignore_patterns, dirs_exist_ok=True)
             
             sandbox_proc = subprocess.Popen(
