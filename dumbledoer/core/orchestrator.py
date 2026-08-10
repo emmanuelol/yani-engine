@@ -966,7 +966,8 @@ Mandatory rules:
                                         t = queue.get_nowait()
                                     except asyncio.QueueEmpty:
                                         break
-                                        
+
+                                    # Safely extract task details
                                     task_id = t['id']
                                     task_title = t.get('title', '')
 
@@ -974,33 +975,27 @@ Mandatory rules:
                                         self.budget_manager.check_and_harvest()
                                     except BudgetExhaustedException:
                                         queue.task_done()
-                                        while True:
-                                            try:
-                                                queue.get_nowait()
-                                                queue.task_done()
-                                            except asyncio.QueueEmpty:
-                                                break
+                                        while not queue.empty():
+                                            queue.get_nowait()
+                                            queue.task_done()
                                         break
 
-                                    # Visual Log: Task Claimed / Starting
-                                    console.print(f"  [bold yellow]🔄 [IN_PROGRESS][/bold yellow] [cyan]{task_id}[/cyan]: {task_title}")
+                                    # Visual Log: Task Claimed / Starting (Routed through progress to prevent UI glitches)
+                                    progress.console.print(f"  [bold yellow]🔄 [IN_PROGRESS][/bold yellow] [cyan]{task_id}[/cyan]: {task_title}")
 
                                     try:
                                         await self.execute_task(task_id, task_title)
                                         # Visual Log: Task Successfully Completed & Awaiting Review
-                                        console.print(f"  [bold green]✅ [AWAITING_REVIEW][/bold green] [cyan]{task_id}[/cyan]: {task_title}")
+                                        progress.console.print(f"  [bold green]✅ [AWAITING_REVIEW][/bold green] [cyan]{task_id}[/cyan]: {task_title}")
                                     except BudgetExhaustedException:
-                                        console.print(f"  [bold magenta]⏸ [INTERRUPTED][/bold magenta] [cyan]{task_id}[/cyan]: Budget exhausted")
-                                        while True:
-                                            try:
-                                                queue.get_nowait()
-                                                queue.task_done()
-                                            except asyncio.QueueEmpty:
-                                                break
+                                        progress.console.print(f"  [bold magenta]⏸ [INTERRUPTED][/bold magenta] [cyan]{task_id}[/cyan]: Budget exhausted")
+                                        while not queue.empty():
+                                            queue.get_nowait()
+                                            queue.task_done()
                                         raise
                                     except Exception as e:
                                         # Visual Log: Task Failure
-                                        console.print(f"  [bold red]❌ [ERROR][/bold red] [cyan]{task_id}[/cyan]: {e}")
+                                        progress.console.print(f"  [bold red]❌ [ERROR][/bold red] [cyan]{task_id}[/cyan]: {e}")
                                         await TaskRegistryState().update_task_status(task_id, "error")
                                     finally:
                                         progress.advance(wave_task)
