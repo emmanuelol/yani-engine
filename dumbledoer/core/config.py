@@ -11,8 +11,8 @@ def _is_local_alive(port=11434):
 
 class AppConfig(BaseSettings):
     # API Keys & Auth
-    gemini_api_key: str = None
-    google_api_key: str = None
+    gemini_api_key: str | None = None
+    google_api_key: str | None = None
     
     # Execution Settings
     start_at_index: int = 0
@@ -24,7 +24,7 @@ class AppConfig(BaseSettings):
     budget_threshold_pct: int = 80
     
     class Config:
-        env_file = ".env"
+        env_file = (os.path.expanduser("~/.gemini/config/plugins/dumbledoer/.env"), ".env")
         env_file_encoding = "utf-8"
         extra = "ignore"
 
