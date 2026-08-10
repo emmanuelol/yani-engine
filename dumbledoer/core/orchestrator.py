@@ -1265,22 +1265,13 @@ Mandatory rules:
                     py_files = [f for f in outputs if f.endswith(".py") and os.path.exists(f)]
                     
                     for pf in py_files:
-                        try:
-                            # Primary Backend: uvx ruff check
-                            import subprocess
-                            proc = subprocess.run(["uvx", "ruff", "check", pf], capture_output=True, text=True)
-                            out = proc.stdout + proc.stderr
-                            if proc.returncode != 0 and "executable file not found" in proc.stderr.lower():
-                                raise FileNotFoundError("uvx not found")
+                        import subprocess
+                        proc = subprocess.run(["uvx", "ruff", "check", pf], capture_output=True, text=True)
+                        out = proc.stdout + proc.stderr
+                        if proc.returncode != 0 and "executable file not found" in proc.stderr.lower():
+                            static_analysis_output += f"--- Ruff Check for {pf} ---\nCRITICAL ERROR: 'uvx' not found on system. Static analysis failed. Please flag this as a failure.\n"
+                        else:
                             static_analysis_output += f"--- Ruff Check for {pf} ---\n{out.strip() or 'Syntax OK. No issues found.'}\n"
-                        except FileNotFoundError:
-                            # Safety Net Backend: Built-in py_compile
-                            proc1 = subprocess.run([sys.executable, "-m", "py_compile", pf], capture_output=True, text=True)
-                            out = proc1.stdout + proc1.stderr
-                            if proc1.returncode != 0:
-                                static_analysis_output += f"--- py_compile for {pf} ---\n{out.strip()}\n"
-                            else:
-                                static_analysis_output += f"--- py_compile for {pf} ---\nSyntax OK.\n"
                                 
                     if not static_analysis_output.strip():
                         static_analysis_output = "No Python files modified, or no static analysis warnings found."
@@ -1304,7 +1295,7 @@ Success Criteria: {success_criteria}
 # YOUR DIRECTIVE
 1. Evaluate the static analysis output and any other necessary context (using read_file or execute_bash for a single targeted test if needed).
 2. If the task passes its success criteria and has no critical static analysis errors, you MUST use the `update_task_registry_row` tool to change its status to `completed`.
-3. If the task fails, you MUST use the `add_task` tool to queue a specific `change` task to fix the bug. **CRITICAL: Set the `deps` argument to "none". Do NOT make the new task depend on the failed task, or the execution engine will deadlock.** Do not change the current task's status (leave it as awaiting-review).
+3. If the task fails, you MUST use the `register_task_batch` tool to queue a specific `change` task to fix the bug. CRITICAL: Set the `deps` argument to "none". Do NOT make the new task depend on the failed task, or the execution engine will deadlock. Do not change the current task's status (leave it as awaiting-review).
 4. Terminate your turn with a brief summary of your decision.
 """
                     
@@ -1312,7 +1303,8 @@ Success Criteria: {success_criteria}
                     
                     with console.status(f"[cyan]LLM Evaluator analyzing {t_id}...[/cyan]", spinner="dots") as status:
                         try:
-                            response = await self._run_with_tools(chat_session, prompt_payload, self.provider, status=status)
+                            # FIX: Enforce max_iterations=7 to prevent token bleed
+                            response = await self._run_with_tools(chat_session, prompt_payload, self.provider, status=status, max_iterations=7)
                             if hasattr(response, 'usage_metadata') and response.usage_metadata:
                                 self.budget_manager.add_tokens(getattr(response.usage_metadata, 'total_token_count', 0))
                             self.budget_manager.check_and_harvest()
