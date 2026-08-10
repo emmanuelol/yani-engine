@@ -343,7 +343,8 @@ class LLMOrchestrator:
                 return await active_provider.send_message(chat_session, payload)
             except Exception as e:
                 error_str = str(e)
-                if "429" in error_str or "RESOURCE_EXHAUSTED" in error_str or "Quota exceeded" in error_str:
+                # FIX: Added "500", "INTERNAL", and "503" to the retry conditions
+                if "429" in error_str or "RESOURCE_EXHAUSTED" in error_str or "Quota exceeded" in error_str or "500" in error_str or "INTERNAL" in error_str or "503" in error_str:
                     if attempt == max_retries - 1:
                         raise
                     match = re.search(r"retry in (\d+)s", error_str)
@@ -353,7 +354,7 @@ class LLMOrchestrator:
                         delay = base_delay * (1.5 ** attempt) + random.uniform(0, 5)
                     if total_elapsed + delay > max_total_wait:
                         raise RuntimeError(f"Rate limit backoff exceeded {max_total_wait}s total wait ({total_elapsed:.0f}s elapsed)")
-                    print(f"API Rate Limit (429) hit. Task pausing for {delay:.1f}s before retry {attempt+1}/{max_retries}...")
+                    print(f"API Rate Limit/Internal Error hit. Task pausing for {delay:.1f}s before retry {attempt+1}/{max_retries}...")
                     total_elapsed += delay
                     await asyncio.sleep(delay)
                 else:
@@ -1353,19 +1354,25 @@ Success Criteria: {success_criteria}
                     print("Error: memory.md not found. Run /dumbledoer:start to begin.")
                     return
 
-                from dumbledoer.core.locks import get_registry_lock
+                from dumbledoer.core.locks import get_registry_lock, _MEMORY_MUTEX
                 async with get_registry_lock():
-                    with open("memory.md", "r", encoding="utf-8") as f:
-                        content = f.read()
+                    async with _MEMORY_MUTEX:
+                        with open("memory.md", "r", encoding="utf-8") as f:
+                            content = f.read()
 
                 # 1. Parse Project Goal
                 goal_start, goal_end = ASTMemoryMapper.locate_heading_block(content, "##", "Project Goal")
                 project_goal = "None"
                 if goal_start != -1:
+                    goal_lines = []
                     for line in content.splitlines()[goal_start+1:goal_end]:
-                        if line.strip() and not line.startswith("#"):
-                            project_goal = line.strip().split(".")[0] + "."
+                        l_strip = line.strip()
+                        if l_strip and not l_strip.startswith("#"):
+                            goal_lines.append(l_strip)
+                        elif not l_strip and goal_lines:
                             break
+                    if goal_lines:
+                        project_goal = " ".join(goal_lines)
 
                 # 2. Parse Session & Budget Data
                 sess_start, sess_end = ASTMemoryMapper.locate_heading_block(content, "##", "Session Log")
@@ -1375,7 +1382,7 @@ Success Criteria: {success_criteria}
                     if sess_lines:
                         parts = [p.strip() for p in sess_lines[-1].split("|")]
                         if len(parts) >= 6:
-                            last_session_id, last_end, last_outcome = parts[1], parts[3], parts[4]
+                            last_session_id, last_end, last_outcome = parts[1], parts[3], parts[5]
 
                 tokens = self.budget_manager.estimated_tokens
                 limit = self.budget_manager.budget_limit
@@ -1390,6 +1397,16 @@ Success Criteria: {success_criteria}
                 icons = {"completed": "✅", "in_progress": "🔄", "interrupted": "⏸", "pending": "⬜", "blocked": "🚫", "deferred": "💤"}
                 tasks = await TaskRegistryState().load_tasks()
                 
+                archive_index = {}
+                if is_verbose:
+                    ai_start, ai_end = ASTMemoryMapper.locate_heading_block(content, "##", "Archive Index")
+                    if ai_start != -1:
+                        for line in content.splitlines()[ai_start+1:ai_end]:
+                            if line.strip().startswith("|") and "---" not in line and "Session ID" not in line:
+                                ai_parts = [p.strip() for p in line.split("|")]
+                                if len(ai_parts) > 4:
+                                    archive_index[ai_parts[1]] = ai_parts[3]
+                
                 for t_id, t in tasks.items():
                     parts = [p.strip() for p in t.get('original_line', '').split("|")]
                     t_type = parts[3] if len(parts) > 3 else "unknown"
@@ -1400,19 +1417,28 @@ Success Criteria: {success_criteria}
                     title = (t['title'][:47] + "...") if len(t['title']) > 50 else t['title']
                     
                     step_note = ""
-                    if "in_progress" in t_status.lower() and len(parts) > 8:
-                        chk_id = parts[8]
+                    if ("in_progress" in t_status.lower() or "interrupted" in t_status.lower()) and len(parts) > 8:
+                        chk_id = parts[8].strip()
                         if "step" in chk_id:
-                            step_note = f"(step {chk_id.split('step')[1].split('-')[0]})"
+                            step_parts = chk_id.split('step')
+                            if len(step_parts) > 1:
+                                try:
+                                    step_note = f"(step {step_parts[1].split('-')[0]})"
+                                except IndexError:
+                                    pass
 
                     print(f"  {icon} {t_id}  {title:<50} [{t_type}]  {owner}  {step_note}")
                     
                     if is_verbose:
-                        # Extract and print detailed task block
-                        t_start, t_end = ASTMemoryMapper.locate_heading_block(content, "###", t_id)
-                        if t_start != -1:
-                            print("\n    " + "\n    ".join(content.splitlines()[t_start+1:t_end]))
-                            print("")
+                        if len(parts) > 8 and "archived" in parts[8].lower():
+                            archive_file = archive_index.get(owner, f".dumbledoer/archive/{owner}.md")
+                            print(f"\n    [Archived] Task details moved to {archive_file}\n")
+                        else:
+                            # Extract and print detailed task block
+                            t_start, t_end = ASTMemoryMapper.locate_heading_block(content, "###", t_id)
+                            if t_start != -1:
+                                print("\n    " + "\n    ".join(content.splitlines()[t_start+1:t_end]))
+                                print("")
 
                 # 5. Fetch CodeGraph Status Natively
                 cg_healthy, cg_symbols, cg_sync = "⚠ not initialized — run codegraph init -i", "0", "N/A"
