@@ -395,6 +395,15 @@ async def write_file_with_review(path: str, content: str, task_id: str) -> str:
         with open(path, "w") as f:
             f.write(content)
             
+        # --- NEW FIX: SANDBOX SPLIT-BRAIN SYNC ---
+        # Propagate the file update into the active Docker shadow clone
+        shadow_path = os.path.join(f".dumbledoer/shadow_{task_id}", path)
+        if os.path.exists(f".dumbledoer/shadow_{task_id}"):
+            os.makedirs(os.path.dirname(os.path.abspath(shadow_path)), exist_ok=True)
+            with open(shadow_path, "w") as f:
+                f.write(content)
+        # -----------------------------------------
+            
         return f"Successfully applied changes to {path} (Rollback: {rollback_path}, Review: {tmp_path})"
     except Exception as e:
         return f"Error in write_file_with_review for {path}: {e}"

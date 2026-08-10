@@ -554,7 +554,9 @@ Mandatory rules:
 7. Documentation lookup: check if this task involves external dependencies and consult context7 if needed.
 8. **DO NOT USE BASH TO PARSE MEMORY.MD.** If you need to read `memory.md`, you MUST use the native `read_file` tool. If you need to update a task status, you MUST use the native `update_task_registry_row` tool. Do not write python scripts via bash to parse the ledger."""
         try:
-            response = await self._run_with_tools(chat_session, prompt_payload, active_provider, task_id=task_id)
+            # --- NEW FIX: CLAMP MAX ITERATIONS TO 7 ---
+            response = await self._run_with_tools(chat_session, prompt_payload, active_provider, task_id=task_id, max_iterations=7)
+            # ------------------------------------------
             self.budget_manager.check_and_harvest()
             print(f"Task {task_id} completed: {response.text}")
             await TaskRegistryState().update_task_status(task_id, "awaiting-review")
