@@ -15,12 +15,12 @@ class AppConfig(BaseSettings):
     google_api_key: str | None = None
     
     # Execution Settings
-    start_at_index: int = 7
+    start_at_index: int = 1  # FIX: Changed from 7 to 1
     verbose: bool = False
     model: str = "gemini-3.6-flash"
     
     # Budget Defaults
-    budget_limit: int = 5000000
+    budget_limit: int = 50000000
     budget_threshold_pct: int = 80
     
     class Config:
