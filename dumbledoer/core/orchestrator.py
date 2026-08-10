@@ -362,12 +362,12 @@ class LLMOrchestrator:
 
     async def _run_with_tools(self, chat_session, initial_payload, active_provider, status=None, task_id=None, max_iterations=15):
         import time
-        
         print("\n📡 [NETWORK] Dispatching payload to LLM... (Awaiting response)")
         t0 = time.time()
-        response = await self._send_message_with_backoff(chat_session, initial_payload, active_provider)
-        print(f"⏱️ [NETWORK] LLM responded in {time.time() - t0:.1f}s")
         
+        response = await self._send_message_with_backoff(chat_session, initial_payload, active_provider)
+        
+        print(f"⏱️ [NETWORK] LLM responded in {time.time() - t0:.1f}s")
         degraded_consecutive = 0  # Track consecutive degraded tool calls
 
         # [CONTEXT MANAGEMENT CONFIG]
@@ -441,7 +441,7 @@ class LLMOrchestrator:
                         ))
                     except Exception as e:
                         msg = f"Tool {tool_name} failed: {e}"
-                        print(f"⚠️ [TOOL ERROR] {msg}") # Force print to standard output
+                        print(f"⚠️ [TOOL ERROR] {msg}") # Force print to stdout
                         if not status: print(msg)
                         safe_e = str(e)
                         import re
@@ -466,7 +466,9 @@ class LLMOrchestrator:
 
             print(f"\n📡 [NETWORK] Returning {len(parts)} tool result(s) to LLM... (Awaiting response)")
             t1 = time.time()
+            
             response = await self._send_message_with_backoff(chat_session, parts, active_provider)
+            
             print(f"⏱️ [NETWORK] LLM responded in {time.time() - t1:.1f}s")
 
             # [THE SLIDING WINDOW: History Pruning]
