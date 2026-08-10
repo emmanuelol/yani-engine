@@ -1386,7 +1386,7 @@ Success Criteria: {success_criteria}
                 print("Task Registry:")
 
                 # 4. Parse and Format Task Registry
-                icons = {"completed": "✅", "in_progress": "🔄", "interrupted": "⏸", "pending": "⬜", "blocked": "🚫", "deferred": "💤"}
+                icons = {"completed": "✅", "in_progress": "🔄", "interrupted": "⏸", "pending": "⬜", "blocked": "🚫", "deferred": "💤", "awaiting-review": "⏳"}
                 tasks = await TaskRegistryState().load_tasks()
                 
                 archive_index = {}

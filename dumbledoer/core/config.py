@@ -15,7 +15,7 @@ class AppConfig(BaseSettings):
     google_api_key: str | None = None
     
     # Execution Settings
-    start_at_index: int = 0
+    start_at_index: int = 7
     verbose: bool = False
     model: str = "gemini-3.6-flash"
     
