@@ -228,25 +228,8 @@ class LLMOrchestrator:
             print(f"Context7 MCP degraded: {e}", file=sys.stderr)
 
         existing_tools = [getattr(t, "__name__", "") for t in self.gemini_tools]
-        
-        EXPECTED_FALLBACKS = [
-            "codegraph_impact", "codegraph_search", "codegraph_callers", 
-            "codegraph_affected", "codegraph_context", "codegraph_node",
-            "codegraph_callees", "codegraph_files", "codegraph_status",
-            "context7_resolve_library_id", "context7_query_docs", "context7_search_codebase"
-        ]
-        
-        for missing_tool in EXPECTED_FALLBACKS:
-            if missing_tool not in existing_tools:
-                def create_dummy(name):
-                    async def dummy_fallback(*args, **kwargs) -> str:
-                        return f"Error: [{name} Degraded] Tool not available. DO NOT retry this tool — use read_file or execute_bash instead."
-                    dummy_fallback.__name__ = name
-                    dummy_fallback.__qualname__ = name
-                    dummy_fallback.__doc__ = f"Fallback dummy for {name}."
-                    return dummy_fallback
-                
-                self.gemini_tools.append(create_dummy(missing_tool))
+        # Flag if the real codegraph tools successfully mounted
+        self.is_codegraph_active = any(name.startswith("codegraph_") for name in existing_tools)
 
     async def _graceful_shutdown(self, task_id: str = None):
         print("CRITICAL: Budget Exhausted. Initiating Graceful Shutdown Sequence...")
@@ -546,13 +529,17 @@ class LLMOrchestrator:
         system_instructions = await self._get_system_instructions()
         
         # --- PRE-LOAD MANDATORY PROTOCOLS TO PREVENT TOOL-CALL BURN ---
-        cg_protocol = await read_file(os.path.join(self.plugin_root, 'lib', 'codegraph-integration.md'))
         cp_protocol = await read_file(os.path.join(self.plugin_root, 'lib', 'checkpoint-protocol.md'))
+        
+        if getattr(self, "is_codegraph_active", False):
+            cg_protocol = await read_file(os.path.join(self.plugin_root, 'lib', 'codegraph-integration.md'))
+            cg_injection = f"# CODEGRAPH INTEGRATION PROTOCOL\n{cg_protocol}"
+        else:
+            cg_injection = "> **🚨 SYSTEM OVERRIDE: CODEGRAPH OFFLINE 🚨**\n> The structural analysis server is currently unreachable. You are explicitly authorized to BYPASS the 10-step data flow.\n> Rely exclusively on `read_file`, `read_code_block`, and `execute_bash` for codebase discovery."
         
         prompt_payload = f"""{system_instructions}
 
-# CODEGRAPH INTEGRATION PROTOCOL
-{cg_protocol}
+{cg_injection}
 
 # CHECKPOINT PROTOCOL
 {cp_protocol}
