@@ -814,8 +814,9 @@ Mandatory rules:
             await OrphanRecoveryScanner().run(True)
 
     async def run(self, command: str, args: list):
-        # STRUCTURAL FIX: Vendor-Agnostic Heavy Routing
-        if command in ["iterate", "audit", "start", "execute"]:
+        # Restored baseline routing: 'execute' defaults to fast tier.
+        # execute_task() will dynamically elevate tasks to heavy tier based on effort.
+        if command in ["iterate", "audit", "start"]:
             self.model = config.model_heavy
         else:
             self.model = config.model_fast
