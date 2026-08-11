@@ -16,7 +16,7 @@ def _is_sandbox_warm_sync(task_id: str) -> bool:
     except Exception:
         return False
 
-async def _ensure_warm_sandbox(task_id: str = None, image: str = "dumbledoer-base:latest") -> bool:
+async def _ensure_warm_sandbox(task_id: str = None, sandbox_mode: str = "dumbledoer-base") -> bool:
     if not task_id: return False
     
     def _do_warm():
@@ -44,9 +44,20 @@ async def _ensure_warm_sandbox(task_id: str = None, image: str = "dumbledoer-bas
                 # Fallback to regular copy if hard links not supported (e.g., cross-filesystem)
                 shutil.copytree(os.getcwd(), shadow_dir, ignore=ignore_patterns, dirs_exist_ok=True)
             
+            # --- NEW: Dynamic Target Image Resolution ---
+            target_image = "dumbledoer-base:latest"
+            
+            if sandbox_mode.startswith("docker:"):
+                target_image = sandbox_mode.split(":")[1]
+            elif sandbox_mode == "auto":
+                if os.path.exists(os.path.join(shadow_dir, "Dockerfile")):
+                    target_image = f"dumbledoer-custom-{project_hash}"
+                    print(f"Building native sandbox from project Dockerfile: {target_image}...")
+                    subprocess.run(["docker", "build", "-t", target_image, "."], cwd=shadow_dir, capture_output=True, check=True)
+            
             sandbox_proc = subprocess.Popen(
                 ["docker", "run", "--rm", "-i", "--name", container_name,
-                "-v", f"{shadow_dir}:/workspace", "-w", "/workspace", image, "/bin/bash"],
+                "-v", f"{shadow_dir}:/workspace", "-w", "/workspace", target_image, "/bin/bash"],
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
@@ -95,9 +106,12 @@ def _cleanup_all_sandboxes():
 
 atexit.register(_cleanup_all_sandboxes)
 
-async def execute_bash(command: str, sandbox_mode: str = None, task_id: str = None) -> str:
+async def execute_bash(command: str, sandbox_mode: str = "dumbledoer-base", task_id: str = None) -> str:
     def _run():
         try:
+            import shlex
+            safe_command = shlex.quote(command)
+            
             if sandbox_mode == "native":
                 result = subprocess.run(["bash", "-c", command],
                     capture_output=True,
@@ -105,14 +119,30 @@ async def execute_bash(command: str, sandbox_mode: str = None, task_id: str = No
                     timeout=120
                 )
                 return f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+                
+            # --- NEW: Docker Compose Integration ---
+            elif sandbox_mode and sandbox_mode.startswith("compose:"):
+                service_name = sandbox_mode.split(":")[1]
+                result = subprocess.run(
+                    ["docker", "compose", "exec", "-T", service_name, "/bin/bash", "-c", safe_command],
+                    capture_output=True, text=True, timeout=300
+                )
+                return f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+
+            # --- UPDATED: Fallback parsing for 'auto' and 'docker:<image>' ---
             else:
-                image = "dumbledoer-base:latest" if sandbox_mode == "dumbledoer-base" else "ubuntu:latest"
+                image = "dumbledoer-base:latest"
+                if sandbox_mode and sandbox_mode.startswith("docker:"):
+                    image = sandbox_mode.split(":")[1]
+                elif sandbox_mode == "auto" and os.path.exists("Dockerfile"):
+                    image = "dumbledoer-custom-fallback"
+                    subprocess.run(["docker", "build", "-t", image, "."], capture_output=True)
+
                 if task_id and _is_sandbox_warm_sync(task_id):
                     import hashlib
                     project_hash = hashlib.md5(os.getcwd().encode()).hexdigest()[:8]
                     container_name = f"dumbledoer-sandbox-{project_hash}-{task_id}"
-                    # Safely escape the command to prevent shell injection
-                    safe_command = shlex.quote(command)
+                    
                     result = subprocess.run(
                         ["docker", "exec", "-i", container_name, "/bin/bash", "-c", safe_command],
                         capture_output=True,
@@ -121,8 +151,6 @@ async def execute_bash(command: str, sandbox_mode: str = None, task_id: str = No
                     )
                     return f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
                 else:
-                    # Safely escape the command for the fallback execution path
-                    safe_command = shlex.quote(command)
                     # Mount as read-write (:rw) so discovery commands (pip install, touch) work.
                     # Extended timeout (300s) to support heavy installs.
                     result = subprocess.run(

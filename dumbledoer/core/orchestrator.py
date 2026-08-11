@@ -483,9 +483,26 @@ class LLMOrchestrator:
 
     async def execute_task(self, task_id: str, description: str):
         from dumbledoer.core.sandbox import _ensure_warm_sandbox
-        print(f"Initializing isolated sandbox for task {task_id}...") # NEW: Visibility
-        if "dumbledoer-base" in getattr(self, "sandbox_mode", "dumbledoer-base"):
-            await _ensure_warm_sandbox(task_id)
+        
+        # --- NEW: Dynamically parse sandbox_mode from memory.md ---
+        self.sandbox_mode = "dumbledoer-base"
+        try:
+            with open("memory.md", "r", encoding="utf-8") as f:
+                mem_content = f.read()
+            config_start, config_end = ASTMemoryMapper.locate_heading_block(mem_content, "##", "Config")
+            if config_start != -1:
+                for line in mem_content.splitlines()[config_start:config_end]:
+                    if "- sandbox_mode:" in line:
+                        self.sandbox_mode = line.split(":", 1)[1].strip()
+        except Exception:
+            pass
+
+        print(f"Initializing isolated sandbox ({self.sandbox_mode}) for task {task_id}...")
+        
+        # Pass the parsed mode to the warm sandbox initiator
+        if not self.sandbox_mode.startswith("compose:") and self.sandbox_mode != "native":
+            await _ensure_warm_sandbox(task_id, sandbox_mode=self.sandbox_mode)
+            
         print(f"Executing task {task_id}: {description}")
         
         # Generate session ID and claim task with ownership
@@ -570,7 +587,9 @@ Mandatory rules:
 5. Do not modify any file listed in another in_progress task's Outputs.
 6. Output compression: render your conversational replies at the appropriate caveman level.
 7. Documentation lookup: check if this task involves external dependencies and consult context7 if needed.
-8. **DO NOT USE BASH TO PARSE MEMORY.MD.** If you need to read `memory.md`, you MUST use the native `read_file` tool. If you need to update a task status, you MUST use the native `update_task_registry_row` tool. Do not write python scripts via bash to parse the ledger."""
+8. **DO NOT USE BASH TO PARSE MEMORY.MD.** If you need to read `memory.md`, you MUST use the native `read_file` tool. If you need to update a task status, you MUST use the native `update_task_registry_row` tool.
+9. **STRICT BASH LIMITATIONS:** You are strictly forbidden from using `execute_bash` to run `find`, `ls -R`, or `grep` to discover files. You MUST use the AST-aware `codegraph_search` tool for discovery.
+10. **TEST EXECUTION:** All testing MUST respect the project's native scheduling. Run tests via `uv run pytest` to ensure local `.venv` modules are loaded. A `ModuleNotFoundError` means you are using the wrong environment, not that the file is missing."""
         # Map the parsed effort level to a safe iteration ceiling
         effort_to_iterations = {
             "small": 15,
