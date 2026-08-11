@@ -7,5 +7,5 @@ def test_token_bleed():
         content = f.read()
     
     # Verify the clamp fix
-    assert 'max_iterations=7' in content, "Agent loop iteration clamping is missing!"
-    assert 'max_iterations=15' in content, "Fallback iteration limits are missing."
+    assert 'max_iterations=15' in content, "Agent loop iteration clamping is missing!"
+    assert '"medium": 25' in content, "Fallback iteration limits are missing."

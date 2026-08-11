@@ -41,38 +41,27 @@ library, framework, SDK, or CLI tool API, run the lookup operation from
 before any analysis is logged or any file is written. Tasks with no external
 dependency skip this step entirely (zero added latency).
 
-```
 1. codegraph_search("{target symbol or filename}")
-   → Locate the exact symbol or file to modify
-   → Confirm it is the intended target (not a similarly-named symbol)
+   → Locate the exact symbol or file to modify.
 
 2. codegraph_impact("{symbol}", depth=3)
-   → Blast-radius analysis: what calls this, what this calls, what imports it
-   → HALT if impact radius is unexpectedly large (>20 symbols): alert parent session
-     and request task split or explicit user confirmation before proceeding
+   → Blast-radius analysis: what calls this, what this calls, what imports it.
 
-3. Log impact summary to memory.md Task Details, CodeGraph Impact field:
-   "Affects N symbols across M files: [symbol1 (file.md), ...]"
-   → This is required BEFORE writing any rollback copy or checkpoint
+3. Log impact summary to memory.md Task Details, CodeGraph Impact field.
+   → This is required BEFORE writing the fix.
 
 4. codegraph_callers("{symbol}")
-   → Understand all upstream dependencies that will be affected
+   → Understand all upstream dependencies that will be affected.
 
-5. Copy original file to rollbacks/{taskId}/  [Step 1 of checkpoint-protocol.md]
+5. Call `write_file_with_review` to safely stage the file change. 
+   → This tool automatically handles all Checkpoint and Rollback protocols. Do NOT manually create backups.
 
-6. Write planned entry to Change Log          [Step 2 of checkpoint-protocol.md]
+6. codegraph_affected([modified files])
+   → Identify test files that must be re-run after the change.
 
-7. Write checkpoint JSON                      [Step 3 of checkpoint-protocol.md]
+7. Use `execute_bash` to run the test files identified.
 
-8. Write new content to tmp/{file}.tmp        [Step 4 of checkpoint-protocol.md]
-
-9. Rename tmp → target path                   [Step 5 of checkpoint-protocol.md]
-
-10. codegraph_affected([modified files])
-    → Identify test files that must be re-run after the change
-    → Log affected test files in task Notes field
-    → Update Change Log entry to applied     [Step 6 of checkpoint-protocol.md]
-```
+8. Update the task status to `completed` using `update_task_registry_row`.
 
 ---
 

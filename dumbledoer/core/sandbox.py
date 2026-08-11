@@ -4,6 +4,7 @@ import sys
 import asyncio
 import subprocess
 import shutil
+import shlex  # <--- NEW: Global import required for run_rtk and execute_bash
 
 
 def _is_sandbox_warm_sync(task_id: str) -> bool:
@@ -35,9 +36,13 @@ async def _ensure_warm_sandbox(task_id: str = None, image: str = "dumbledoer-bas
                 shutil.rmtree(shadow_dir)
             os.makedirs(shadow_dir, exist_ok=True)
             
-            # Native Python shadow clone
+            # Optimized Shadow Clone using OS Hard Links (near-instant, no byte copies)
             ignore_patterns = shutil.ignore_patterns(".git", ".venv", "venv", "env", ".pytest_cache", "__pycache__", "node_modules", ".dumbledoer", ".codegraph")
-            shutil.copytree(os.getcwd(), shadow_dir, ignore=ignore_patterns, dirs_exist_ok=True)
+            try:
+                shutil.copytree(os.getcwd(), shadow_dir, ignore=ignore_patterns, copy_function=os.link, dirs_exist_ok=True)
+            except OSError:
+                # Fallback to regular copy if hard links not supported (e.g., cross-filesystem)
+                shutil.copytree(os.getcwd(), shadow_dir, ignore=ignore_patterns, dirs_exist_ok=True)
             
             sandbox_proc = subprocess.Popen(
                 ["docker", "run", "--rm", "-i", "--name", container_name,
@@ -106,19 +111,27 @@ async def execute_bash(command: str, sandbox_mode: str = None, task_id: str = No
                     import hashlib
                     project_hash = hashlib.md5(os.getcwd().encode()).hexdigest()[:8]
                     container_name = f"dumbledoer-sandbox-{project_hash}-{task_id}"
+                    import shlex
+                    # Safely escape the command to prevent shell injection
+                    safe_command = shlex.quote(command)
                     result = subprocess.run(
-                        ["docker", "exec", "-i", container_name, "/bin/bash", "-c", command],
+                        ["docker", "exec", "-i", container_name, "/bin/bash", "-c", safe_command],
                         capture_output=True,
                         text=True,
-                        timeout=120
+                        timeout=300
                     )
                     return f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
                 else:
+                    import shlex
+                    # Safely escape the command for the fallback execution path
+                    safe_command = shlex.quote(command)
+                    # Mount as read-write (:rw) so discovery commands (pip install, touch) work.
+                    # Extended timeout (300s) to support heavy installs.
                     result = subprocess.run(
-                        ["docker", "run", "--rm", "-i", "-v", f"{os.getcwd()}:/workspace:ro", "-w", "/workspace", image, "/bin/bash", "-c", command],
+                        ["docker", "run", "--rm", "-i", "-v", f"{os.getcwd()}:/workspace:rw", "-w", "/workspace", image, "/bin/bash", "-c", safe_command],
                         capture_output=True,
                         text=True,
-                        timeout=120
+                        timeout=300
                     )
                     return f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
         except subprocess.TimeoutExpired:
