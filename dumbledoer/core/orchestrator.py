@@ -799,7 +799,13 @@ Mandatory rules:
             console = Console()
             
             console.print(f"\n[bold yellow]Found interrupted or stale tasks: {', '.join(interrupted)}[/bold yellow]")
-            choice = Prompt.ask("How would you like to handle them? [R(esume)/B(Rollback)/S(Skip)]", choices=["R", "B", "S"], default="R")
+            
+            # Apply the verbose gate to prevent agent lockups on headless execution
+            if config.verbose:
+                choice = Prompt.ask("How would you like to handle them? [R(esume)/B(Rollback)/S(Skip)]", choices=["R", "B", "S"], default="R")
+            else:
+                console.print("[green]Auto-selecting 'Resume' for interrupted tasks (run with -v for interactive options)[/green]")
+                choice = "R"
             
             if choice == "B":
                 for t_id in interrupted:
