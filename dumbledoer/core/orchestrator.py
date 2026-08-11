@@ -399,6 +399,8 @@ class LLMOrchestrator:
                         import inspect
                         if tool_name in ["write_file_with_review", "execute_bash"] and task_id is not None:
                             args["task_id"] = task_id
+                            # NEW: Inject the active sandbox_mode into the tool call dynamically
+                            args["sandbox_mode"] = getattr(self, "sandbox_mode", "dumbledoer-base")
                         if inspect.iscoroutinefunction(tool_func):
                             result = await tool_func(**args)
                         else:
@@ -511,14 +513,12 @@ class LLMOrchestrator:
         await update_task_registry_row(task_id, "in_progress", session_id)
         await append_session_log_row(session_id, task_id)
         
-        # --- DYNAMIC VENDOR TIERING ---
+        # --- VENDOR-AGNOSTIC TIERING ---
         effort = "small"
         try:
             with open("memory.md", "r", encoding="utf-8") as f:
                 mem_content = f.read()
             import re
-            
-            # Isolate the specific task block first to prevent regex bleed
             start_idx, end_idx = ASTMemoryMapper.locate_heading_block(mem_content, "###", task_id)
             if start_idx != -1:
                 task_block = "\n".join(mem_content.splitlines()[start_idx:end_idx])
@@ -528,28 +528,25 @@ class LLMOrchestrator:
         except Exception:
             pass
             
-        # The Brain: Heavy architectural refactors go to the cloud
-        if effort == "large":
-            target_model = "gemini-3.1-pro-preview"
-            active_provider = self.providers.get("cloud")
-            print(f"[Tier Upgrade] Task {task_id} requires {effort} effort. Spawning sub-agent on Gemini Pro.")
-            
-        # The Hands: Simple file changes and audits hit the local hardware
+        # Select the active provider dynamically (preferring the first available if not explicitly requested)
+        active_provider = list(self.providers.values())[0]
+
+        # NEW: Route strictly by Capability Tier
+        if effort in ["medium", "large"] or getattr(self, "model", config.model_fast) == config.model_heavy:
+            target_model = config.model_heavy
+            active_provider = self.providers.get("cloud", list(self.providers.values())[0])
+            print(f"[Heavy Tier] Task {task_id} ({effort} effort) -> Routing to {target_model}")
         else:
-            if "local" in self.providers:
-                target_model = "llama3.1" # Or whichever model you are serving locally
-                active_provider = self.providers["local"]
-                print(f"[Cost Saver] Task {task_id} requires {effort} effort. Spawning sub-agent locally.")
-            else:
-                # FIX: Safely fallback to the cloud model if the local daemon isn't configured
-                target_model = getattr(self, "model", config.model)
-                active_provider = self.providers.get("cloud", list(self.providers.values())[0])
-                print(f"[Cloud Fallback] Local provider unavailable for task {task_id}. Spawning on {target_model}.")
+            target_model = config.model_fast
+            # Favor the local provider for fast/small tasks to conserve API credits
+            active_provider = self.providers.get("local", self.providers.get("cloud", list(self.providers.values())[0]))
+            print(f"[Fast Tier] Task {task_id} ({effort} effort) -> Routing to {target_model}")
             
-            
-        # Initialize the session using the selected provider interface
-        # Pass ONLY the tools whitelisted for the 'execute' command
-        chat_session = await active_provider.create_chat_session(model_name=target_model, tools=self._get_tools_for_command("execute"))
+        # Enforce execution whitelist to prevent tool hallucinations
+        chat_session = await active_provider.create_chat_session(
+            model_name=target_model, 
+            tools=self._get_tools_for_command("execute")
+        )
         system_instructions = await self._get_system_instructions()
         
         # --- PRE-LOAD MANDATORY PROTOCOLS TO PREVENT TOOL-CALL BURN ---
@@ -591,7 +588,8 @@ Mandatory rules:
 8. **DO NOT USE BASH TO PARSE MEMORY.MD.** If you need to read `memory.md`, you MUST use the native `read_file` tool. If you need to update a task status, you MUST use the native `update_task_registry_row` tool. Do not write python scripts via bash to parse the ledger.
 9. **STRICT DISCOVERY LIMITATIONS:** You are strictly forbidden from using `execute_bash` to run `find`, `ls`, or `which`. You MUST use `codegraph_search` for discovery.
 10. **TOOL CONTEXT:** `run_rtk` is strictly for clearing token cache. NEVER pass python or bash scripts to `run_rtk`.
-11. **TEST EXECUTION:** All testing MUST respect the project's native scheduling. Run tests via `uv run pytest` to ensure local `.venv` modules are loaded. A `ModuleNotFoundError` means you are using the wrong environment, not that the file is missing."""
+11. **TEST EXECUTION:** All testing MUST respect the project's native scheduling. Run tests via `uv run pytest` to ensure local `.venv` modules are loaded. A `ModuleNotFoundError` means you are using the wrong environment, not that the file is missing.
+12. **NO DUMMY COMMANDS:** You are strictly forbidden from running empty test commands like `echo hello`, `whoami`, or `echo $PATH`. Every bash command must be a meaningful step toward completing the assigned task."""
         # Map the parsed effort level to a safe iteration ceiling
         effort_to_iterations = {
             "small": 15,
@@ -612,10 +610,16 @@ Mandatory rules:
 
             # TOKEN-FREE OPTIMIZATION: Bypass LLM agent loop entirely for validation tasks
             if task_type == "validation":
+                # --- APPLY FIX 1: Project-Aware Validation Command ---
+                test_cmd = "pytest tests/ -v" # Safe baseline fallback
+                config_start, config_end = ASTMemoryMapper.locate_heading_block(mem_content, "##", "Config")
+                if config_start != -1:
+                    for line in mem_content.splitlines()[config_start:config_end]:
+                        if "- test_command:" in line:
+                            test_cmd = line.split(":", 1)[1].strip()
+
                 print(f"[Deterministic Validator] Task {task_id} is a validation task. Running test suite natively (0 tokens)...")
-                test_cmd = "pytest tests/ -v"
-                if "docker" in description.lower() or "compose" in description.lower():
-                    test_cmd = "docker compose run --rm --entrypoint 'pytest tests/ -v' scheduler"
+                print(f"Command: {test_cmd}")
                 
                 # Execute natively via sandbox
                 res = await execute_bash(test_cmd, sandbox_mode="dumbledoer-base", task_id=task_id)
@@ -672,14 +676,8 @@ Mandatory rules:
                     if os.path.exists(possible_rollback):
                         rollback_path = possible_rollback
                 
-                # Try fallback global rollback format if task-specific isn't found
-                if not rollback_path:
-                    import glob
-                    encoded_path = actual_filename.replace("/", "__").replace(":", "__colon__")
-                    matches = glob.glob(f".dumbledoer/rollbacks/*_{encoded_path}.bak")
-                    if matches:
-                        rollback_path = matches[0]
-
+                # --- APPLY FIX 2A: Strict Backup Mapping ---
+                # REMOVED the glob.glob() wildcard search here.
                 if rollback_path and os.path.exists(rollback_path):
                     args = ["code", "--wait", "--diff", rollback_path, tmp_path]
                 else:
@@ -717,13 +715,8 @@ Mandatory rules:
                     if os.path.exists(possible_rollback):
                         rollback_path = possible_rollback
                                 
-                if not rollback_path:
-                    import glob
-                    encoded_path = actual_filename.replace("/", "__").replace(":", "__colon__")
-                    matches = glob.glob(f".dumbledoer/rollbacks/*_{encoded_path}.bak")
-                    if matches:
-                        rollback_path = matches[0]
-
+                # --- APPLY FIX 2B: Strict Terminal Diff Mapping ---
+                # REMOVED the glob.glob() wildcard search here.
                 if rollback_path and os.path.exists(rollback_path):
                     with open(rollback_path, "r") as f:
                         original_text = f.read()
@@ -794,19 +787,15 @@ Mandatory rules:
                 encoded_path = actual_filename.replace("/", "__").replace(":", "__colon__")
                 possible_rollback = os.path.join(".dumbledoer", "rollbacks", task_id, encoded_path) if task_id else None
                 
+                # --- APPLY FIX 2C: Deterministic Rejection Handling ---
                 if possible_rollback and os.path.exists(possible_rollback):
                     shutil.copy2(possible_rollback, target_path)
                     rollback_restored = True
                     console.print(f"[yellow]Rejected and rolled back changes for {actual_filename}[/yellow]")
-                else:
-                    rollback_matches = _glob.glob(f".dumbledoer/rollbacks/*_{encoded_path}.bak")
-                    if rollback_matches:
-                        shutil.copy2(rollback_matches[0], target_path)
-                        rollback_restored = True
-                        console.print(f"[yellow]Rejected and rolled back changes for {actual_filename}[/yellow]")
-                    elif os.path.exists(target_path):
-                        os.remove(target_path)
-                        console.print(f"[yellow]Rejected new file creation, deleted {actual_filename}[/yellow]")
+                elif os.path.exists(target_path):
+                    # If no specific rollback exists, it's a newly created file. Delete it safely.
+                    os.remove(target_path)
+                    console.print(f"[yellow]Rejected new file creation, deleted {actual_filename}[/yellow]")
                 if task_id:
                     await state.update_task_status(task_id, "pending")
             else:
@@ -825,11 +814,11 @@ Mandatory rules:
             await OrphanRecoveryScanner().run(True)
 
     async def run(self, command: str, args: list):
-        # FIX: Ensure start also uses the premium tier for architectural planning
-        if command in ["iterate", "audit", "start"]:
-            self.model = "gemini-3.1-pro-preview"
+        # STRUCTURAL FIX: Vendor-Agnostic Heavy Routing
+        if command in ["iterate", "audit", "start", "execute"]:
+            self.model = config.model_heavy
         else:
-            self.model = config.model
+            self.model = config.model_fast
         print(f"DumbleDoer running command: {command}")
         if command == "resume":
             # ADD AWAIT HERE
@@ -1107,6 +1096,10 @@ Mandatory rules:
                                     finally:
                                         progress.advance(wave_task)
                                         queue.task_done()
+                                        # NEW: Destroy the sandbox to prevent container leakage
+                                        if hasattr(self, 'sandbox_mode') and self.sandbox_mode not in ["native"] and not self.sandbox_mode.startswith("compose:"):
+                                            from dumbledoer.core.sandbox import _teardown_warm_sandbox
+                                            await _teardown_warm_sandbox(task_id)
 
                             # Force a hard-cap of 3 concurrent workers to prevent API token flooding
                             safe_parallel = 3 if max_parallel <= 0 else max_parallel

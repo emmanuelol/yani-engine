@@ -368,7 +368,7 @@ async def read_file(path: str) -> str:
     except Exception as e:
         return f"Error reading file {path}: {e}"
 
-async def write_file_with_review(path: str, content: str, task_id: str) -> str:
+async def write_file_with_review(path: str, content: str, task_id: str, **kwargs) -> str:
     """
     CRITICAL: This tool AUTOMATICALLY executes the entire 6-Step Checkpoint Protocol and CodeGraph Impact checks. 
     Do NOT manually create rollbacks, JSON checkpoints, or .tmp files. 
@@ -432,13 +432,14 @@ async def write_file_with_review(path: str, content: str, task_id: str) -> str:
         # Target `path` is written ONLY upon Diff-Gate approval via
         # CheckpointManager.atomic_rename_to_target() in orchestrator.py.
             
-        # --- NEW FIX: SANDBOX SPLIT-BRAIN SYNC ---
-        shadow_path = os.path.join(f".dumbledoer/shadow_{task_id}", path)
-        if os.path.exists(f".dumbledoer/shadow_{task_id}"):
-            os.makedirs(os.path.dirname(os.path.abspath(shadow_path)), exist_ok=True)
-            with open(shadow_path, "w") as f:
-                f.write(content)
-        # -----------------------------------------
+        # NEW: Only execute shadow sync if utilizing isolated containers
+        sandbox_mode = kwargs.get("sandbox_mode", "dumbledoer-base")
+        if sandbox_mode not in ["native"] and not sandbox_mode.startswith("compose:"):
+            shadow_path = os.path.join(f".dumbledoer/shadow_{task_id}", path)
+            if os.path.exists(f".dumbledoer/shadow_{task_id}"):
+                os.makedirs(os.path.dirname(os.path.abspath(shadow_path)), exist_ok=True)
+                with open(shadow_path, "w") as f:
+                    f.write(content)
             
         return f"Changes staged for review at {tmp_path} (Rollback: {rollback_path}). File will be applied upon Diff-Gate approval."
     except Exception as e:

@@ -112,12 +112,13 @@ async def execute_bash(command: str, sandbox_mode: str = "dumbledoer-base", task
             import shlex
             safe_command = shlex.quote(command)
             
-            # --- APPLY FIX 1: The Environment Wrapper ---
-            # This ensures tests can resolve internal modules like 'app.agents'
-            env_wrapper = f"export PYTHONPATH=/workspace:$PYTHONPATH && {safe_command}"
+            # NEW: Dynamically resolve the workspace path based on execution context
+            work_dir = os.getcwd() if sandbox_mode == "native" else "/workspace"
+            env_wrapper = f"export PYTHONPATH={work_dir}:$PYTHONPATH && {safe_command}"
             
+            # --- APPLY FIX 3: Secure Native Sandbox Execution ---
             if sandbox_mode == "native":
-                result = subprocess.run(["bash", "-c", command],
+                result = subprocess.run(["bash", "-c", env_wrapper],
                     capture_output=True,
                     text=True,
                     timeout=120

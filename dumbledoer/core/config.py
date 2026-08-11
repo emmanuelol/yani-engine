@@ -17,7 +17,10 @@ class AppConfig(BaseSettings):
     # Execution Settings
     start_at_index: int = 1  # FIX: Changed from 7 to 1
     verbose: bool = False
-    model: str = "gemini-3.6-flash"
+    
+    # Vendor-Agnostic Model Tiers
+    model_fast: str = "gemini-3.6-flash"
+    model_heavy: str = "gemini-3.1-pro-preview"
     
     # Budget Defaults
     budget_limit: int = 50000000

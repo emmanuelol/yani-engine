@@ -7,7 +7,25 @@ class WavePlanner:
         self.start_at_index = start_at_index
 
     def _files_are_import_coupled(self, file_a: str, file_b: str) -> bool:
-        """Check if file_a imports file_b or vice versa using Python AST import analysis."""
+        """Check if file_a imports file_b or vice versa using CodeGraph impact (transitive) or Python AST."""
+        import subprocess
+        
+        # --- APPLY FIX 3: Transitive coupling via CodeGraph ---
+        if os.path.exists(".codegraph"):
+            try:
+                # Check if modifying file_a impacts file_b
+                res_a = subprocess.run(["npx", "--yes", "--package=@colbymchenry/codegraph", "codegraph", "impact", file_a], capture_output=True, text=True, timeout=5)
+                if file_b in res_a.stdout: return True
+                
+                # Check if modifying file_b impacts file_a
+                res_b = subprocess.run(["npx", "--yes", "--package=@colbymchenry/codegraph", "codegraph", "impact", file_b], capture_output=True, text=True, timeout=5)
+                if file_a in res_b.stdout: return True
+                
+                return False # Clean pass
+            except Exception:
+                pass # Silent fallback to shallow AST if CodeGraph is busy/offline
+
+        # Fallback shallow AST logic
         try:
             for src, target in [(file_a, file_b), (file_b, file_a)]:
                 if not os.path.exists(src) or not src.endswith(".py"):

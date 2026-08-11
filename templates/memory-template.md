@@ -8,6 +8,7 @@
 - codegraph_baseline_sync: 1970-01-01T00:00:00Z
 - codegraph_backend: native
 - sandbox_mode: auto
+- test_command: uv run pytest tests/ -v
 
 ## Project Goal
 {{PROJECT_GOAL}}
