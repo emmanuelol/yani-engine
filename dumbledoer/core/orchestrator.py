@@ -548,7 +548,8 @@ class LLMOrchestrator:
             
             
         # Initialize the session using the selected provider interface
-        chat_session = await active_provider.create_chat_session(model_name=target_model, tools=list(self.gemini_tools))
+        # Pass ONLY the tools whitelisted for the 'execute' command
+        chat_session = await active_provider.create_chat_session(model_name=target_model, tools=self._get_tools_for_command("execute"))
         system_instructions = await self._get_system_instructions()
         
         # --- PRE-LOAD MANDATORY PROTOCOLS TO PREVENT TOOL-CALL BURN ---
