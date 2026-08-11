@@ -97,6 +97,9 @@ class LLMOrchestrator:
         "start":   {"read_file", "add_task", "register_task_batch", "write_file_with_review", "execute_bash", "codegraph_*", "context7_*"},
         # STRICT iterate WHITELIST: Block broad AST node/explore tools to force targeted reads
         "iterate": {"add_task", "register_task_batch", "read_file", "read_code_block", "update_task_registry_row", "codegraph_search", "codegraph_impact", "context7_*"},
+        # --- NEW EXPLICIT WHITELIST FOR EXECUTE ---
+        "execute": {"read_file", "read_code_block", "write_file_with_review", "execute_bash", "update_task_registry_row", "codegraph_*", "context7_*"},
+        # ------------------------------------------
         "status":  {"read_file", "execute_bash"},
         "rollback": {"read_file", "execute_bash"},
         "report":  {"read_file", "execute_bash", "update_task_registry_row"},
@@ -108,16 +111,19 @@ class LLMOrchestrator:
     def _get_tools_for_command(self, command: str):
         allowed = self.COMMAND_TOOL_WHITELIST.get(command)
         if not allowed:
-            return self.gemini_tools
-        
-        filtered = []
-        for t in self.gemini_tools:
-            t_name = getattr(t, "__name__", "")
-            if t_name in allowed:
-                filtered.append(t)
-            # Support dynamic capabilities via wildcard prefixes
-            elif any(t_name.startswith(a.replace("*", "")) for a in allowed if a.endswith("*")):
-                filtered.append(t)
+            filtered = self.gemini_tools
+        else:
+            filtered = []
+            for t in self.gemini_tools:
+                t_name = getattr(t, "__name__", "")
+                if t_name in allowed or any(t_name.startswith(a.replace("*", "")) for a in allowed if a.endswith("*")):
+                    filtered.append(t)
+                    
+        # GLOBAL SAFETY NET: Physically strip codegraph tools from the schema if the MCP server is offline.
+        is_cg_active = getattr(self, "is_codegraph_active", False)
+        if not is_cg_active:
+            filtered = [t for t in filtered if not getattr(t, "__name__", "").startswith("codegraph_")]
+            
         return filtered
 
 
@@ -1332,8 +1338,8 @@ Success Criteria: {success_criteria}
                     
                     with console.status(f"[cyan]LLM Evaluator analyzing {t_id}...[/cyan]", spinner="dots") as status:
                         try:
-                            # FIX: Enforce max_iterations=7 to prevent token bleed
-                            response = await self._run_with_tools(chat_session, prompt_payload, self.provider, status=status, max_iterations=7)
+                            # FIX: Align QA iteration cap to the baseline 'small' effort ceiling (15) to prevent mid-audit crashes
+                            response = await self._run_with_tools(chat_session, prompt_payload, self.provider, status=status, max_iterations=15)
                             if hasattr(response, 'usage_metadata') and response.usage_metadata:
                                 self.budget_manager.add_tokens(getattr(response.usage_metadata, 'total_token_count', 0))
                             self.budget_manager.check_and_harvest()
