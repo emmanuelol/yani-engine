@@ -1,4 +1,5 @@
-from dumbledoer.core.locks import _MEMORY_MUTEX, _KNOWLEDGE_MUTEX, _REGISTRY_LOCK, get_registry_lock
+from dumbledoer.core.locks import _MEMORY_MUTEX, _KNOWLEDGE_MUTEX, _REGISTRY_LOCK, get_registry_lock, _FILE_LOCK
+from markdown_it import MarkdownIt
 import sys
 import os
 import subprocess
@@ -17,35 +18,46 @@ import filelock
 class ASTMemoryMapper:
     @staticmethod
     def locate_heading_block(content: str, header_level: str, header_title: str) -> tuple[int, int]:
-        lines = content.splitlines()
+        """Locates a markdown heading block using markdown-it-py token parsing.
+        Correctly handles code fences, nested blocks, and trailing heading titles.
+        Returns (start_line_idx, end_line_idx) or (-1, -1) if not found.
+        """
+        md = MarkdownIt("commonmark")
+        tokens = md.parse(content)
+        
+        target_tag = f"h{len(header_level)}"  # "##" -> "h2", "###" -> "h3"
+        target_title = header_title.lower().strip()
+        heading_level = len(header_level)
+        
         start_idx = -1
         end_idx = -1
         
-        target_title = header_title.lower().strip()
-        in_code = False
+        # Phase 1: Find the target heading
+        for i, token in enumerate(tokens):
+            if token.type == "heading_open" and token.tag == target_tag and token.map:
+                if i + 1 < len(tokens) and tokens[i + 1].type == "inline":
+                    inline_content = tokens[i + 1].content.lower().strip()
+                    clean_content = re.sub(r'[*_]{1,2}', '', inline_content).strip()
+                    # Match exact title or title with trailing subtitle (e.g. "T-001: Title")
+                    if clean_content == target_title or clean_content.startswith(target_title + ":"):
+                        start_idx = token.map[0]
+                        break
         
-        for i, line in enumerate(lines):
-            if line.strip().startswith("```"):
-                in_code = not in_code
-            if not in_code and line.startswith(f"{header_level} "):
-                clean_line = line[len(header_level)+1:].lower().strip().rstrip('#').strip()
-                clean_line = re.sub(r'[*_]{1,2}', '', clean_line).strip()
-                if clean_line == target_title:
-                    start_idx = i
-                    break
-                    
+        # Phase 2: Find the boundary (next heading at same-or-higher level)
         if start_idx != -1:
-            levels = [header_level[:j] + " " for j in range(1, len(header_level)+1)]
-            in_code = False
-            for i in range(start_idx + 1, len(lines)):
-                if lines[i].strip().startswith("```"):
-                    in_code = not in_code
-                if not in_code and any(lines[i].startswith(lvl) for lvl in levels):
-                    end_idx = i
-                    break
+            found_start = False
+            for token in tokens:
+                if token.type == "heading_open" and token.map:
+                    if found_start:
+                        current_level = int(token.tag[1])
+                        if current_level <= heading_level:
+                            end_idx = token.map[0]
+                            break
+                    elif token.map[0] == start_idx:
+                        found_start = True
             if end_idx == -1:
-                end_idx = len(lines)
-                
+                end_idx = len(content.splitlines())
+        
         return start_idx, end_idx
 
     @staticmethod
@@ -73,30 +85,33 @@ class ASTMemoryMapper:
 # async def update_memory_registry(section_header: str, new_content: str) -> str: ...
 
 # Create a surgical row-update tool exposed to the LLM
-async def update_task_registry_row(task_id: str, new_status: str, new_owner: str = "—") -> str:
-    """Surgically updates a task's status in the registry without overwriting sibling tasks."""
+async def update_task_registry_row(task_id: str, new_status: str, new_owner: str = "—", checkpoint_id: str = None) -> str:
+    """Surgically updates a task's status, owner, and checkpoint in the registry without overwriting sibling tasks."""
     async with _MEMORY_MUTEX:
         async with get_registry_lock():
-            try:
-                # 1. We read the fresh state inside the lock, immune to stale LLM context
-                state = TaskRegistryState()
-                tasks = state._load_tasks_unlocked()
-                
-                if task_id not in tasks:
-                    return f"Error: Task {task_id} not found."
-                
-                tasks[task_id]["status"] = new_status
-                tasks[task_id]["owner"] = new_owner
-                
-                # 2. Write exactly the parsed row back out
-                state._sync_to_markdown_unlocked(tasks)
-                success_msg = f"Successfully updated {task_id} to {new_status}."
-                print(f"💾 [STATE] {success_msg}")
-                return success_msg
-            except Exception as e:
-                error_msg = f"Error updating registry: {e}"
-                print(f"❌ [STATE ERROR] {error_msg}")
-                return error_msg
+            with _FILE_LOCK:
+                try:
+                    # 1. We read the fresh state inside the lock, immune to stale LLM context
+                    state = TaskRegistryState()
+                    tasks = state._load_tasks_unlocked()
+                    
+                    if task_id not in tasks:
+                        return f"Error: Task {task_id} not found."
+                    
+                    tasks[task_id]["status"] = new_status
+                    tasks[task_id]["owner"] = new_owner
+                    if checkpoint_id:
+                        tasks[task_id]["checkpoint"] = checkpoint_id
+                    
+                    # 2. Write exactly the parsed row back out
+                    state._sync_to_markdown_unlocked(tasks)
+                    success_msg = f"Successfully updated {task_id} to {new_status}."
+                    print(f"💾 [STATE] {success_msg}")
+                    return success_msg
+                except Exception as e:
+                    error_msg = f"Error updating registry: {e}"
+                    print(f"❌ [STATE ERROR] {error_msg}")
+                    return error_msg
         
 
 class CheckpointManager:
@@ -216,7 +231,9 @@ class OrphanRecoveryScanner:
                     if os.path.exists(target) and filecmp.cmp(target, bak_file, shallow=False):
                         new_status = "rolled-back"
                     else:
-                        new_status = "applied"
+                        # Escalate to user warning instead of auto-promoting
+                        console.print(f"[bold red]WARNING: Task {task_id} modified {target} but was never officially completed. Leaving as 'planned' for manual review.[/bold red]")
+                        new_status = "planned"
                 else:
                     new_status = "unknown"
                     
@@ -315,6 +332,10 @@ class TaskRegistryState:
                             parts[4] = f" {tasks[tid]['status']} "
                         if len(parts) >= 6 and 'owner' in tasks[tid]:
                             parts[5] = f" {tasks[tid]['owner']} "
+                        if len(parts) >= 8 and 'session' in tasks[tid]:
+                            parts[7] = f" {tasks[tid]['session']} "
+                        if len(parts) >= 9 and 'checkpoint' in tasks[tid]:
+                            parts[8] = f" {tasks[tid]['checkpoint']} "
                         new_block.append("|".join(parts))
                     else:
                         new_block.append(line)
@@ -331,10 +352,11 @@ class TaskRegistryState:
         # FIX: Add _MEMORY_MUTEX to perfectly align with update_task_registry_row
         async with _MEMORY_MUTEX:
             async with get_registry_lock():
-                tasks = self._load_tasks_unlocked()
-                if task_id in tasks:
-                    tasks[task_id]["status"] = new_status
-                    self._sync_to_markdown_unlocked(tasks)
+                with _FILE_LOCK:
+                    tasks = self._load_tasks_unlocked()
+                    if task_id in tasks:
+                        tasks[task_id]["status"] = new_status
+                        self._sync_to_markdown_unlocked(tasks)
 
 async def read_file(path: str) -> str:
     def _read():
@@ -347,18 +369,29 @@ async def read_file(path: str) -> str:
         return f"Error reading file {path}: {e}"
 
 async def write_file_with_review(path: str, content: str, task_id: str) -> str:
+    """
+    CRITICAL: This tool AUTOMATICALLY executes the entire 6-Step Checkpoint Protocol and CodeGraph Impact checks. 
+    Do NOT manually create rollbacks, JSON checkpoints, or .tmp files. 
+    Simply pass the final target `path` (e.g., 'app/main.py') and the full new `content`.
+    """
     try:
         try:
-            impact_proc = await asyncio.to_thread(
-                subprocess.run, 
-                ["npx", "--yes", "--package=@colbymchenry/codegraph", "codegraph", "impact", path], 
-                capture_output=True, text=True, timeout=30
-            )
-            match = re.search(r"—\s*(\d+)\s+affected symbol", impact_proc.stdout if hasattr(impact_proc, 'stdout') else str(impact_proc))
-            if match and int(match.group(1)) > 20:
-                return f"Error: CodeGraph impact threshold exceeded ({match.group(1)} symbols > 20). Write blocked to prevent system instability."
+            # Skip impact checks for non-source files to save time
+            if not path.endswith(('.md', '.txt', '.json', '.yaml', '.yml', '.toml', '.cfg', '.ini', '.lock')):
+                impact_proc = await asyncio.to_thread(
+                    subprocess.run, 
+                    ["npx", "--yes", "--package=@colbymchenry/codegraph", "codegraph", "impact", path], 
+                    capture_output=True, text=True, check=True, timeout=30
+                )
+                match = re.search(r"—\s*(\d+)\s+affected symbol", impact_proc.stdout if hasattr(impact_proc, 'stdout') else str(impact_proc))
+                if match and int(match.group(1)) > 20:
+                    return f"Error: CodeGraph impact threshold exceeded ({match.group(1)} symbols > 20). Write blocked."
+        except subprocess.TimeoutExpired:
+            return "Error: CodeGraph impact analysis timed out. Write blocked."
+        except subprocess.CalledProcessError as e:
+            print(f"Warning: CodeGraph impact check failed (exit {e.returncode}). Proceeding with caution.")
         except Exception as e:
-            pass
+            print(f"Warning: CodeGraph impact check failed: {e}. Proceeding with caution.")
 
         tmp_dir = ".dumbledoer/tmp"
         os.makedirs(tmp_dir, exist_ok=True)
@@ -388,12 +421,15 @@ async def write_file_with_review(path: str, content: str, task_id: str) -> str:
         await manager.log_planned_change(path, metadata)
         await manager.write_checkpoint_json(checkpoint_path, metadata)
         
+        # Link checkpoint to the task in the Task Registry
+        await update_task_registry_row(task_id, "in_progress", checkpoint_id=chk_id)
+        
         with open(tmp_path, "w") as f:
             f.write(content)
             
-        os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
-        with open(path, "w") as f:
-            f.write(content)
+        # REMOVED: Direct write to target. File is staged in tmp_path only.
+        # Target `path` is written ONLY upon Diff-Gate approval via
+        # CheckpointManager.atomic_rename_to_target() in orchestrator.py.
             
         # --- NEW FIX: SANDBOX SPLIT-BRAIN SYNC ---
         shadow_path = os.path.join(f".dumbledoer/shadow_{task_id}", path)
@@ -403,7 +439,7 @@ async def write_file_with_review(path: str, content: str, task_id: str) -> str:
                 f.write(content)
         # -----------------------------------------
             
-        return f"Successfully applied changes to {path} (Rollback: {rollback_path}, Review: {tmp_path})"
+        return f"Changes staged for review at {tmp_path} (Rollback: {rollback_path}). File will be applied upon Diff-Gate approval."
     except Exception as e:
         return f"Error in write_file_with_review for {path}: {e}"
 
@@ -589,6 +625,17 @@ async def append_handoff_summary(summary: str):
                     content += f"\n\n{summary}"
                 with open("memory.md", "w", encoding="utf-8") as f:
                     f.write(content)
+
+async def append_session_log_row(session_id: str, task_id: str) -> str:
+    """Appends a new tracking row to the Session Log table in memory.md."""
+    from datetime import datetime
+    start_time = datetime.now().isoformat()
+    row = f"| {session_id} | {start_time} | — | {task_id} | in_progress | — |"
+    async with _MEMORY_MUTEX:
+        async with get_registry_lock():
+            with _FILE_LOCK:
+                ASTMemoryMapper.append_to_markdown_table("memory.md", "Session Log", row)
+    return f"Session {session_id} logged for task {task_id}."
 
 
 async def read_code_block(file_path: str, symbol_name: str) -> str:

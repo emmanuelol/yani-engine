@@ -562,7 +562,7 @@ This project has CodeGraph initialized (.codegraph/ exists). You are executing t
 Mandatory rules:
 1. You have already been provided the CodeGraph Integration and Checkpoint Protocols above. Follow them strictly.
 2. Follow the 10-step data flow for change tasks exactly.
-3. Follow the Checkpoint Protocol for every file write.
+3. The `write_file_with_review` tool AUTOMATICALLY handles the entire Checkpoint Protocol for you. Just pass the target file path. Do not manually create rollbacks or checkpoints.
 4. Log your codegraph_impact result to memory.md task {task_id} CodeGraph Impact field.
 5. Do not modify any file listed in another in_progress task's Outputs.
 6. Output compression: render your conversational replies at the appropriate caveman level.
