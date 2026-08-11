@@ -7,7 +7,7 @@
 - codegraph_baseline_symbols: 0
 - codegraph_baseline_sync: 1970-01-01T00:00:00Z
 - codegraph_backend: native
-- sandbox_mode: dumbledoer-base
+- sandbox_mode: auto
 
 ## Project Goal
 {{PROJECT_GOAL}}

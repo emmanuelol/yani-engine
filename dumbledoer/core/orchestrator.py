@@ -587,9 +587,10 @@ Mandatory rules:
 5. Do not modify any file listed in another in_progress task's Outputs.
 6. Output compression: render your conversational replies at the appropriate caveman level.
 7. Documentation lookup: check if this task involves external dependencies and consult context7 if needed.
-8. **DO NOT USE BASH TO PARSE MEMORY.MD.** If you need to read `memory.md`, you MUST use the native `read_file` tool. If you need to update a task status, you MUST use the native `update_task_registry_row` tool.
-9. **STRICT BASH LIMITATIONS:** You are strictly forbidden from using `execute_bash` to run `find`, `ls -R`, or `grep` to discover files. You MUST use the AST-aware `codegraph_search` tool for discovery.
-10. **TEST EXECUTION:** All testing MUST respect the project's native scheduling. Run tests via `uv run pytest` to ensure local `.venv` modules are loaded. A `ModuleNotFoundError` means you are using the wrong environment, not that the file is missing."""
+8. **DO NOT USE BASH TO PARSE MEMORY.MD.** If you need to read `memory.md`, you MUST use the native `read_file` tool. If you need to update a task status, you MUST use the native `update_task_registry_row` tool. Do not write python scripts via bash to parse the ledger.
+9. **STRICT DISCOVERY LIMITATIONS:** You are strictly forbidden from using `execute_bash` to run `find`, `ls`, or `which`. You MUST use `codegraph_search` for discovery.
+10. **TOOL CONTEXT:** `run_rtk` is strictly for clearing token cache. NEVER pass python or bash scripts to `run_rtk`.
+11. **TEST EXECUTION:** All testing MUST respect the project's native scheduling. Run tests via `uv run pytest` to ensure local `.venv` modules are loaded. A `ModuleNotFoundError` means you are using the wrong environment, not that the file is missing."""
         # Map the parsed effort level to a safe iteration ceiling
         effort_to_iterations = {
             "small": 15,
@@ -619,11 +620,13 @@ Mandatory rules:
                 res = await execute_bash(test_cmd, sandbox_mode="dumbledoer-base", task_id=task_id)
                 print(res)
                 
-                if "== 0 passed" in res or "error" not in res.lower() or "FAILED" not in res:
+                # --- APPLY FIX 2: Hardened Validation Logic ---
+                # Ensure no fatal bash errors exist AND tests didn't explicitly fail
+                if "No such file or directory" not in res and "FAILED" not in res and "error" not in res.lower():
                     await update_task_registry_row(task_id, "completed", session_id)
                     print(f"Task {task_id} validated successfully via deterministic run.")
                 else:
-                    raise RuntimeError(f"Deterministic validation failed. Test output indicated errors.")
+                    raise RuntimeError(f"Deterministic validation failed. Test output indicated errors or missing files.")
             else:
                 # Standard LLM tool loop for change/analysis tasks
                 response = await self._run_with_tools(chat_session, prompt_payload, active_provider, task_id=task_id, max_iterations=max_iters)

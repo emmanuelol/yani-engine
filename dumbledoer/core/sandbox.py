@@ -112,6 +112,10 @@ async def execute_bash(command: str, sandbox_mode: str = "dumbledoer-base", task
             import shlex
             safe_command = shlex.quote(command)
             
+            # --- APPLY FIX 1: The Environment Wrapper ---
+            # This ensures tests can resolve internal modules like 'app.agents'
+            env_wrapper = f"export PYTHONPATH=/workspace:$PYTHONPATH && {safe_command}"
+            
             if sandbox_mode == "native":
                 result = subprocess.run(["bash", "-c", command],
                     capture_output=True,
@@ -124,7 +128,7 @@ async def execute_bash(command: str, sandbox_mode: str = "dumbledoer-base", task
             elif sandbox_mode and sandbox_mode.startswith("compose:"):
                 service_name = sandbox_mode.split(":")[1]
                 result = subprocess.run(
-                    ["docker", "compose", "exec", "-T", service_name, "/bin/bash", "-c", safe_command],
+                    ["docker", "compose", "exec", "-T", service_name, "/bin/bash", "-c", env_wrapper],
                     capture_output=True, text=True, timeout=300
                 )
                 return f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
@@ -144,7 +148,7 @@ async def execute_bash(command: str, sandbox_mode: str = "dumbledoer-base", task
                     container_name = f"dumbledoer-sandbox-{project_hash}-{task_id}"
                     
                     result = subprocess.run(
-                        ["docker", "exec", "-i", container_name, "/bin/bash", "-c", safe_command],
+                        ["docker", "exec", "-i", container_name, "/bin/bash", "-c", env_wrapper],
                         capture_output=True,
                         text=True,
                         timeout=300
@@ -154,7 +158,7 @@ async def execute_bash(command: str, sandbox_mode: str = "dumbledoer-base", task
                     # Mount as read-write (:rw) so discovery commands (pip install, touch) work.
                     # Extended timeout (300s) to support heavy installs.
                     result = subprocess.run(
-                        ["docker", "run", "--rm", "-i", "-v", f"{os.getcwd()}:/workspace:rw", "-w", "/workspace", image, "/bin/bash", "-c", safe_command],
+                        ["docker", "run", "--rm", "-i", "-v", f"{os.getcwd()}:/workspace:rw", "-w", "/workspace", image, "/bin/bash", "-c", env_wrapper],
                         capture_output=True,
                         text=True,
                         timeout=300
