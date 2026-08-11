@@ -28,6 +28,23 @@ Based on the prompt, decompose the work into atomic tasks.
 2. **Pre-Evaluation REQUIRED:** Before calling `add_task`, evaluate `estimated_effort` (`small`, `medium`, or `large`) and use `codegraph_impact` to evaluate the blast radius. Pass these directly into the arguments of `add_task`.
 3. Always include a final `report` task.
 
+## Section 2.5 — Task Granularity & Iteration Budget
+You must aggressively decompose tasks so that **each subtask can be completed within the execution engine's strict iteration cap**.
+
+| Estimated Effort | Max Tool Calls | Example Scope |
+|------------------|----------------|---------------|
+| `small`          | ≤ 15           | Read one file, follow the 10-step CodeGraph flow, write one small targeted change. |
+| `medium`         | ≤ 25           | Modify a single function, update a test, run bash validations. |
+| `large`          | ≤ 40           | Refactor a module, implement a new feature spanning 2-3 files. |
+
+**Strict Rule:** If a subtask would require more tool calls than its corresponding cap, you MUST split it further. 
+*Example:* "Implement manager escalation" should not be one task. It must be chunked into:
+- `T-011a`: Analyze current staleness detection (`small`)
+- `T-011b`: Implement escalation logic (`medium`)
+- `T-011c`: Add tests for escalation (`small`)
+
+Prioritize using targeted tools (`read_code_block`, `codegraph_search`) over broad file reads to conserve tool iterations.
+
 ## Section 4 — The Latch & Termination
 1. Print the full registered plan in a markdown table.
 2. End your response with exactly this strict, unalterable text constraint:

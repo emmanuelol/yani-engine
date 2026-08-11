@@ -111,7 +111,6 @@ async def execute_bash(command: str, sandbox_mode: str = None, task_id: str = No
                     import hashlib
                     project_hash = hashlib.md5(os.getcwd().encode()).hexdigest()[:8]
                     container_name = f"dumbledoer-sandbox-{project_hash}-{task_id}"
-                    import shlex
                     # Safely escape the command to prevent shell injection
                     safe_command = shlex.quote(command)
                     result = subprocess.run(
@@ -122,7 +121,6 @@ async def execute_bash(command: str, sandbox_mode: str = None, task_id: str = No
                     )
                     return f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
                 else:
-                    import shlex
                     # Safely escape the command for the fallback execution path
                     safe_command = shlex.quote(command)
                     # Mount as read-write (:rw) so discovery commands (pip install, touch) work.

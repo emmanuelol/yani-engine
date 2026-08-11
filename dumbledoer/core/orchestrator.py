@@ -543,6 +543,18 @@ class LLMOrchestrator:
         else:
             cg_injection = "> **🚨 SYSTEM OVERRIDE: CODEGRAPH OFFLINE 🚨**\n> The structural analysis server is currently unreachable. You are explicitly authorized to BYPASS the 10-step data flow.\n> Rely exclusively on `read_file`, `read_code_block`, and `execute_bash` for codebase discovery."
         
+        is_cg_active = getattr(self, "is_codegraph_active", False)
+        
+        # Conditionally format the strict rules so the LLM doesn't paradox if tools are offline
+        if is_cg_active:
+            cg_rules = f"""1. You have already been provided the CodeGraph Integration and Checkpoint Protocols. Follow them strictly.
+2. Follow the 10-step data flow for change tasks exactly.
+3. Log your codegraph_impact result to memory.md task {task_id} CodeGraph Impact field."""
+        else:
+            cg_rules = """1. CODEGRAPH IS OFFLINE. Bypass the 10-step structural flow. Rely on bash and file reads.
+2. Skip codegraph_impact logging.
+3. Focus strictly on executing the code modification safely."""
+
         prompt_payload = f"""{system_instructions}
 
 {cg_injection}
@@ -550,13 +562,11 @@ class LLMOrchestrator:
 # CHECKPOINT PROTOCOL
 {cp_protocol}
 
-This project has CodeGraph initialized (.codegraph/ exists). You are executing task {task_id}: {description}.
+You are executing task {task_id}: {description}.
 
 Mandatory rules:
-1. You have already been provided the CodeGraph Integration and Checkpoint Protocols above. Follow them strictly.
-2. Follow the 10-step data flow for change tasks exactly.
-3. The `write_file_with_review` tool AUTOMATICALLY handles the entire Checkpoint Protocol for you. Just pass the target file path. Do not manually create rollbacks or checkpoints.
-4. Log your codegraph_impact result to memory.md task {task_id} CodeGraph Impact field.
+{cg_rules}
+4. The `write_file_with_review` tool AUTOMATICALLY handles the entire Checkpoint Protocol for you. Just pass the target file path and final content. Do not manually create rollbacks, tmp files, or checkpoints.
 5. Do not modify any file listed in another in_progress task's Outputs.
 6. Output compression: render your conversational replies at the appropriate caveman level.
 7. Documentation lookup: check if this task involves external dependencies and consult context7 if needed.
