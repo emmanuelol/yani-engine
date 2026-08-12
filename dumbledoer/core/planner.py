@@ -68,7 +68,7 @@ class WavePlanner:
 
         pending_tasks = {
             t['id']: t for t in tasks 
-            if "pending" in t['status'] 
+            if ("pending" in t['status'] or "error" in t['status'])
             and int(re.search(r'\d+', t['id']).group()) >= self.start_at_index
         }
         completed_task_ids = {t['id'] for t in tasks if "completed" in t['status']}

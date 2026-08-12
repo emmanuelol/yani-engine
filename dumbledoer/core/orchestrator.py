@@ -326,7 +326,7 @@ class LLMOrchestrator:
         max_retries = 8
         base_delay = 15
         total_elapsed = 0
-        max_total_wait = 400  # Hard cap: 6.5 minutes total backoff to survive heavy 429 throttling
+        max_total_wait = 600  # Hard cap: 10 minutes total backoff to survive heavy 429 throttling
         for attempt in range(max_retries):
             try:
                 return await active_provider.send_message(chat_session, payload)
@@ -829,7 +829,7 @@ Mandatory rules:
             tasks = await state.load_tasks()
             
             # Detect interrupted tasks or stale locks natively
-            interrupted = [t_id for t_id, t in tasks.items() if t['status'] in ["interrupted", "in_progress"]]
+            interrupted = [t_id for t_id, t in tasks.items() if t['status'] in ["interrupted", "in_progress", "error"]]
             
             if not interrupted:
                 print("\nNo interrupted tasks or stale locks found. Run /dumbledoer:execute to process pending tasks.")
@@ -1382,7 +1382,7 @@ Success Criteria: {success_criteria}
 # YOUR DIRECTIVE
 1. Evaluate the static analysis output and any other necessary context (using read_file or execute_bash for a single targeted test if needed).
 2. If the task passes its success criteria and has no critical static analysis errors, you MUST use the `update_task_registry_row` tool to change its status to `completed`.
-3. If the task fails, you MUST use the `register_task_batch` tool to queue a specific `change` task to fix the bug. CRITICAL: Set the `deps` argument to "none". Do NOT make the new task depend on the failed task, or the execution engine will deadlock. Do not change the current task's status (leave it as awaiting-review).
+3. If the task fails, you MUST use the `register_task_batch` tool to queue a specific `change` task to fix the bug. CRITICAL: Set the `deps` argument to "none". Do NOT make the new task depend on the failed task, or the execution engine will deadlock. Do not change the current task's status (leave it as awaiting-review). CRITICAL: Set the `estimated_effort` argument to "medium" or "large" (never "small") because fixing bugs requires terminal debugging.
 4. Terminate your turn with a brief summary of your decision.
 """
                     
@@ -1391,7 +1391,7 @@ Success Criteria: {success_criteria}
                     with console.status(f"[cyan]LLM Evaluator analyzing {t_id}...[/cyan]", spinner="dots") as status:
                         try:
                             # Elevate QA auditor iteration cap to match large tasks
-                            response = await self._run_with_tools(chat_session, prompt_payload, self.provider, status=status, max_iterations=40)
+                            response = await self._run_with_tools(chat_session, prompt_payload, self.provider, status=status, task_id=t_id, max_iterations=40)
                             if hasattr(response, 'usage_metadata') and response.usage_metadata:
                                 self.budget_manager.add_tokens(getattr(response.usage_metadata, 'total_token_count', 0))
                             self.budget_manager.check_and_harvest()
