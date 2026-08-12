@@ -5,34 +5,45 @@ from dumbledoer.core.state import TaskRegistryState
 class WavePlanner:
     def __init__(self, start_at_index: int = 0):
         self.start_at_index = start_at_index
+        self._impact_cache: dict[str, str] = {}  # Cache impact outputs per file
 
-    def _files_are_import_coupled(self, file_a: str, file_b: str) -> bool:
-        """Check if file_a imports file_b or vice versa using CodeGraph impact (transitive) or Python AST."""
-        import subprocess
-        
-        # --- APPLY FIX 3: Transitive coupling via CodeGraph ---
+    def _get_file_impact(self, file_path: str) -> str:
+        """Fetches and caches CodeGraph impact output once per file."""
+        if file_path in self._impact_cache:
+            return self._impact_cache[file_path]
+
         if os.path.exists(".codegraph"):
             try:
-                # Check if modifying file_a impacts file_b
-                res_a = subprocess.run(["npx", "--yes", "--package=@colbymchenry/codegraph", "codegraph", "impact", file_a], capture_output=True, text=True, timeout=5)
-                if file_b in res_a.stdout: return True
-                
-                # Check if modifying file_b impacts file_a
-                res_b = subprocess.run(["npx", "--yes", "--package=@colbymchenry/codegraph", "codegraph", "impact", file_b], capture_output=True, text=True, timeout=5)
-                if file_a in res_b.stdout: return True
-                
-                return False # Clean pass
+                import subprocess
+                res = subprocess.run(
+                    ["npx", "--yes", "--package=@colbymchenry/codegraph", "codegraph", "impact", file_path],
+                    capture_output=True, text=True, timeout=5
+                )
+                self._impact_cache[file_path] = res.stdout
+                return res.stdout
             except Exception:
-                pass # Silent fallback to shallow AST if CodeGraph is busy/offline
+                pass
+        self._impact_cache[file_path] = ""
+        return ""
 
-        # Fallback shallow AST logic
+    def _files_are_import_coupled(self, file_a: str, file_b: str) -> bool:
+        """Check if file_a imports file_b or vice versa using cached impact or Python AST."""
+        if os.path.exists(".codegraph"):
+            impact_a = self._get_file_impact(file_a)
+            if file_b in impact_a:
+                return True
+            impact_b = self._get_file_impact(file_b)
+            if file_a in impact_b:
+                return True
+            return False
+
+        # Fallback shallow AST logic...
         try:
             for src, target in [(file_a, file_b), (file_b, file_a)]:
                 if not os.path.exists(src) or not src.endswith(".py"):
                     continue
                 with open(src, "r", encoding="utf-8") as f:
                     tree = ast.parse(f.read())
-                # Derive module name from file path
                 target_module = os.path.splitext(os.path.basename(target))[0]
                 target_dotpath = target.replace("/", ".").replace(".py", "")
                 for node in ast.walk(tree):
@@ -45,7 +56,7 @@ class WavePlanner:
                             return True
             return False
         except Exception:
-            return False  # Fail open: don't block parallelism on parse errors
+            return False
 
     async def get_pending_waves(self) -> list[list[dict]]:
         state = TaskRegistryState()

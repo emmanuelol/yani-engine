@@ -37,7 +37,10 @@ async def _ensure_warm_sandbox(task_id: str = None, sandbox_mode: str = "dumbled
             os.makedirs(shadow_dir, exist_ok=True)
             
             # Optimized Shadow Clone using OS Hard Links (near-instant, no byte copies)
-            ignore_patterns = shutil.ignore_patterns(".git", ".venv", "venv", "env", ".pytest_cache", "__pycache__", "node_modules", ".dumbledoer", ".codegraph")
+            ignore_patterns = shutil.ignore_patterns(
+                ".git", ".venv", "venv", "env", ".pytest_cache", "__pycache__", 
+                "node_modules", ".dumbledoer", ".codegraph", "*.tmp", "*.bak", "shadow_*"
+            )
             try:
                 shutil.copytree(os.getcwd(), shadow_dir, ignore=ignore_patterns, copy_function=os.link, dirs_exist_ok=True)
             except OSError:
@@ -56,8 +59,11 @@ async def _ensure_warm_sandbox(task_id: str = None, sandbox_mode: str = "dumbled
                     subprocess.run(["docker", "build", "-t", target_image, "."], cwd=shadow_dir, capture_output=True, check=True)
             
             sandbox_proc = subprocess.Popen(
-                ["docker", "run", "--rm", "-i", "--name", container_name,
-                "-v", f"{shadow_dir}:/workspace", "-w", "/workspace", target_image, "/bin/bash"],
+                ["docker", "run", "--rm", "-i", 
+                 "--memory=1500m", "--memory-swap=1500m",  # Strict RAM cap
+                 "--name", container_name,
+                 "-v", f"{shadow_dir}:/workspace", "-w", "/workspace", 
+                 target_image, "/bin/bash"],
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
@@ -159,7 +165,10 @@ async def execute_bash(command: str, sandbox_mode: str = "dumbledoer-base", task
                     # Mount as read-write (:rw) so discovery commands (pip install, touch) work.
                     # Extended timeout (300s) to support heavy installs.
                     result = subprocess.run(
-                        ["docker", "run", "--rm", "-i", "-v", f"{os.getcwd()}:/workspace:rw", "-w", "/workspace", image, "/bin/bash", "-c", env_wrapper],
+                        ["docker", "run", "--rm", "-i", 
+                         "--memory=1500m", "--memory-swap=1500m",
+                         "-v", f"{os.getcwd()}:/workspace:rw", "-w", "/workspace", 
+                         image, "/bin/bash", "-c", env_wrapper],
                         capture_output=True,
                         text=True,
                         timeout=300
