@@ -589,7 +589,8 @@ Mandatory rules:
 9. **STRICT DISCOVERY LIMITATIONS:** You are strictly forbidden from using `execute_bash` to run `find`, `ls`, or `which`. You MUST use `codegraph_search` for discovery.
 10. **TOOL CONTEXT:** `run_rtk` is strictly for clearing token cache. NEVER pass python or bash scripts to `run_rtk`.
 11. **TEST EXECUTION:** All testing MUST respect the project's native scheduling. Run tests via `uv run pytest` to ensure local `.venv` modules are loaded. A `ModuleNotFoundError` means you are using the wrong environment, not that the file is missing.
-12. **NO DUMMY COMMANDS:** You are strictly forbidden from running empty test commands like `echo hello`, `whoami`, or `echo $PATH`. Every bash command must be a meaningful step toward completing the assigned task."""
+12. **NO DUMMY COMMANDS:** You are strictly forbidden from running empty test commands like `echo hello`, `whoami`, or `echo $PATH`. Every bash command must be a meaningful step toward completing the assigned task.
+13. **CLEAN UP YOUR ARTIFACTS:** If you create any temporary bash scripts or python files (e.g., `run_test.sh`) to execute multi-line logic, you MUST delete them using `rm` via `execute_bash` immediately after they finish running. Do not leave garbage files in the workspace."""
         # Map the parsed effort level to a safe iteration ceiling
         effort_to_iterations = {
             "small": 15,
@@ -633,9 +634,25 @@ Mandatory rules:
                 else:
                     raise RuntimeError(f"Deterministic validation failed. Test output indicated errors or missing files.")
             else:
+                import subprocess
+                try:
+                    pre_untracked = set(subprocess.run(["git", "ls-files", "--others", "--exclude-standard"], capture_output=True, text=True).stdout.splitlines())
+                except Exception:
+                    pre_untracked = set()
+
                 # Standard LLM tool loop for change/analysis tasks
                 response = await self._run_with_tools(chat_session, prompt_payload, active_provider, task_id=task_id, max_iterations=max_iters)
                 self.budget_manager.check_and_harvest()
+                
+                try:
+                    post_untracked = set(subprocess.run(["git", "ls-files", "--others", "--exclude-standard"], capture_output=True, text=True).stdout.splitlines())
+                    for garbage_file in post_untracked - pre_untracked:
+                        if os.path.exists(garbage_file) and not garbage_file.startswith(".dumbledoer/"):
+                            print(f"🧹 Purging ephemeral artifact leaked by sandbox: {garbage_file}")
+                            os.remove(garbage_file)
+                except Exception as e:
+                    pass
+
                 print(f"Task {task_id} completed: {getattr(response, 'text', str(response))}")
                 await TaskRegistryState().update_task_status(task_id, "awaiting-review")
         except BudgetExhaustedException:
