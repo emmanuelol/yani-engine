@@ -85,33 +85,48 @@ class ASTMemoryMapper:
 # async def update_memory_registry(section_header: str, new_content: str) -> str: ...
 
 # Create a surgical row-update tool exposed to the LLM
+_TASK_CACHE = None
+_CACHE_DIRTY = False
+
 async def update_task_registry_row(task_id: str, new_status: str, new_owner: str = "—", checkpoint_id: str = None) -> str:
-    """Surgically updates a task's status, owner, and checkpoint in the registry without overwriting sibling tasks."""
+    """Surgically updates a task's status in memory, deferred disk flush."""
+    global _TASK_CACHE, _CACHE_DIRTY
+    async with _MEMORY_MUTEX:
+        async with get_registry_lock():
+            try:
+                state = TaskRegistryState()
+                
+                # HYBRID OPTIMIZATION: Load once, cache indefinitely during execution
+                if _TASK_CACHE is None:
+                    _TASK_CACHE = state._load_tasks_unlocked()
+                
+                if task_id not in _TASK_CACHE:
+                    return f"Error: Task {task_id} not found."
+                
+                _TASK_CACHE[task_id]["status"] = new_status
+                _TASK_CACHE[task_id]["owner"] = new_owner
+                if checkpoint_id:
+                    _TASK_CACHE[task_id]["checkpoint"] = checkpoint_id
+                
+                _CACHE_DIRTY = True
+                success_msg = f"Successfully updated {task_id} to {new_status} (Cached)."
+                return success_msg
+            except Exception as e:
+                return f"Error updating registry: {e}"
+
+async def flush_task_registry():
+    """Flushes the deferred state cache to disk."""
+    global _TASK_CACHE, _CACHE_DIRTY
+    if not _CACHE_DIRTY or _TASK_CACHE is None:
+        return
+        
     async with _MEMORY_MUTEX:
         async with get_registry_lock():
             with _FILE_LOCK:
-                try:
-                    # 1. We read the fresh state inside the lock, immune to stale LLM context
-                    state = TaskRegistryState()
-                    tasks = state._load_tasks_unlocked()
-                    
-                    if task_id not in tasks:
-                        return f"Error: Task {task_id} not found."
-                    
-                    tasks[task_id]["status"] = new_status
-                    tasks[task_id]["owner"] = new_owner
-                    if checkpoint_id:
-                        tasks[task_id]["checkpoint"] = checkpoint_id
-                    
-                    # 2. Write exactly the parsed row back out
-                    state._sync_to_markdown_unlocked(tasks)
-                    success_msg = f"Successfully updated {task_id} to {new_status}."
-                    print(f"💾 [STATE] {success_msg}")
-                    return success_msg
-                except Exception as e:
-                    error_msg = f"Error updating registry: {e}"
-                    print(f"❌ [STATE ERROR] {error_msg}")
-                    return error_msg
+                state = TaskRegistryState()
+                state._sync_to_markdown_unlocked(_TASK_CACHE)
+                _CACHE_DIRTY = False
+                print("💾 [STATE] Successfully flushed registry cache to disk.")
         
 
 class CheckpointManager:
@@ -168,11 +183,23 @@ class CheckpointManager:
 
 class OrphanRecoveryScanner:
     async def run(self, unattended=False):
+        tmp_dir = ".dumbledoer/tmp"
+        chk_dir = ".dumbledoer/checkpoints"
+        bak_dir = ".dumbledoer/rollbacks"
+        
+        # HYBRID OPTIMIZATION: Fast-Path bypass
+        has_tmp = os.path.exists(tmp_dir) and bool(os.listdir(tmp_dir))
+        has_chk = os.path.exists(chk_dir) and bool(os.listdir(chk_dir))
+        has_bak = os.path.exists(bak_dir) and bool(os.listdir(bak_dir))
+        
+        if not (has_tmp or has_chk or has_bak):
+            if unattended and config.verbose:
+                from rich.console import Console
+                Console().print("[dim]Orphan recovery scan: clean (fast-path)[/dim]")
+            return
+
         async with _MEMORY_MUTEX:
           async with get_registry_lock():
-            tmp_dir = ".dumbledoer/tmp"
-            chk_dir = ".dumbledoer/checkpoints"
-            bak_dir = ".dumbledoer/rollbacks"
             
             if unattended:
                 from rich.console import Console

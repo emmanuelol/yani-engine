@@ -69,6 +69,7 @@ class LLMOrchestrator:
         self.exit_stack = AsyncExitStack()
         self.mcp_sessions = {}
         self.mcp_locks = {}
+        self._sys_inst_cache = {} # NEW: Instance-level cache for static instructions
         
         # Inject providers securely from the app config
         self.providers = config.providers
@@ -279,9 +280,15 @@ class LLMOrchestrator:
                 sliced.append(line)
         return "\n".join(sliced) if sliced else content
 
-    async def _get_system_instructions(self, command: str = None):
-        # For iterate, inject Goal/Scope/Task Registry + Edge Cases to preserve architectural awareness
-        if command == "iterate":
+    async def _get_system_instructions(self, command: str = None, task_id: str = None):
+        cache_key = f"{command}_{task_id}"
+        if cache_key in self._sys_inst_cache:
+            return self._sys_inst_cache[cache_key]
+
+        # HYBRID OPTIMIZATION: Strict slicing for execute
+        if command == "execute" and task_id:
+            memory_content = await self._get_sliced_memory(["Config", "Task Registry", task_id])
+        elif command == "iterate":
             memory_content = await self._get_sliced_memory(["Project Goal", "Scope", "Edge Case Coverage", "Task Registry", "Task Details"])
         else:
             memory_content = await self.local_tools[0]("memory.md") or "No memory.md found. Start a new project."
@@ -316,7 +323,10 @@ class LLMOrchestrator:
             skill_content = await self.local_tools[0](skill_path)
             if skill_content and not skill_content.startswith("Error"):
                 instructions.append(f"# COMMAND SPECIFIC INSTRUCTIONS ({command})\n{skill_content}")
-        return "\n\n".join(instructions)
+                
+        final_instructions = "\n\n".join(instructions)
+        self._sys_inst_cache[cache_key] = final_instructions
+        return final_instructions
 
 
 
@@ -547,7 +557,7 @@ class LLMOrchestrator:
             model_name=target_model, 
             tools=self._get_tools_for_command("execute")
         )
-        system_instructions = await self._get_system_instructions()
+        system_instructions = await self._get_system_instructions(command="execute", task_id=task_id)
         
         # --- PRE-LOAD MANDATORY PROTOCOLS TO PREVENT TOOL-CALL BURN ---
         cp_protocol = await read_file(os.path.join(self.plugin_root, 'lib', 'checkpoint-protocol.md'))
@@ -1118,6 +1128,10 @@ Mandatory rules:
                                         if hasattr(self, 'sandbox_mode') and self.sandbox_mode not in ["native"] and not self.sandbox_mode.startswith("compose:"):
                                             from dumbledoer.core.sandbox import _teardown_warm_sandbox
                                             await _teardown_warm_sandbox(task_id)
+                                        
+                                        # NEW: Flush the registry to disk safely as workers finish
+                                        from dumbledoer.core.state import flush_task_registry
+                                        await flush_task_registry()
 
                             # Force a hard-cap of 3 concurrent workers to prevent API token flooding
                             safe_parallel = 3 if max_parallel <= 0 else max_parallel
