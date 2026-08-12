@@ -35,19 +35,15 @@ If the prompt is actionable and feasible, you must decompose it into atomic task
 3. **Pre-Execution Assessment (MANDATORY):** Before calling `add_task`, you MUST evaluate the `estimated_effort` (`small`, `medium`, or `large`). For any code changes, you MUST also run a `codegraph_impact` query to evaluate the blast radius. Pass the effort and the summarized impact text directly into the `estimated_effort` and `codegraph_impact` parameters of the `add_task` tool.
 
 ## Section 2.5 — Task Granularity & Iteration Budget
-You must aggressively decompose tasks so that **each subtask can be completed within the execution engine's strict iteration cap**.
+You must aggressively decompose tasks so that **each subtask can be completed within the execution engine's strict iteration cap**. Effort must be categorized by **cognitive load and terminal debugging requirements**, not just file count.
 
 | Estimated Effort | Max Tool Calls | Example Scope |
 |------------------|----------------|---------------|
-| `small`          | ≤ 15           | Read one file, follow the 10-step CodeGraph flow, write one small targeted change. |
-| `medium`         | ≤ 25           | Modify a single function, update a test, run bash validations. |
-| `large`          | ≤ 40           | Refactor a module, implement a new feature spanning 2-3 files. |
+| `small`          | ≤ 15           | Direct, deterministic file edits where the exact AST path is known. **NO open-ended debugging or test execution allowed at this tier.** |
+| `medium`         | ≤ 25           | Requires running bash validations, resolving Ruff/Pytest errors, navigating sandbox environments, or testing logic. |
+| `large`          | ≤ 40           | Architectural refactors spanning 2-3 files, complex algorithmic changes, or deep dependency rewrites. |
 
-**Strict Rule:** If a subtask would require more tool calls than its corresponding cap, you MUST split it further. 
-*Example:* "Implement manager escalation" should not be one task. It must be chunked into:
-- `T-011a`: Analyze current staleness detection (`small`)
-- `T-011b`: Implement escalation logic (`medium`)
-- `T-011c`: Add tests for escalation (`small`)
+**Strict Rule:** Any task that requires finding a bug, fixing a linter error, or executing tests MUST be categorized as `medium` or `large` to ensure the agent has the reasoning capacity and iteration budget to navigate the terminal.
 
 Prioritize using targeted tools (`read_code_block`, `codegraph_search`) over broad file reads to conserve tool iterations.
 
