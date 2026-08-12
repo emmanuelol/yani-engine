@@ -368,6 +368,29 @@ class TaskRegistryState:
                         new_block.append(line)
                 else:
                     new_block.append(line)
+            # --- NEW: Dual-Update for Task Details ---
+            det_start, det_end = ASTMemoryMapper.locate_heading_block(content, "##", "Task Details")
+            if det_start != -1:
+                current_task = None
+                import re
+                for i in range(det_start + 1, det_end):
+                    line = lines[i].strip()
+                    
+                    # Track which task block we are currently inside
+                    if line.startswith("### T-"):
+                        match = re.match(r"^###\s+(T-\d{3,4})", line)
+                        if match:
+                            current_task = match.group(1)
+                    
+                    # Apply cached updates to the details block
+                    if current_task and current_task in tasks:
+                        if line.startswith("- **Status**:"):
+                            lines[i] = f"- **Status**: {tasks[current_task]['status']}"
+                        elif line.startswith("- **Owner**:"):
+                            lines[i] = f"- **Owner**: {tasks[current_task]['owner']}"
+                        elif line.startswith("- **Checkpoint**:") and 'checkpoint' in tasks[current_task]:
+                            lines[i] = f"- **Checkpoint**: {tasks[current_task]['checkpoint']}"
+            # -----------------------------------------
                         
             new_content = "\n".join(lines[:start_idx+1] + new_block + lines[end_idx:])
             with open(self.md_path, "w", encoding="utf-8") as f:

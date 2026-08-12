@@ -20,7 +20,8 @@ from dumbledoer.core.state import (
     get_registry_lock, ASTMemoryMapper, 
     update_task_registry_row, CheckpointManager, OrphanRecoveryScanner, 
     TaskRegistryState, read_file, write_file_with_review,
-    add_task, read_code_block, record_knowledge, register_task_batch
+    add_task, read_code_block, record_knowledge, register_task_batch,
+    flush_task_registry
 )
 from dumbledoer.core.planner import WavePlanner
 from dumbledoer.core.llm_provider import AbstractLLMProvider
@@ -269,15 +270,29 @@ class LLMOrchestrator:
         content = await self.local_tools[0]("memory.md")
         if not content or content.startswith("Error"):
             return "Memory state unavailable."
+            
         sliced = []
         capture = False
+        target_level = 0
+        
         for line in content.splitlines():
-            if any(line.strip().startswith(f"## {s}") for s in sections):
+            stripped = line.strip()
+            
+            # Check if this line starts any of our target sections (## or ###)
+            if any(stripped.startswith(f"## {s}") or stripped.startswith(f"### {s}") for s in sections):
                 capture = True
-            elif line.strip().startswith("## ") and capture:
-                capture = False
+                # Determine the heading level we just matched (2 for ##, 3 for ###)
+                target_level = len(stripped) - len(stripped.lstrip("#"))
+                
+            # Stop capturing if we hit a new heading of the SAME or HIGHER hierarchical level
+            elif capture and stripped.startswith("#"):
+                current_level = len(stripped) - len(stripped.lstrip("#"))
+                if current_level <= target_level:
+                    capture = False
+                    
             if capture:
                 sliced.append(line)
+                
         return "\n".join(sliced) if sliced else content
 
     async def _get_system_instructions(self, command: str = None, task_id: str = None):
