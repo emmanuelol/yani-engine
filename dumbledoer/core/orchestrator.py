@@ -326,7 +326,7 @@ class LLMOrchestrator:
         max_retries = 8
         base_delay = 15
         total_elapsed = 0
-        max_total_wait = 120  # Hard cap: 2 minutes total backoff
+        max_total_wait = 400  # Hard cap: 6.5 minutes total backoff to survive heavy 429 throttling
         for attempt in range(max_retries):
             try:
                 return await active_provider.send_message(chat_session, payload)
@@ -1390,8 +1390,8 @@ Success Criteria: {success_criteria}
                     
                     with console.status(f"[cyan]LLM Evaluator analyzing {t_id}...[/cyan]", spinner="dots") as status:
                         try:
-                            # FIX: Align QA iteration cap to the baseline 'small' effort ceiling (15) to prevent mid-audit crashes
-                            response = await self._run_with_tools(chat_session, prompt_payload, self.provider, status=status, max_iterations=15)
+                            # Elevate QA auditor iteration cap to match large tasks
+                            response = await self._run_with_tools(chat_session, prompt_payload, self.provider, status=status, max_iterations=40)
                             if hasattr(response, 'usage_metadata') and response.usage_metadata:
                                 self.budget_manager.add_tokens(getattr(response.usage_metadata, 'total_token_count', 0))
                             self.budget_manager.check_and_harvest()
