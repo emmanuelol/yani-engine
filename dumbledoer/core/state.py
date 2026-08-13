@@ -398,15 +398,7 @@ class TaskRegistryState:
         except Exception as e:
             raise IOError(f"Critical State Error: Failed to sync task registry to memory.md: {e}")
 
-    async def update_task_status(self, task_id: str, new_status: str):
-        # FIX: Add _MEMORY_MUTEX to perfectly align with update_task_registry_row
-        async with _MEMORY_MUTEX:
-            async with get_registry_lock():
-                with _FILE_LOCK:
-                    tasks = self._load_tasks_unlocked()
-                    if task_id in tasks:
-                        tasks[task_id]["status"] = new_status
-                        self._sync_to_markdown_unlocked(tasks)
+
 
 async def read_file(path: str) -> str:
     def _read():
@@ -544,10 +536,23 @@ async def register_task_batch(tasks: list[dict]) -> str:
                 for i, task in enumerate(tasks):
                     task_id = incoming_task_ids[i]
                     title = task.get("title", "Untitled")
+                    outputs = task.get("outputs", "none")
+                    
+                    # ENFORCE CATEGORIZATION (SOFT WARNING)
+                    if not title.startswith("[") or "]" not in title:
+                        print(f"⚠️ [ARCHITECT WARNING] Task '{title}' missing [Category] tag. Auto-patching to conserve tokens.")
+                        title = f"[Uncategorized] {title}"
+                        task["title"] = title
+
+                    # ENFORCE ATOMICITY (SOFT WARNING)
+                    if outputs.lower() not in ["none", "—", "-", ""]:
+                        output_files = [o.strip() for o in outputs.split(",")]
+                        if len(output_files) > 2 and task.get("estimated_effort", "small") == "small":
+                            print(f"⚠️ [ARCHITECT WARNING] Task '{title}' assigned {len(output_files)} files to a 'small' effort tier. (Registered as-is to save tokens; consider splitting manually later).")
+
                     task_type = task.get("task_type", "change")
                     deps = task.get("deps", "none")
                     description = task.get("description", "")
-                    outputs = task.get("outputs", "none")
                     success_criteria = task.get("success_criteria", "TBD")
                     estimated_effort = task.get("estimated_effort", "small")
                     codegraph_impact = task.get("codegraph_impact", "—")

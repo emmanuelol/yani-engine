@@ -7,23 +7,23 @@ import shutil
 import shlex  # <--- NEW: Global import required for run_rtk and execute_bash
 
 
-def _is_sandbox_warm_sync(task_id: str) -> bool:
+def _is_sandbox_warm_sync(worker_id: str) -> bool:
     try:
         import hashlib
         project_hash = hashlib.md5(os.getcwd().encode()).hexdigest()[:8]
-        result = subprocess.run(["docker", "ps", "-q", "-f", f"name=dumbledoer-sandbox-{project_hash}-{task_id}"], capture_output=True, text=True)
+        result = subprocess.run(["docker", "ps", "-q", "-f", f"name=dumbledoer-sandbox-{project_hash}-{worker_id}"], capture_output=True, text=True)
         return bool(result.stdout.strip())
     except Exception:
         return False
 
-async def _ensure_warm_sandbox(task_id: str = None, sandbox_mode: str = "dumbledoer-base") -> bool:
-    if not task_id: return False
+async def _ensure_warm_sandbox(worker_id: str = None, sandbox_mode: str = "dumbledoer-base") -> bool:
+    if not worker_id: return False
     
     def _do_warm():
         try:
             import hashlib
             project_hash = hashlib.md5(os.getcwd().encode()).hexdigest()[:8]
-            container_name = f"dumbledoer-sandbox-{project_hash}-{task_id}"
+            container_name = f"dumbledoer-sandbox-{project_hash}-{worker_id}"
             
             # Check if already running
             chk = subprocess.run(["docker", "ps", "-q", "-f", f"name={container_name}"], capture_output=True, text=True)
@@ -31,7 +31,7 @@ async def _ensure_warm_sandbox(task_id: str = None, sandbox_mode: str = "dumbled
                 return True
                 
             # Create Shadow Clone
-            shadow_dir = os.path.abspath(f".dumbledoer/shadow_{task_id}")
+            shadow_dir = os.path.abspath(f".dumbledoer/shadow_{worker_id}")
             if os.path.exists(shadow_dir):
                 shutil.rmtree(shadow_dir)
             os.makedirs(shadow_dir, exist_ok=True)
@@ -79,15 +79,15 @@ async def _ensure_warm_sandbox(task_id: str = None, sandbox_mode: str = "dumbled
             raise RuntimeError(f"Docker infrastructure failure. Is the daemon running? Details: {e}")
     return await asyncio.to_thread(_do_warm)
 
-async def _teardown_warm_sandbox(task_id: str = None):
-    if not task_id: return
+async def _teardown_warm_sandbox(worker_id: str = None):
+    if not worker_id: return
     def _do_teardown():
         try:
             import hashlib
             project_hash = hashlib.md5(os.getcwd().encode()).hexdigest()[:8]
-            container_name = f"dumbledoer-sandbox-{project_hash}-{task_id}"
+            container_name = f"dumbledoer-sandbox-{project_hash}-{worker_id}"
             subprocess.run(["docker", "rm", "-f", container_name], capture_output=True)
-            shadow_dir = os.path.abspath(f".dumbledoer/shadow_{task_id}")
+            shadow_dir = os.path.abspath(f".dumbledoer/shadow_{worker_id}")
             if os.path.exists(shadow_dir):
                 shutil.rmtree(shadow_dir)
         except Exception:
@@ -112,7 +112,7 @@ def _cleanup_all_sandboxes():
 
 atexit.register(_cleanup_all_sandboxes)
 
-async def execute_bash(command: str, sandbox_mode: str = "dumbledoer-base", task_id: str = None) -> str:
+async def execute_bash(command: str, sandbox_mode: str = "dumbledoer-base", task_id: str = None, worker_id: str = None) -> str:
     def _run():
         try:
             import shlex
@@ -149,10 +149,11 @@ async def execute_bash(command: str, sandbox_mode: str = "dumbledoer-base", task
                     image = "dumbledoer-custom-fallback"
                     subprocess.run(["docker", "build", "-t", image, "."], capture_output=True)
 
-                if task_id and _is_sandbox_warm_sync(task_id):
+                active_id = worker_id or task_id
+                if active_id and _is_sandbox_warm_sync(active_id):
                     import hashlib
                     project_hash = hashlib.md5(os.getcwd().encode()).hexdigest()[:8]
-                    container_name = f"dumbledoer-sandbox-{project_hash}-{task_id}"
+                    container_name = f"dumbledoer-sandbox-{project_hash}-{active_id}"
                     
                     result = subprocess.run(
                         ["docker", "exec", "-i", container_name, "/bin/bash", "-c", env_wrapper],

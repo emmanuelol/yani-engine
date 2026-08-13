@@ -1,10 +1,22 @@
 {
   "name": "iterate",
   "description": "Refines the current task plan by adding or adjusting tasks based on a new prompt.",
+  "options": [
+    {
+      "name": "prompt",
+      "type": "string",
+      "description": "The architectural instructions or new objective.",
+      "required": true
+    },
+    {
+      "name": "enrich",
+      "type": "boolean",
+      "description": "Automatically pull extra context from Context7 before planning.",
+      "required": false
+    }
+  ],
   "execute": {
     "command": "./run_dumbledoer.sh",
-    "args": [
-      "iterate"
-    ]
+    "args": ["iterate", "{{prompt}}", "--enrich={{enrich}}"]
   }
 }

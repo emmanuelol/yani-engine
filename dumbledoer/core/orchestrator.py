@@ -97,8 +97,8 @@ class LLMOrchestrator:
     COMMAND_TOOL_WHITELIST = {
         # ADDED: execute_bash and wildcard codegraph_* so the LLM can actually discover the repo
         "start":   {"read_file", "add_task", "register_task_batch", "write_file_with_review", "execute_bash", "codegraph_*", "context7_*"},
-        # STRICT iterate WHITELIST: Block broad AST node/explore tools to force targeted reads
-        "iterate": {"add_task", "register_task_batch", "read_file", "read_code_block", "update_task_registry_row", "codegraph_search", "codegraph_impact", "context7_*"},
+        # STRICT iterate WHITELIST: Blocked add_task to force register_task_batch
+        "iterate": {"register_task_batch", "read_file", "read_code_block", "update_task_registry_row", "codegraph_search", "codegraph_impact", "context7_*"},
         # --- NEW EXPLICIT WHITELIST FOR EXECUTE ---
         "execute": {"read_file", "read_code_block", "write_file_with_review", "execute_bash", "update_task_registry_row", "codegraph_*", "context7_*"},
         # ------------------------------------------
@@ -248,8 +248,9 @@ class LLMOrchestrator:
         interrupted_ids = []
         for tid, t in tasks.items():
             if t['status'].strip() == 'in_progress':
-                await state.update_task_status(tid, 'interrupted')
+                await update_task_registry_row(tid, 'interrupted')
                 interrupted_ids.append(tid)
+        await flush_task_registry()
 
         # 2. Build the summary string
         summary = f"## Session Handoff Summary\n- Outcome: interrupted-budget\n"
@@ -304,7 +305,9 @@ class LLMOrchestrator:
         if command == "execute" and task_id:
             memory_content = await self._get_sliced_memory(["Config", "Task Registry", task_id])
         elif command == "iterate":
-            memory_content = await self._get_sliced_memory(["Project Goal", "Scope", "Edge Case Coverage", "Task Registry", "Task Details"])
+            # REMOVED "Task Details" to prevent unbounded token bleed. 
+            # The LLM must rely on the Task Registry summary or use read_file for specifics.
+            memory_content = await self._get_sliced_memory(["Project Goal", "Scope", "Edge Case Coverage", "Task Registry"])
         else:
             memory_content = await self.local_tools[0]("memory.md") or "No memory.md found. Start a new project."
 
@@ -375,12 +378,20 @@ class LLMOrchestrator:
                     raise
         raise RuntimeError("Max retries exceeded for API rate limit")
 
-    async def _run_with_tools(self, chat_session, initial_payload, active_provider, status=None, task_id=None, max_iterations=15):
+    async def _run_with_tools(self, chat_session, initial_payload, active_provider, status=None, task_id=None, max_iterations=15, worker_id=None):
         import time
         print("\n📡 [NETWORK] Dispatching payload to LLM... (Awaiting response)")
         t0 = time.time()
         
         response = await self._send_message_with_backoff(chat_session, initial_payload, active_provider)
+        
+        # Initial budget check
+        if hasattr(response, 'usage_metadata') and response.usage_metadata:
+            token_count = getattr(response.usage_metadata, 'total_token_count', 0)
+            self.budget_manager.add_tokens(token_count if isinstance(token_count, int) else 0)
+        else:
+            heuristic_tokens = (len(str(initial_payload)) // 4) + (len(str(getattr(response, 'text', ''))) // 4)
+            self.budget_manager.add_tokens(heuristic_tokens)
         
         print(f"⏱️ [NETWORK] LLM responded in {time.time() - t0:.1f}s")
         degraded_consecutive = 0  # Track consecutive degraded tool calls
@@ -426,6 +437,8 @@ class LLMOrchestrator:
                             args["task_id"] = task_id
                             # NEW: Inject the active sandbox_mode into the tool call dynamically
                             args["sandbox_mode"] = getattr(self, "sandbox_mode", "dumbledoer-base")
+                        if tool_name == "execute_bash" and worker_id is not None:
+                            args["worker_id"] = worker_id
                         if inspect.iscoroutinefunction(tool_func):
                             result = await tool_func(**args)
                         else:
@@ -500,6 +513,9 @@ class LLMOrchestrator:
             if hasattr(response, 'usage_metadata') and response.usage_metadata:
                 token_count = getattr(response.usage_metadata, 'total_token_count', 0)
                 self.budget_manager.add_tokens(token_count if isinstance(token_count, int) else 0)
+            else:
+                heuristic_tokens = (len(str(parts)) // 4) + (len(str(getattr(response, 'text', ''))) // 4)
+                self.budget_manager.add_tokens(heuristic_tokens)
             try:
                 self.budget_manager.check_and_harvest()
             except BudgetExhaustedException:
@@ -508,7 +524,7 @@ class LLMOrchestrator:
 
         return response
 
-    async def execute_task(self, task_id: str, description: str):
+    async def execute_task(self, task_id: str, description: str, worker_id: str = None):
         from dumbledoer.core.sandbox import _ensure_warm_sandbox
         
         # --- NEW: Dynamically parse sandbox_mode from memory.md ---
@@ -528,7 +544,7 @@ class LLMOrchestrator:
         
         # Pass the parsed mode to the warm sandbox initiator
         if not self.sandbox_mode.startswith("compose:") and self.sandbox_mode != "native":
-            await _ensure_warm_sandbox(task_id, sandbox_mode=self.sandbox_mode)
+            await _ensure_warm_sandbox(worker_id or task_id, sandbox_mode=self.sandbox_mode)
             
         print(f"Executing task {task_id}: {description}")
         
@@ -666,7 +682,7 @@ Mandatory rules:
                     pre_untracked = set()
 
                 # Standard LLM tool loop for change/analysis tasks
-                response = await self._run_with_tools(chat_session, prompt_payload, active_provider, task_id=task_id, max_iterations=max_iters)
+                response = await self._run_with_tools(chat_session, prompt_payload, active_provider, task_id=task_id, max_iterations=max_iters, worker_id=worker_id)
                 self.budget_manager.check_and_harvest()
                 
                 try:
@@ -679,10 +695,12 @@ Mandatory rules:
                     pass
 
                 print(f"Task {task_id} completed: {getattr(response, 'text', str(response))}")
-                await TaskRegistryState().update_task_status(task_id, "awaiting-review")
+                await update_task_registry_row(task_id, "awaiting-review")
+                await flush_task_registry()
         except BudgetExhaustedException:
             print(f"Task {task_id} interrupted: Budget exhausted at {self.budget_manager.estimated_tokens} tokens.", file=sys.stderr)
-            await TaskRegistryState().update_task_status(task_id, "interrupted")
+            await update_task_registry_row(task_id, "interrupted")
+            await flush_task_registry()
             await self._graceful_shadow_shutdown(task_id) if hasattr(self, '_graceful_shadow_shutdown') else await self._graceful_shutdown(task_id)
             raise
 
@@ -839,7 +857,8 @@ Mandatory rules:
                     os.remove(target_path)
                     console.print(f"[yellow]Rejected new file creation, deleted {actual_filename}[/yellow]")
                 if task_id:
-                    await state.update_task_status(task_id, "pending")
+                    await update_task_registry_row(task_id, "pending")
+                    await flush_task_registry()
             else:
                 # Apply approved change: atomic rename from tmp to target
                 if os.path.exists(tmp_path):
@@ -848,6 +867,7 @@ Mandatory rules:
                 console.print(f"[green]Approved changes for {actual_filename}[/green]")
                 if task_id:
                     await update_task_registry_row(task_id, "completed")
+                    await flush_task_registry()
                     # Promote Change Log entry from planned to applied
                     import datetime
                     await CheckpointManager().log_applied_change(target_path, {"Task ID": task_id, "Timestamp": datetime.datetime.now().isoformat()})
@@ -858,9 +878,10 @@ Mandatory rules:
     async def run(self, command: str, args: list):
         # Restored baseline routing: 'execute' defaults to fast tier.
         # execute_task() will dynamically elevate tasks to heavy tier based on effort.
-        if command in ["iterate", "audit", "start"]:
+        # Only force the heavy model if the user didn't explicitly override it via CLI/env
+        if command in ["iterate", "audit", "start"] and not getattr(config, "model_overridden", False):
             self.model = config.model_heavy
-        else:
+        elif not getattr(config, "model_overridden", False):
             self.model = config.model_fast
         print(f"DumbleDoer running command: {command}")
         if command == "resume":
@@ -892,12 +913,14 @@ Mandatory rules:
             
             if choice == "B":
                 for t_id in interrupted:
-                    await state.update_task_status(t_id, "pending")
+                    await update_task_registry_row(t_id, "pending")
+                await flush_task_registry()
                 console.print("[yellow]Tasks demoted to pending. Please run /dumbledoer:rollback to revert file changes manually.[/yellow]")
                 return
             elif choice == "S":
                 for t_id in interrupted:
-                    await state.update_task_status(t_id, "deferred")
+                    await update_task_registry_row(t_id, "deferred")
+                await flush_task_registry()
                 console.print("[green]Tasks deferred.[/green]")
                 return
             else:
@@ -1027,7 +1050,8 @@ Mandatory rules:
 
                 # Fix 3: Execute TaskRegistryState updates AFTER the file write
                 for task_id in tasks_to_rollback:
-                    await state.update_task_status(task_id, "pending")
+                    await update_task_registry_row(task_id, "pending")
+                await flush_task_registry()
 
                 # Sync CodeGraph AST
                 if os.path.exists(".codegraph"):
@@ -1062,7 +1086,7 @@ Mandatory rules:
 
                 wave_index = 0
                 # Initialize planner
-                planner = WavePlanner(start_at_index=config.start_at_index)
+                planner = WavePlanner(start_at_index=config.start_at_index, mcp_sessions=self.mcp_sessions)
                 
                 while True:
                     waves = await planner.get_pending_waves()
@@ -1099,7 +1123,7 @@ Mandatory rules:
                             for t in wave:
                                 queue.put_nowait(t)
 
-                            async def worker():
+                            async def worker(worker_id: str):
                                 while True:
                                     try:
                                         t = queue.get_nowait()
@@ -1123,7 +1147,7 @@ Mandatory rules:
                                     progress.console.print(f"  [bold yellow]🔄 [IN_PROGRESS][/bold yellow] [cyan]{task_id}[/cyan]: {task_title}")
 
                                     try:
-                                        await self.execute_task(task_id, task_title)
+                                        await self.execute_task(task_id, task_title, worker_id=worker_id)
                                         # Visual Log: Task Successfully Completed & Awaiting Review
                                         progress.console.print(f"  [bold green]✅ [AWAITING_REVIEW][/bold green] [cyan]{task_id}[/cyan]: {task_title}")
                                     except BudgetExhaustedException:
@@ -1135,23 +1159,24 @@ Mandatory rules:
                                     except Exception as e:
                                         # Visual Log: Task Failure
                                         progress.console.print(f"  [bold red]❌ [ERROR][/bold red] [cyan]{task_id}[/cyan]: {e}")
-                                        await TaskRegistryState().update_task_status(task_id, "error")
+                                        await update_task_registry_row(task_id, "error")
+                                        await flush_task_registry()
                                     finally:
                                         progress.advance(wave_task)
                                         queue.task_done()
-                                        # NEW: Destroy the sandbox to prevent container leakage
-                                        if hasattr(self, 'sandbox_mode') and self.sandbox_mode not in ["native"] and not self.sandbox_mode.startswith("compose:"):
-                                            from dumbledoer.core.sandbox import _teardown_warm_sandbox
-                                            await _teardown_warm_sandbox(task_id)
-                                        
                                         # NEW: Flush the registry to disk safely as workers finish
                                         from dumbledoer.core.state import flush_task_registry
                                         await flush_task_registry()
 
+                                # Move teardown outside the task loop so it happens per-worker
+                                if hasattr(self, 'sandbox_mode') and self.sandbox_mode not in ["native"] and not self.sandbox_mode.startswith("compose:"):
+                                    from dumbledoer.core.sandbox import _teardown_warm_sandbox
+                                    await _teardown_warm_sandbox(worker_id)
+
                             # Force a hard-cap of 3 concurrent workers to prevent API token flooding
                             safe_parallel = 3 if max_parallel <= 0 else max_parallel
                             num_workers = min(safe_parallel, len(wave))
-                            workers = [asyncio.create_task(worker()) for _ in range(num_workers)]
+                            workers = [asyncio.create_task(worker(f"w{i}")) for i in range(num_workers)]
                             done, pending = await asyncio.wait(workers, return_when=asyncio.FIRST_EXCEPTION)
 
                             for p in pending:
@@ -1380,6 +1405,25 @@ Mandatory rules:
                     
                     console.print(f"\n[bold yellow]Auditing {t_id}: {title}[/bold yellow]")
                     
+                    # Fix attempts tracker
+                    import json
+                    qa_tracker_path = ".dumbledoer/qa_attempts.json"
+                    attempts = {}
+                    if os.path.exists(qa_tracker_path):
+                        with open(qa_tracker_path, "r") as f:
+                            attempts = json.load(f)
+                    
+                    if attempts.get(t_id, 0) >= 3:
+                        console.print(f"[red]Task {t_id} has failed QA 3 times. Forcing to deferred to prevent infinite loops.[/red]")
+                        await update_task_registry_row(t_id, "deferred")
+                        await flush_task_registry()
+                        continue
+                    
+                    attempts[t_id] = attempts.get(t_id, 0) + 1
+                    os.makedirs(os.path.dirname(qa_tracker_path), exist_ok=True)
+                    with open(qa_tracker_path, "w") as f:
+                        json.dump(attempts, f)
+
                     # Extract Success Criteria natively
                     success_criteria = "Not defined."
                     t_start, t_end = ASTMemoryMapper.locate_heading_block(mem_content, "###", t_id)
@@ -1405,6 +1449,19 @@ Mandatory rules:
                             static_analysis_output += f"--- Ruff Check for {pf} ---\nCRITICAL ERROR: 'uvx' not found on system. Static analysis failed. Please flag this as a failure.\n"
                         else:
                             static_analysis_output += f"--- Ruff Check for {pf} ---\n{out.strip() or 'Syntax OK. No issues found.'}\n"
+                                
+                    # Native Test Execution Injection
+                    try:
+                        if "codegraph" in self.mcp_sessions and py_files:
+                            cg_res = await self.mcp_sessions["codegraph"].call_tool("codegraph_affected", arguments={"files": py_files})
+                            test_files = cg_res.content[0].text.split(',') if cg_res and cg_res.content else []
+                            test_files = [tf.strip() for tf in test_files if tf.strip()]
+                            if test_files:
+                                static_analysis_output += f"\n--- Pytest Execution for Affected Tests ---\n"
+                                test_proc = await execute_bash(f"pytest {' '.join(test_files)}")
+                                static_analysis_output += str(test_proc) + "\n"
+                    except Exception as e:
+                        pass
                                 
                     if not static_analysis_output.strip():
                         static_analysis_output = "No Python files modified, or no static analysis warnings found."
@@ -1440,6 +1497,9 @@ Success Criteria: {success_criteria}
                             response = await self._run_with_tools(chat_session, prompt_payload, self.provider, status=status, task_id=t_id, max_iterations=40)
                             if hasattr(response, 'usage_metadata') and response.usage_metadata:
                                 self.budget_manager.add_tokens(getattr(response.usage_metadata, 'total_token_count', 0))
+                            else:
+                                heuristic_tokens = (len(str(prompt_payload)) // 4) + (len(str(getattr(response, 'text', ''))) // 4)
+                                self.budget_manager.add_tokens(heuristic_tokens)
                             self.budget_manager.check_and_harvest()
                             
                             # Reload tasks to detect what the LLM decided
@@ -1808,6 +1868,37 @@ Success Criteria: {success_criteria}
                     print(f"\nFound {len(existing_tmps)} unreviewed files from initialization. Starting review...")
                     await self.batch_diff_review(list(existing_tmps))
 
+                final_text = getattr(response, 'text', '') if hasattr(response, 'text') else str(response)
+                print(final_text)
+
+            elif command == "iterate":
+                enrich_flag = any(arg.startswith("--enrich") and "true" in arg.lower() for arg in args)
+                prompt_text = " ".join([a for a in args if not a.startswith("--enrich")]).strip()
+                if len(prompt_text) < 20:
+                    print("Error: /dumbledoer iterate requires a detailed prompt (min 20 chars). Vague prompts cause hallucinated task loops.")
+                    return
+                
+                self.chat_session = await self.provider.create_chat_session(
+                    model_name=getattr(self, "model", config.model), 
+                    tools=self._get_tools_for_command(command)
+                )
+                
+                sys_inst = await self._get_system_instructions(command)
+                
+                enrich_context = ""
+                if enrich_flag and "context7" in self.mcp_sessions:
+                    enrich_context = "\n# ENRICHED CONTEXT\n" + await self.mcp_sessions["context7"].call_tool("query-docs", arguments={"query": prompt_text})
+                
+                payload = f"{sys_inst}\n\nUSER DIRECTIVE: Execute the `iterate` command with the following instruction: {prompt_text}\n{enrich_context}\n\nSTRICT LIMIT: You may call `register_task_batch` at most ONE time, and you may schedule at most 5 tasks total for this iteration."
+                from rich.console import Console
+                console = Console()
+                with console.status(f"[bold cyan]Running {command} agent...", spinner="dots") as status:
+                    try:
+                        response = await self._run_with_tools(self.chat_session, payload, self.provider, status=status, max_iterations=30)
+                    except Exception as e:
+                        print(f"\n[bold red]Agent execution aborted: {e}[/bold red]")
+                        return
+                
                 final_text = getattr(response, 'text', '') if hasattr(response, 'text') else str(response)
                 print(final_text)
 

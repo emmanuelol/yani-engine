@@ -134,3 +134,14 @@ flowchart LR
     F -->|Injected via Semantic Memory| G[Session 3]
     F -->|Injected via Semantic Memory| H[Session N]
 ```
+
+## 7. State Synchronization
+
+### The Single-Writer Constraint
+All state mutations to `memory.md` MUST route exclusively through `update_task_registry_row()` followed by `flush_task_registry()`. Direct writes via `TaskRegistryState` are deprecated and strictly forbidden. 
+
+### Why this is enforced:
+1. **Cache Integrity:** Parallel execution waves maintain an internal `_TASK_CACHE` to avoid deadlocking the I/O. Direct disk writes silently drift from this cache, causing wave workers to revert `completed` tasks back to `in_progress`.
+2. **LLM Hallucination Prevention:** The LLM evaluates its own task success via `read_file("memory.md")`. Forcing an explicit `flush_task_registry()` ensures the LLM sees the absolute latest DOM state before deciding to retry a tool, preventing infinite QA iteration loops.
+
+*See also:* [[Concurrency Safety]], [[Token Optimization Architecture]]

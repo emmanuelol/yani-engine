@@ -3,19 +3,31 @@ import os
 from dumbledoer.core.state import TaskRegistryState
 
 class WavePlanner:
-    def __init__(self, start_at_index: int = 0):
+    def __init__(self, start_at_index: int = 0, mcp_sessions: dict = None):
         self.start_at_index = start_at_index
         self._impact_cache: dict[str, str] = {}  # Cache impact outputs per file
+        self.mcp_sessions = mcp_sessions or {}
 
-    def _get_file_impact(self, file_path: str) -> str:
+    async def _get_file_impact(self, file_path: str) -> str:
         """Fetches and caches CodeGraph impact output once per file."""
         if file_path in self._impact_cache:
             return self._impact_cache[file_path]
 
+        if "codegraph" in self.mcp_sessions:
+            try:
+                res = await self.mcp_sessions["codegraph"].call_tool("codegraph_impact", arguments={"file_path": file_path})
+                if res and res.content:
+                    output = res.content[0].text
+                    self._impact_cache[file_path] = output
+                    return output
+            except Exception:
+                pass
+
         if os.path.exists(".codegraph"):
             try:
-                import subprocess
-                res = subprocess.run(
+                import subprocess, asyncio
+                res = await asyncio.to_thread(
+                    subprocess.run,
                     ["npx", "--yes", "--package=@colbymchenry/codegraph", "codegraph", "impact", file_path],
                     capture_output=True, text=True, timeout=5
                 )
@@ -26,13 +38,13 @@ class WavePlanner:
         self._impact_cache[file_path] = ""
         return ""
 
-    def _files_are_import_coupled(self, file_a: str, file_b: str) -> bool:
+    async def _files_are_import_coupled(self, file_a: str, file_b: str) -> bool:
         """Check if file_a imports file_b or vice versa using cached impact or Python AST."""
-        if os.path.exists(".codegraph"):
-            impact_a = self._get_file_impact(file_a)
+        if os.path.exists(".codegraph") or "codegraph" in self.mcp_sessions:
+            impact_a = await self._get_file_impact(file_a)
             if file_b in impact_a:
                 return True
-            impact_b = self._get_file_impact(file_b)
+            impact_b = await self._get_file_impact(file_b)
             if file_a in impact_b:
                 return True
             return False
@@ -86,7 +98,7 @@ class WavePlanner:
                     import_coupled = False
                     for claimed_file in claimed_files_in_wave:
                         for task_file in task_files:
-                            if self._files_are_import_coupled(claimed_file, task_file):
+                            if await self._files_are_import_coupled(claimed_file, task_file):
                                 import_coupled = True
                                 break
                         if import_coupled:
