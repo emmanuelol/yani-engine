@@ -16,8 +16,9 @@ def _is_sandbox_warm_sync(worker_id: str) -> bool:
     except Exception:
         return False
 
-async def _ensure_warm_sandbox(worker_id: str = None, sandbox_mode: str = "dumbledoer-base") -> bool:
-    if not worker_id: return False
+async def _ensure_warm_sandbox(task_id: str = None, worker_id: str = None, sandbox_mode: str = "dumbledoer-base") -> bool:
+    active_id = worker_id or task_id
+    if not active_id: return False
     
     def _do_warm():
         try:
@@ -79,8 +80,9 @@ async def _ensure_warm_sandbox(worker_id: str = None, sandbox_mode: str = "dumbl
             raise RuntimeError(f"Docker infrastructure failure. Is the daemon running? Details: {e}")
     return await asyncio.to_thread(_do_warm)
 
-async def _teardown_warm_sandbox(worker_id: str = None):
-    if not worker_id: return
+async def _teardown_warm_sandbox(task_id: str = None, worker_id: str = None):
+    active_id = worker_id or task_id
+    if not active_id: return
     def _do_teardown():
         try:
             import hashlib

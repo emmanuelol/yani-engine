@@ -64,9 +64,9 @@ class BudgetManager:
             raise BudgetExhaustedException(f"Budget exhausted: {self.estimated_tokens} >= {self.shutdown_threshold}")
 
 class LLMOrchestrator:
-    def __init__(self):
+    def __init__(self, **kwargs):
         # FIX: Add an extra ".." to correctly resolve the repository root
-        self.plugin_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+        self.plugin_root = kwargs.get("plugin_dir", os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
         self.exit_stack = AsyncExitStack()
         self.mcp_sessions = {}
         self.mcp_locks = {}
@@ -92,6 +92,11 @@ class LLMOrchestrator:
         if config.budget_threshold_pct is not None:
             self.budget_manager.threshold_pct = config.budget_threshold_pct
             self.budget_manager.shutdown_threshold = int(self.budget_manager.budget_limit * (self.budget_manager.threshold_pct / 100.0))
+            
+        if "budget_limit" in kwargs:
+            self.budget_manager.budget_limit = kwargs["budget_limit"]
+            self.budget_manager.shutdown_threshold = int(self.budget_manager.budget_limit * (self.budget_manager.threshold_pct / 100.0))
+
 
     # Dynamic tool filtering per command to reduce token consumption
     COMMAND_TOOL_WHITELIST = {
@@ -186,15 +191,15 @@ class LLMOrchestrator:
         return mcp_wrapper
 
     async def connect_mcp(self):
-        if not os.path.exists(".codegraph"):
-            os.makedirs(".codegraph", exist_ok=True)
-            import sys
-            print("Initializing CodeGraph index...", file=sys.stderr)
-            import subprocess
-            await asyncio.to_thread(subprocess.run, ["npx", "--yes", "--package=@colbymchenry/codegraph", "codegraph", "init"], check=True)
-            
         # Connect to codegraph
         try:
+            if not os.path.exists(".codegraph"):
+                os.makedirs(".codegraph", exist_ok=True)
+                import sys
+                print("Initializing CodeGraph index...", file=sys.stderr)
+                import subprocess
+                await asyncio.to_thread(subprocess.run, ["npx", "--yes", "--package=@colbymchenry/codegraph", "codegraph", "init"], check=True)
+                
             codegraph_params = StdioServerParameters(
                 command="npx",
                 args=["--yes", "--quiet", "--package=@colbymchenry/codegraph", "codegraph", "serve", "--mcp"]
@@ -240,6 +245,9 @@ class LLMOrchestrator:
         self.is_codegraph_active = any(name.startswith("codegraph_") for name in existing_tools)
 
     async def _graceful_shutdown(self, task_id: str = None):
+        if getattr(self, "_is_shutting_down", False):
+            return
+        self._is_shutting_down = True
         print("CRITICAL: Budget Exhausted. Initiating Graceful Shutdown Sequence...")
         
         # 1. Update task statuses safely via the state manager
@@ -297,10 +305,6 @@ class LLMOrchestrator:
         return "\n".join(sliced) if sliced else content
 
     async def _get_system_instructions(self, command: str = None, task_id: str = None):
-        cache_key = f"{command}_{task_id}"
-        if cache_key in self._sys_inst_cache:
-            return self._sys_inst_cache[cache_key]
-
         # HYBRID OPTIMIZATION: Strict slicing for execute
         if command == "execute" and task_id:
             memory_content = await self._get_sliced_memory(["Config", "Task Registry", task_id])
@@ -310,6 +314,12 @@ class LLMOrchestrator:
             memory_content = await self._get_sliced_memory(["Project Goal", "Scope", "Edge Case Coverage", "Task Registry"])
         else:
             memory_content = await self.local_tools[0]("memory.md") or "No memory.md found. Start a new project."
+
+        import hashlib
+        mem_hash = hashlib.md5(memory_content.encode('utf-8')).hexdigest()
+        cache_key = f"{command}_{task_id}_{mem_hash}"
+        if cache_key in self._sys_inst_cache:
+            return self._sys_inst_cache[cache_key]
 
         instructions = [
             "# MISSION",
@@ -550,7 +560,8 @@ class LLMOrchestrator:
         
         # Generate session ID and claim task with ownership
         import datetime
-        session_id = f"S-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}"
+        import uuid
+        session_id = f"S-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
         await update_task_registry_row(task_id, "in_progress", session_id)
         await append_session_log_row(session_id, task_id)
         
@@ -663,17 +674,17 @@ Mandatory rules:
                 print(f"[Deterministic Validator] Task {task_id} is a validation task. Running test suite natively (0 tokens)...")
                 print(f"Command: {test_cmd}")
                 
-                # Execute natively via sandbox
-                res = await execute_bash(test_cmd, sandbox_mode="dumbledoer-base", task_id=task_id)
+                # Execute securely via sandbox
+                res = await execute_bash(test_cmd, sandbox_mode=self.sandbox_mode, task_id=task_id)
                 print(res)
                 
                 # --- APPLY FIX 2: Hardened Validation Logic ---
-                # Ensure no fatal bash errors exist AND tests didn't explicitly fail
+                # Check for explicit failure keywords in the sandbox output
                 if "No such file or directory" not in res and "FAILED" not in res and "error" not in res.lower():
                     await update_task_registry_row(task_id, "completed", session_id)
-                    print(f"Task {task_id} validated successfully via deterministic run.")
+                    print(f"Task {task_id} validated successfully via sandbox run.")
                 else:
-                    raise RuntimeError(f"Deterministic validation failed. Test output indicated errors or missing files.")
+                    raise RuntimeError("Sandbox validation failed. Test output indicated errors or missing files.")
             else:
                 import subprocess
                 try:
@@ -689,8 +700,9 @@ Mandatory rules:
                     post_untracked = set(subprocess.run(["git", "ls-files", "--others", "--exclude-standard"], capture_output=True, text=True).stdout.splitlines())
                     for garbage_file in post_untracked - pre_untracked:
                         if os.path.exists(garbage_file) and not garbage_file.startswith(".dumbledoer/"):
-                            print(f"🧹 Purging ephemeral artifact leaked by sandbox: {garbage_file}")
-                            os.remove(garbage_file)
+                            if garbage_file.endswith(".tmp") or garbage_file.endswith(".sh"):
+                                print(f"🧹 Purging ephemeral artifact leaked by sandbox: {garbage_file}")
+                                os.remove(garbage_file)
                 except Exception as e:
                     pass
 
@@ -718,7 +730,7 @@ Mandatory rules:
                 with open("memory.md", "r") as f:
                     for line in f:
                         parts = [p.strip() for p in line.split("|")]
-                        if len(parts) >= 5 and parts[4] == "planned":
+                        if len(parts) >= 6 and parts[5] == "planned":
                             task_id, target = parts[2], parts[3]
                             task_mapping[target] = task_id
 
@@ -765,7 +777,7 @@ Mandatory rules:
                     with open("memory.md", "r") as mem:
                         for line in mem:
                             parts = [p.strip() for p in line.split("|")]
-                            if len(parts) >= 5 and parts[4] == "planned" and parts[3] == actual_filename:
+                            if len(parts) >= 6 and parts[5] == "planned" and parts[3] == actual_filename:
                                 task_id = parts[2]
                                 break
                                 
@@ -981,72 +993,74 @@ Mandatory rules:
                     return
 
                 # Read memory into a list for surgical, line-by-line replacement
-                with open("memory.md", "r", encoding="utf-8") as f:
-                    mem_content = f.read()
-                mem_lines = mem_content.splitlines()
+                async with get_registry_lock():
+                    async with _MEMORY_MUTEX:
+                        with open("memory.md", "r", encoding="utf-8") as f:
+                            mem_content = f.read()
+                        mem_lines = mem_content.splitlines()
 
-                for task_id in tasks_to_rollback:
-                    print(f"\nRolling back {task_id}...")
-                    bak_dir = f".dumbledoer/rollbacks/{task_id}"
-                    
-                    if not os.path.exists(bak_dir):
-                        print(f"Warning: No rollback directory found for {task_id}. Only memory.md will be reset.")
-                    else:
-                        touched_files = []
-                        chg_start, chg_end = ASTMemoryMapper.locate_heading_block(mem_content, "##", "Change Log")
-                        if chg_start != -1:
-                            # Fix 1: Surgical String Replacement to avoid Ambiguity Corruption
-                            for i in range(chg_start + 1, chg_end):
-                                parts = [p.strip() for p in mem_lines[i].split("|")]
-                                if len(parts) >= 6 and parts[2] == task_id:
-                                    touched_files.append(parts[3])
-                                    mem_lines[i] = mem_lines[i].replace("| applied |", "| rolled-back |")
+                        for task_id in tasks_to_rollback:
+                            print(f"\nRolling back {task_id}...")
+                            bak_dir = f".dumbledoer/rollbacks/{task_id}"
+                            
+                            if not os.path.exists(bak_dir):
+                                print(f"Warning: No rollback directory found for {task_id}. Only memory.md will be reset.")
+                            else:
+                                touched_files = []
+                                chg_start, chg_end = ASTMemoryMapper.locate_heading_block(mem_content, "##", "Change Log")
+                                if chg_start != -1:
+                                    # Fix 1: Surgical String Replacement to avoid Ambiguity Corruption
+                                    for i in range(chg_start + 1, chg_end):
+                                        parts = [p.strip() for p in mem_lines[i].split("|")]
+                                        if len(parts) >= 6 and parts[2] == task_id:
+                                            touched_files.append(parts[3])
+                                            mem_lines[i] = mem_lines[i].replace("| applied |", "| rolled-back |")
 
-                        restored_files = set()
-                        for root, _, files in os.walk(bak_dir):
-                            for file in files:
-                                bak_path = os.path.join(root, file)
-                                rel_path = bak_path.replace(bak_dir + "/", "").replace("__colon__", ":").replace("__", "/")
-                                os.makedirs(os.path.dirname(os.path.abspath(rel_path)), exist_ok=True)
+                                restored_files = set()
+                                for root, _, files in os.walk(bak_dir):
+                                    for file in files:
+                                        bak_path = os.path.join(root, file)
+                                        rel_path = bak_path.replace(bak_dir + "/", "").replace("__colon__", ":").replace("__", "/")
+                                        os.makedirs(os.path.dirname(os.path.abspath(rel_path)), exist_ok=True)
+                                        
+                                        # Safety temp copy before overwrite
+                                        tmp_path = f".dumbledoer/tmp/{file}.tmp"
+                                        os.makedirs(os.path.dirname(tmp_path), exist_ok=True)
+                                        if os.path.exists(rel_path):
+                                            shutil.copy2(rel_path, tmp_path)
+                                        
+                                        shutil.copy2(bak_path, rel_path)
+                                        restored_files.add(rel_path)
+                                        print(f"  Restored: {rel_path}")
                                 
-                                # Safety temp copy before overwrite
-                                tmp_path = f".dumbledoer/tmp/{file}.tmp"
-                                os.makedirs(os.path.dirname(tmp_path), exist_ok=True)
-                                if os.path.exists(rel_path):
-                                    shutil.copy2(rel_path, tmp_path)
-                                
-                                shutil.copy2(bak_path, rel_path)
-                                restored_files.add(rel_path)
-                                print(f"  Restored: {rel_path}")
-                        
-                        for f_path in touched_files:
-                            if f_path not in restored_files and os.path.exists(f_path):
-                                os.remove(f_path)
-                                print(f"  Deleted newly created file: {f_path}")
+                                for f_path in touched_files:
+                                    if f_path not in restored_files and os.path.exists(f_path):
+                                        os.remove(f_path)
+                                        print(f"  Deleted newly created file: {f_path}")
 
-                    # Fix 2: Dynamic Task Details lookup for trailing titles
-                    t_start, t_end = -1, -1
-                    for i, line in enumerate(mem_lines):
-                        if line.startswith(f"### {task_id}"):
-                            t_start = i
-                            for j in range(i + 1, len(mem_lines)):
-                                if mem_lines[j].startswith("## ") or mem_lines[j].startswith("### T-"):
-                                    t_end = j
+                            # Fix 2: Dynamic Task Details lookup for trailing titles
+                            t_start, t_end = -1, -1
+                            for i, line in enumerate(mem_lines):
+                                if line.startswith(f"### {task_id}"):
+                                    t_start = i
+                                    for j in range(i + 1, len(mem_lines)):
+                                        if mem_lines[j].startswith("## ") or mem_lines[j].startswith("### T-"):
+                                            t_end = j
+                                            break
+                                    if t_end == -1:
+                                        t_end = len(mem_lines)
                                     break
-                            if t_end == -1:
-                                t_end = len(mem_lines)
-                            break
-                    
-                    if t_start != -1:
-                        for i in range(t_start, t_end):
-                            if "- **Owner**:" in mem_lines[i]: mem_lines[i] = "- **Owner**: —"
-                            if "- **Checkpoint**:" in mem_lines[i]: mem_lines[i] = "- **Checkpoint**: none"
-                            if "- **Notes**:" in mem_lines[i]: mem_lines[i] += f" (Rolled back)"
+                            
+                            if t_start != -1:
+                                for i in range(t_start, t_end):
+                                    if "- **Owner**:" in mem_lines[i]: mem_lines[i] = "- **Owner**: —"
+                                    if "- **Checkpoint**:" in mem_lines[i]: mem_lines[i] = "- **Checkpoint**: none"
+                                    if "- **Notes**:" in mem_lines[i]: mem_lines[i] += f" (Rolled back)"
 
-                # Save updated memory.md
-                mem_content = "\n".join(mem_lines)
-                with open("memory.md", "w", encoding="utf-8") as f:
-                    f.write(mem_content)
+                        # Save updated memory.md
+                        mem_content = "\n".join(mem_lines)
+                        with open("memory.md", "w", encoding="utf-8") as f:
+                            f.write(mem_content)
 
                 # Fix 3: Execute TaskRegistryState updates AFTER the file write
                 for task_id in tasks_to_rollback:
@@ -1800,7 +1814,11 @@ Success Criteria: {success_criteria}
                     console.print("\n[yellow]Dry run — no files modified. Run without --dry-run to apply.[/yellow]")
                     return
 
-                choice = Prompt.ask("Queue these surgical patches into the Task Registry? [Y/N]", choices=["Y", "N"], default="Y")
+                if config.verbose or not getattr(config, "non_interactive", False):
+                    choice = Prompt.ask("Queue these surgical patches into the Task Registry? [Y/N]", choices=["Y", "N"], default="Y")
+                else:
+                    console.print("[green]Auto-approving surgical patch queue (run interactively to review)[/green]")
+                    choice = "Y"
                 if choice == "N":
                     console.print("[yellow]Update cancelled.[/yellow]")
                     return
@@ -1814,9 +1832,14 @@ Success Criteria: {success_criteria}
 
                 from datetime import datetime
                 now_iso = datetime.utcnow().isoformat() + "Z"
-                mem_content = re.sub(r"- last_docs_update:.*", f"- last_docs_update: {now_iso}", mem_content)
-                with open("memory.md", "w", encoding="utf-8") as f:
-                    f.write(mem_content)
+                
+                async with get_registry_lock():
+                    async with _MEMORY_MUTEX:
+                        with open("memory.md", "r", encoding="utf-8") as f:
+                            fresh_mem = f.read()
+                        fresh_mem = re.sub(r"- last_docs_update:.*", f"- last_docs_update: {now_iso}", fresh_mem)
+                        with open("memory.md", "w", encoding="utf-8") as f:
+                            f.write(fresh_mem)
 
                 console.print("\n[bold green]Tasks successfully queued! Run /dumbledoer:execute to trigger the LLM patch wave.[/bold green]")
                 return
@@ -1838,8 +1861,10 @@ Success Criteria: {success_criteria}
                     init_content = init_content.replace("{{PROJECT_GOAL}}", "Pending LLM analysis...")
                     init_content = init_content.replace("{{SCOPE_ITEMS}}", "- Pending LLM analysis...")
                     
-                    with open("memory.md", "w", encoding="utf-8") as f:
-                        f.write(init_content)
+                    async with get_registry_lock():
+                        async with _MEMORY_MUTEX:
+                            with open("memory.md", "w", encoding="utf-8") as f:
+                                f.write(init_content)
                 except Exception as e:
                     print(f"CRITICAL: Failed to bootstrap memory.md: {e}")
                     return
@@ -1946,10 +1971,11 @@ Success Criteria: {success_criteria}
 
         finally:
             await _teardown_warm_sandbox()
-            self._archive_stale_sessions()
+            if command not in ["status", "report"]:
+                await self._archive_stale_sessions()
             await self.exit_stack.aclose()
 
-    def _archive_stale_sessions(self):
+    async def _archive_stale_sessions(self):
         archive_keep_sessions = 1
         
         if not os.path.exists("memory.md"):
@@ -2103,7 +2129,7 @@ Success Criteria: {success_criteria}
                             
             archive_tmp = f".dumbledoer/tmp/{sid}.archive.tmp"
             archive_md = f".dumbledoer/archive/{sid}.md"
-            with get_registry_lock():
+            async with get_registry_lock():
                 with open(archive_tmp, "w", encoding="utf-8") as f:
                     f.write("\n".join(record_lines))
                 
@@ -2129,10 +2155,11 @@ Success Criteria: {success_criteria}
                     
         final_lines = [l for l in new_lines if l != ""]
         tmp_mem = ".dumbledoer/tmp/memory.md.tmp"
-        with get_registry_lock():
-            with open(tmp_mem, "w", encoding="utf-8") as f:
-                f.write("\n".join(final_lines))
-        os.replace(tmp_mem, "memory.md")
+        async with get_registry_lock():
+            async with _MEMORY_MUTEX:
+                with open(tmp_mem, "w", encoding="utf-8") as f:
+                    f.write("\n".join(final_lines))
+                os.replace(tmp_mem, "memory.md")
         print(f"Archived {len(to_archive)} session(s) → .dumbledoer/archive/ ({len(lines) - len(final_lines)} lines trimmed from memory.md)")
 
 
