@@ -994,8 +994,8 @@ Mandatory rules:
                     return
 
                 # Read memory into a list for surgical, line-by-line replacement
-                async with get_registry_lock():
-                    async with _MEMORY_MUTEX:
+                async with _MEMORY_MUTEX:
+                    async with get_registry_lock():
                         with open("memory.md", "r", encoding="utf-8") as f:
                             mem_content = f.read()
                         mem_lines = mem_content.splitlines()
@@ -1555,8 +1555,8 @@ Success Criteria: {success_criteria}
                     return
 
                 from dumbledoer.core.locks import get_registry_lock, _MEMORY_MUTEX
-                async with get_registry_lock():
-                    async with _MEMORY_MUTEX:
+                async with _MEMORY_MUTEX:
+                    async with get_registry_lock():
                         with open("memory.md", "r", encoding="utf-8") as f:
                             content = f.read()
 
@@ -1834,8 +1834,8 @@ Success Criteria: {success_criteria}
                 from datetime import datetime
                 now_iso = datetime.utcnow().isoformat() + "Z"
                 
-                async with get_registry_lock():
-                    async with _MEMORY_MUTEX:
+                async with _MEMORY_MUTEX:
+                    async with get_registry_lock():
                         with open("memory.md", "r", encoding="utf-8") as f:
                             fresh_mem = f.read()
                         fresh_mem = re.sub(r"- last_docs_update:.*", f"- last_docs_update: {now_iso}", fresh_mem)
@@ -1862,8 +1862,8 @@ Success Criteria: {success_criteria}
                     init_content = init_content.replace("{{PROJECT_GOAL}}", "Pending LLM analysis...")
                     init_content = init_content.replace("{{SCOPE_ITEMS}}", "- Pending LLM analysis...")
                     
-                    async with get_registry_lock():
-                        async with _MEMORY_MUTEX:
+                    async with _MEMORY_MUTEX:
+                        async with get_registry_lock():
                             with open("memory.md", "w", encoding="utf-8") as f:
                                 f.write(init_content)
                 except Exception as e:
@@ -2163,8 +2163,8 @@ Success Criteria: {success_criteria}
                     
         final_lines = [l for l in new_lines if l != ""]
         tmp_mem = ".dumbledoer/tmp/memory.md.tmp"
-        async with get_registry_lock():
-            async with _MEMORY_MUTEX:
+        async with _MEMORY_MUTEX:
+            async with get_registry_lock():
                 with open(tmp_mem, "w", encoding="utf-8") as f:
                     f.write("\n".join(final_lines))
                 os.replace(tmp_mem, "memory.md")

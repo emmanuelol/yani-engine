@@ -129,6 +129,23 @@ async def flush_task_registry():
                 print("💾 [STATE] Successfully flushed registry cache to disk.")
         
 
+
+
+def _invalidate_task_cache():
+    global _TASK_CACHE, _CACHE_DIRTY
+    _TASK_CACHE = None
+    _CACHE_DIRTY = False
+
+def _atomic_write_memory_unlocked(content: str):
+    import os, uuid
+    tmp_path = f".dumbledoer/tmp/memory_{uuid.uuid4().hex[:6]}.tmp"
+    os.makedirs(".dumbledoer/tmp", exist_ok=True)
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        f.write(content)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp_path, "memory.md")
+
 class CheckpointManager:
     async def write_rollback_copy(self, target_path: str, rollback_path: str):
         if os.path.exists(rollback_path):
@@ -193,7 +210,8 @@ class OrphanRecoveryScanner:
         has_bak = os.path.exists(bak_dir) and bool(os.listdir(bak_dir))
         
         if not (has_tmp or has_chk or has_bak):
-            if unattended and config.verbose:
+            from dumbledoer.core.config import config
+            if unattended and getattr(config, 'verbose', False):
                 from rich.console import Console
                 Console().print("[dim]Orphan recovery scan: clean (fast-path)[/dim]")
             return
@@ -275,8 +293,8 @@ class OrphanRecoveryScanner:
                         os.remove(t)
                         
             if new_content != content:
-                with open("memory.md", "w", encoding="utf-8") as f:
-                    f.write(new_content)
+                _atomic_write_memory_unlocked(new_content)
+                _invalidate_task_cache()
 
 class TaskRegistryState:
     def __init__(self, md_path: str = "memory.md"):
@@ -319,7 +337,26 @@ class TaskRegistryState:
                             "deps": [],
                             "original_line": line
                         }
+
+            # Extract outputs from Task Details block
+            det_start, det_end = ASTMemoryMapper.locate_heading_block(content, "##", "Task Details")
+            if det_start != -1:
+                det_lines = content.splitlines()[det_start:det_end]
+                current_task = None
+                for line in det_lines:
+                    if line.startswith("### "):
+                        current_task = line.replace("### ", "").strip()
+                    elif current_task and current_task in tasks and "- **Outputs**:" in line:
+                        out_str = line.split(":", 1)[1].strip()
+                        tasks[current_task]["outputs"] = [o.strip() for o in out_str.split(",") if o.strip()]
+            
+            # Default empty outputs
+            for t_id in tasks:
+                if "outputs" not in tasks[t_id]:
+                    tasks[t_id]["outputs"] = []
+                    
             return tasks
+
         except FileNotFoundError:
             return {}
 
@@ -353,17 +390,16 @@ class TaskRegistryState:
                 if len(parts) >= 5 and "Task ID" not in parts[1] and not parts[1].strip().startswith("---"):
                     tid = parts[1].strip()
                     if tid in tasks:
-                        if len(parts) > stat_idx:
-                            parts[stat_idx] = f" {tasks[tid]['status']} "
-                        else:
-                            parts[4] = f" {tasks[tid]['status']} "
-                        if len(parts) >= 6 and 'owner' in tasks[tid]:
-                            parts[5] = f" {tasks[tid]['owner']} "
-                        if len(parts) >= 8 and 'session' in tasks[tid]:
-                            parts[7] = f" {tasks[tid]['session']} "
-                        if len(parts) >= 9 and 'checkpoint' in tasks[tid]:
-                            parts[8] = f" {tasks[tid]['checkpoint']} "
-                        new_block.append("|".join(parts))
+                        t_data = tasks[tid]
+                        # Pad parts array if malformed
+                        while len(parts) < 10:
+                            parts.append(" ")
+                        parts[stat_idx] = f" {t_data.get('status', 'unknown')} "
+                        parts[5] = f" {t_data.get('owner', '—')} "
+                        parts[7] = f" {t_data.get('session', '—')} "
+                        parts[8] = f" {t_data.get('checkpoint', 'none')} "
+                        new_block.append("|".join(parts[:9]) + " |")
+
                     else:
                         new_block.append(line)
                 else:
@@ -405,10 +441,7 @@ async def read_file(path: str) -> str:
         expanded_path = os.path.expanduser(path)
         with open(expanded_path, "r", encoding="utf-8") as f:
             return f.read()
-    try:
-        return await asyncio.to_thread(_read)
-    except Exception as e:
-        return f"Error reading file {path}: {e}"
+    return await asyncio.to_thread(_read)
 
 async def write_file_with_review(path: str, content: str, task_id: str, **kwargs) -> str:
     """
@@ -440,12 +473,17 @@ async def write_file_with_review(path: str, content: str, task_id: str, **kwargs
         os.makedirs(tmp_dir, exist_ok=True)
         import uuid
         encoded_path = path.replace("/", "__").replace(":", "__colon__")
-        tmp_path = os.path.join(tmp_dir, f"{uuid.uuid4().hex}_{encoded_path}.tmp")
+        tmp_path = os.path.join(tmp_dir, f"{task_id}_{encoded_path}.tmp")
+        
+        if os.path.exists(tmp_path):
+            with open(tmp_path, "w") as f:
+                f.write(content)
+            return f"Updated existing staged file {path} for review. No new checkpoint created."
         
         import time
         from datetime import datetime
         manager = CheckpointManager()
-        chk_id = f"chk_{int(time.time())}"
+        chk_id = f"chk_{time.time_ns()}_{uuid.uuid4().hex[:6]}"
         
         metadata = {
             "Timestamp": datetime.now().isoformat(),
@@ -465,7 +503,9 @@ async def write_file_with_review(path: str, content: str, task_id: str, **kwargs
         await manager.write_checkpoint_json(checkpoint_path, metadata)
         
         # Link checkpoint to the task in the Task Registry
-        await update_task_registry_row(task_id, "in_progress", checkpoint_id=chk_id)
+        reg_success = await update_task_registry_row(task_id, "in_progress", checkpoint_id=chk_id)
+        if not reg_success:
+            return f"Error: Task {task_id} not found in the Task Registry. File not staged."
         
         with open(tmp_path, "w") as f:
             f.write(content)
@@ -577,8 +617,8 @@ async def register_task_batch(tasks: list[dict]) -> str:
                 
                 lines = lines[:reg_insert] + rows_to_insert + lines[reg_insert:]
 
-                with open("memory.md", "w", encoding="utf-8") as f:
-                    f.write("\n".join(lines) + "\n")
+                _atomic_write_memory_unlocked("\n".join(lines) + "\n")
+                _invalidate_task_cache()
                     
                 success_msg = f"Successfully registered tasks {', '.join(incoming_task_ids)}."
                 print(f"💾 [STATE] {success_msg}")
@@ -658,7 +698,11 @@ tags: [knowledge-registry]
                     # 4. Synchronous Index Update
                     if os.path.exists("sync_knowledge.py"):
                         import subprocess
-                        subprocess.run([sys.executable, "sync_knowledge.py"], capture_output=True)
+                        import asyncio
+                        try:
+                            await asyncio.to_thread(subprocess.run, [sys.executable, "sync_knowledge.py"], capture_output=True, timeout=10)
+                        except subprocess.TimeoutExpired:
+                            print("Warning: sync_knowledge.py timed out after 10s")
 
                     msg = f"Successfully recorded learning to {filename}"
                     if supersedes and supersedes.lower() not in ["none", "—", "-", ""]:
@@ -680,8 +724,8 @@ async def append_handoff_summary(summary: str):
                     content = "\n".join(lines[:start_idx] + [summary.strip()] + lines[end_idx:])
                 else:
                     content += f"\n\n{summary}"
-                with open("memory.md", "w", encoding="utf-8") as f:
-                    f.write(content)
+                _atomic_write_memory_unlocked(content)
+                _invalidate_task_cache()
 
 async def append_session_log_row(session_id: str, task_id: str) -> str:
     """Appends a new tracking row to the Session Log table in memory.md."""
