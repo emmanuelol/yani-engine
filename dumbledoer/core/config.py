@@ -9,13 +9,16 @@ def _is_local_alive(port=11434):
         s.settimeout(0.2)
         return s.connect_ex(('127.0.0.1', port)) == 0
 
+# [FIX]: Global cache to prevent leaking httpx connections on repeated property access
+_GLOBAL_PROVIDER_CACHE = None
+
 class AppConfig(BaseSettings):
     # API Keys & Auth
     gemini_api_key: str | None = None
     google_api_key: str | None = None
     
     # Execution Settings
-    start_at_index: int = 1  # FIX: Changed from 7 to 1
+    start_at_index: int = 1
     verbose: bool = False
     
     # Vendor-Agnostic Model Tiers
@@ -33,11 +36,15 @@ class AppConfig(BaseSettings):
 
     @property
     def providers(self) -> Dict[str, AbstractLLMProvider]:
+        global _GLOBAL_PROVIDER_CACHE
+        if _GLOBAL_PROVIDER_CACHE is not None:
+            return _GLOBAL_PROVIDER_CACHE
+
         provs = {}
         try:
             import agy
             provs["cloud"] = AntigravityProvider()
-        except ImportError:
+        except (ImportError, RuntimeError): # [FIX]: Catch RuntimeError if native agy modules are broken
             key = self.gemini_api_key or self.google_api_key or os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
             if key:
                 provs["cloud"] = GeminiProvider(api_key=key)
@@ -48,6 +55,7 @@ class AppConfig(BaseSettings):
         if not provs:
             raise RuntimeError("CRITICAL: No LLM providers could be initialized. Check API keys.")
             
+        _GLOBAL_PROVIDER_CACHE = provs
         return provs
 
 # Global Singleton instance

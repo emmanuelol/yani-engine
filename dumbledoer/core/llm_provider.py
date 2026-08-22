@@ -2,6 +2,7 @@ from abc import ABC, abstractmethod
 from typing import Any, List, Dict
 import httpx
 import json
+import uuid
 from google import genai
 from google.genai.types import Part
 import inspect
@@ -78,8 +79,12 @@ class AbstractLLMProvider(ABC):
         pass
 
     @abstractmethod
-    def prune_history(self, session: Any, max_turns: int) -> tuple[Any, bool]:
+    async def prune_history(self, session: Any, max_turns: int) -> tuple[Any, bool]:
         """Prunes the session history to prevent context window bloat. Returns (updated_session, bool_if_pruned)."""
+        pass
+        
+    async def aclose(self):
+        """Cleanup hook for lingering HTTP sessions."""
         pass
         
 class GeminiProvider(AbstractLLMProvider):
@@ -87,14 +92,14 @@ class GeminiProvider(AbstractLLMProvider):
         self.client = genai.Client(api_key=api_key)
         
     async def create_chat_session(self, model_name: str, tools: List[Any]) -> Any:
-        session = self.client.aio.chats.create(
+        # [FIX]: Await the async SDK call before mutating the session
+        session = await self.client.aio.chats.create(
             model=model_name,
             config={
                 "tools": tools,
                 "automatic_function_calling": {"disable": True}
             }
         )
-        # Store these so we can recreate the session during pruning
         session._dumbledoer_model = model_name
         session._dumbledoer_tools = tools
         return session
@@ -107,7 +112,7 @@ class GeminiProvider(AbstractLLMProvider):
         if response.function_calls:
             for call in response.function_calls:
                 calls.append({
-                    "id": getattr(call, "id", None), # Safely capture the ID
+                    "id": getattr(call, "id", None) or f"call_{uuid.uuid4().hex[:10]}",
                     "name": call.name,
                     "args": dict(call.args) if call.args else {}
                 })
@@ -125,12 +130,14 @@ class GeminiProvider(AbstractLLMProvider):
             part.function_response.id = call_id
         return part
 
-    def prune_history(self, session: Any, max_turns: int) -> tuple[Any, bool]:
+    async def prune_history(self, session: Any, max_turns: int) -> tuple[Any, bool]:
+        # [FIX]: Make pruning async to support the aio chats.create reconstruction
         history = getattr(session, '_history', None)
         if history is not None and len(history) > max_turns:
             found_safe_boundary = False
             slice_index = -(max_turns - 1)
-            while abs(slice_index) < len(history):
+            
+            while abs(slice_index) <= len(history):
                 item = history[slice_index]
                 item_role = getattr(item, 'role', None) or (item.get('role') if isinstance(item, dict) else None)
                 if item_role == 'model':
@@ -140,8 +147,8 @@ class GeminiProvider(AbstractLLMProvider):
 
             if found_safe_boundary:
                 new_history = [history[0]] + history[slice_index:]
-                # Cleanly recreate session to prevent 500 INTERNAL SDK state corruption
-                new_session = self.client.aio.chats.create(
+                # Cleanly recreate session and await it
+                new_session = await self.client.aio.chats.create(
                     model=getattr(session, '_dumbledoer_model', 'gemini-3.6-flash'),
                     config={"tools": getattr(session, '_dumbledoer_tools', []), "automatic_function_calling": {"disable": True}},
                     history=new_history
@@ -168,7 +175,6 @@ class LocalProvider(AbstractLLMProvider):
         self.client = httpx.AsyncClient(timeout=120.0)
 
     async def create_chat_session(self, model_name: str, tools: List[Any]) -> Any:
-        # Pre-convert all tools to OpenAI schema format once upon session creation
         openai_tools = [_convert_tool_to_openai_schema(t) for t in tools if callable(t)]
         return {
             "model": model_name,
@@ -177,23 +183,23 @@ class LocalProvider(AbstractLLMProvider):
         }
 
     async def send_message(self, session: Any, payload: str | List[Any]) -> Any:
-        # Handle user message or tool response parts safely
+        # [FIX]: Idempotency - Clone the history to prevent duplicates on timeout/retry
+        candidate_history = list(session["_history"])
+        
         if isinstance(payload, list):
             for part in payload:
-                # If it's a tool response part from our helper
                 if isinstance(part, dict) and part.get("role") == "tool":
-                    session["_history"].append(part)
+                    candidate_history.append(part)
                 else:
-                    session["_history"].append({"role": "user", "content": str(part)})
+                    candidate_history.append({"role": "user", "content": str(part)})
         else:
-            session["_history"].append({"role": "user", "content": str(payload)})
+            candidate_history.append({"role": "user", "content": str(payload)})
         
         request_body = {
             "model": session["model"],
-            "messages": session["_history"]
+            "messages": candidate_history
         }
         
-        # Attach tools if available
         if session.get("tools"):
             request_body["tools"] = session["tools"]
             request_body["tool_choice"] = "auto"
@@ -205,13 +211,13 @@ class LocalProvider(AbstractLLMProvider):
         response.raise_for_status()
         data = response.json()
         
-        # Append assistant response
         message = data["choices"][0]["message"]
-        session["_history"].append(message)
+        candidate_history.append(message)
         
-        # FIX: Mock an object instance so getattr() works correctly in _run_with_tools
+        # Safely commit to state only after a 200 OK
+        session["_history"] = candidate_history
+        
         usage_data = data.get("usage", {})
-            
         return LocalResponse(message, MockUsage(usage_data.get("total_tokens", 0)))
 
     def parse_tool_calls(self, response: Any) -> List[Dict]:
@@ -219,38 +225,42 @@ class LocalProvider(AbstractLLMProvider):
         raw_tool_calls = getattr(response, "function_calls", None)
         if raw_tool_calls:
             for call in raw_tool_calls:
-                # OpenAI format: call['function']['name'] and call['function']['arguments'] (stringified JSON)
                 if isinstance(call, dict) and "function" in call:
                     func_data = call["function"]
                     args_raw = func_data.get("arguments", "{}")
-                    args = json.loads(args_raw) if isinstance(args_raw, str) else args_raw
+                    
+                    # [FIX]: Safely handle malformed tool JSON
+                    try:
+                        args = json.loads(args_raw) if isinstance(args_raw, str) else args_raw
+                        if not isinstance(args, dict):
+                            args = {}
+                    except json.JSONDecodeError:
+                        args = {}
+                        
                     calls.append({
-                        "id": call.get("id"), # Capture OpenAI schema ID
-                        "name": func_data.get("name"),
+                        "id": call.get("id") or f"call_{uuid.uuid4().hex[:10]}",
+                        "name": func_data.get("name", "unknown"),
                         "args": args
                     })
         return calls
 
     def format_tool_response(self, tool_name: str, result: str, call_id: str = None) -> Any:
-        resp = {"role": "tool", "name": tool_name, "content": result}
-        if call_id:
-            resp["tool_call_id"] = call_id
-        return resp
+        # [FIX]: Hard-enforce tool_call_id inclusion to prevent 400 Bad Request
+        call_id = call_id or f"call_{uuid.uuid4().hex[:10]}"
+        return {"role": "tool", "name": tool_name, "content": result, "tool_call_id": call_id}
 
     def format_tool_error(self, tool_name: str, error: str, call_id: str = None) -> Any:
-        resp = {"role": "tool", "name": tool_name, "content": f"Error: {error}"}
-        if call_id:
-            resp["tool_call_id"] = call_id
-        return resp
+        call_id = call_id or f"call_{uuid.uuid4().hex[:10]}"
+        return {"role": "tool", "name": tool_name, "content": f"Error: {error}", "tool_call_id": call_id}
 
-    def prune_history(self, session: Any, max_turns: int) -> tuple[Any, bool]:
+    async def prune_history(self, session: Any, max_turns: int) -> tuple[Any, bool]:
         history = session["_history"]
         if len(history) > max_turns:
             found_safe_boundary = False
             slice_index = -(max_turns - 1)
 
-            # Walk backwards to find a clean 'user' boundary to prevent 400 Bad Requests
-            while abs(slice_index) < len(history):
+            # [FIX]: Off-by-one correction to guarantee boundary inclusion
+            while abs(slice_index) <= len(history):
                 item = history[slice_index]
                 if item.get("role") == "user":
                     found_safe_boundary = True
@@ -263,11 +273,14 @@ class LocalProvider(AbstractLLMProvider):
 
         return session, False
 
+    async def aclose(self):
+        await self.client.aclose()
+
+
 class AntigravityProvider(AbstractLLMProvider):
     """Hooks directly into the native 'agy' client to use native account credits."""
     
     def __init__(self):
-        # Dynamically import agy to prevent crash if run outside the client
         try:
             from agy.core.session import AgySession
             self.agy_session = AgySession()
@@ -275,8 +288,6 @@ class AntigravityProvider(AbstractLLMProvider):
             raise RuntimeError("CRITICAL: Antigravity native modules not found. Are you running inside agy?")
 
     async def create_chat_session(self, model_name: str, tools: List[Any]) -> Any:
-        # Request a specific model tier from the native client (e.g., 'high' for Pro, 'standard' for Flash)
-        # The agy client tracks the credit burn internally for this session
         return await self.agy_session.spawn_agent(
             model=model_name,
             tools=tools,
@@ -284,23 +295,29 @@ class AntigravityProvider(AbstractLLMProvider):
         )
 
     async def send_message(self, session: Any, payload: str | List[Any]) -> Any:
-        # The native agy session handles backoffs, rate limits, and credit accounting automatically
         return await session.send(payload)
 
     def parse_tool_calls(self, response: Any) -> List[Dict]:
-        # Adapt agy's native tool response objects into DumbleDoer's standard format
         calls = []
         if getattr(response, 'tool_calls', None):
             for call in response.tool_calls:
+                # [FIX]: Added exception protection for native client hallucinations
+                args_raw = call.arguments
+                try:
+                    args = args_raw if isinstance(args_raw, dict) else json.loads(args_raw)
+                    if not isinstance(args, dict):
+                        args = {}
+                except (json.JSONDecodeError, TypeError):
+                    args = {}
+                    
                 calls.append({
-                    "id": getattr(call, "id", None),
+                    "id": getattr(call, "id", None) or f"call_{uuid.uuid4().hex[:10]}",
                     "name": call.name,
-                    "args": call.arguments if isinstance(call.arguments, dict) else json.loads(call.arguments)
+                    "args": args
                 })
         return calls
 
     def format_tool_response(self, tool_name: str, result: str, call_id: str = None) -> Any:
-        # Import agy's specific tool response class
         from agy.core.types import ToolResult
         return ToolResult(name=tool_name, content=result, tool_call_id=call_id)
 
@@ -308,7 +325,7 @@ class AntigravityProvider(AbstractLLMProvider):
         from agy.core.types import ToolResult
         return ToolResult(name=tool_name, content=f"Error: {error}", is_error=True, tool_call_id=call_id)
 
-    def prune_history(self, session: Any, max_turns: int) -> tuple[Any, bool]:
+    async def prune_history(self, session: Any, max_turns: int) -> tuple[Any, bool]:
         if hasattr(session, 'truncate_context'):
             session.truncate_context(keep_recent=max_turns)
             return session, True

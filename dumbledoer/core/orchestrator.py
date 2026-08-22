@@ -512,7 +512,8 @@ class LLMOrchestrator:
             print(f"⏱️ [NETWORK] LLM responded in {time.time() - t1:.1f}s")
 
             # [THE SLIDING WINDOW: History Pruning]
-            chat_session, pruned = active_provider.prune_history(chat_session, MAX_HISTORY_TURNS)
+            # [FIX]: Await the newly asynchronous provider method to prevent coroutine deadlocks
+            chat_session, pruned = await active_provider.prune_history(chat_session, MAX_HISTORY_TURNS)
             if status:
                 if pruned:
                     status.update("[bold magenta]Context optimization: Pruned stale chat history...")
@@ -1973,6 +1974,13 @@ Success Criteria: {success_criteria}
             await _teardown_warm_sandbox()
             if command not in ["status", "report"]:
                 await self._archive_stale_sessions()
+            
+            # [FIX]: Drain and close all async HTTP client sessions to prevent OS-level file descriptor leaks
+            if hasattr(self, "providers"):
+                for provider in self.providers.values():
+                    if hasattr(provider, "aclose"):
+                        await provider.aclose()
+                        
             await self.exit_stack.aclose()
 
     async def _archive_stale_sessions(self):
