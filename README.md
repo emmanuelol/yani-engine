@@ -26,11 +26,11 @@ yani-engine treats source code as a structured relational graph rather than plai
 
 ```mermaid
 flowchart LR
-    A[Target File / Symbol] -->|Query AST Bounds| B[CodeGraph Indexer]
-    B -->|Build Call Graph| C{Calculate Blast Radius}
-    C -->|Affected Symbols <= 20| D[✅ Approve Staged Mutation]
-    C -->|Affected Symbols > 20| E[❌ Hard Block: Blast Radius Exceeded]
-    C -->|Timeout / Failure| F[🚫 Fail-Closed: Operation Blocked]
+    A["Target File / Symbol"] -->|"Query AST Bounds"| B["CodeGraph Indexer"]
+    B -->|"Build Call Graph"| C{"Calculate Blast Radius"}
+    C -->|"Affected Symbols <= 20"| D["✅ Approve Staged Mutation"]
+    C -->|"Affected Symbols > 20"| E["❌ Hard Block: Blast Radius Exceeded"]
+    C -->|"Timeout / Failure"| F["🚫 Fail-Closed: Operation Blocked"]
 ```
 
 1. **AST Node & Call Graph Traversal**: Before any file modification, yani-engine queries CodeGraph to locate exact symbol definitions and trace all upstream/downstream callers across the workspace.
@@ -40,38 +40,50 @@ flowchart LR
 
 ---
 
-## 🧭 `yani-skill` (Deterministic Planning & Evidence-Based Execution)
+## 💡 `yani-skill`: The "Lite" Fast-Path Companion
 
-Included natively is **`yani-skill`** (triggered via `/yani-skill` or `/yani-engine:yani-skill`), a ruthless, evidence-driven execution framework that discovers implicit repo conventions and audits diffs deterministically.
+Need deterministic planning without the overhead of Docker containers or multi-agent orchestrators? 
+
+**`yani-skill`** (invoked via `/yani-skill` or `/yani-engine:yani-skill`) is the friendly, **Lite edition** of `yani-engine`. It runs directly in your active workspace, delivering instant evidence-based pairing, git convention detection, and strict diff auditing.
+
+| Feature | `yani-engine` (Full Harness) | `yani-skill` (Lite Fast-Path) |
+| :--- | :--- | :--- |
+| **Execution Mode** | Autonomous multi-agent background waves | Single-turn, interactive developer pairing |
+| **Sandbox Environment** | Zero-trust Docker container (`yani-base`) | Native workspace with zero setup |
+| **State Tracking** | Persistent `memory.md` DOM state & checkpoints | Transient branch isolation (`yani/T-XX`) |
+| **Safety Gates** | CodeGraph AST impact + Diff-Gate | Historical git co-change + Diff-Audit |
+| **Best For** | Massive repo refactors & background tasks | Daily feature development & quick bug fixes |
+
+### `yani-skill` 4-Phase Lifecycle
 
 ```mermaid
 flowchart TD
     subgraph Phase 1: Recon
-    A[Target File] -->|python3 scripts/cochange.py| B[Analyze Git History]
-    B -->|Ratio > 0.8| C[Establish convention_guard]
-    C -->|python3 scripts/verify_evidence.py| D{Reproducible?}
-    D -- Yes --> E[Validated Evidence]
-    D -- No --> F[Reject Assumption]
+    A["Target File"] -->|"python3 scripts/cochange.py"| B["Analyze Git History"]
+    B -->|"Ratio > 0.8"| C["Establish convention_guard"]
+    C -->|"python3 scripts/verify_evidence.py"| D{"Reproducible?"}
+    D -- Yes --> E["Validated Evidence"]
+    D -- No --> F["Reject Assumption"]
     end
 
     subgraph Phase 2: Atomic Plan
-    E --> G[Draft plan.json]
-    G -->|python3 scripts/validate_plan.py| H{Schema & Overlap Check}
-    H -- Pass --> I[Await Human Approval]
+    E --> G["Draft plan.json"]
+    G -->|"python3 scripts/validate_plan.py"| H{"Schema & Overlap Check"}
+    H -- Pass --> I["Await Human Approval"]
     end
 
     subgraph Phase 3: TDA Execution
-    I --> J[Branch: yani/T-01]
-    J --> K[Write Test First]
-    K --> L[Implement Mutation]
+    I --> J["Branch: yani/T-01"]
+    J --> K["Write Test First"]
+    K --> L["Implement Mutation"]
     end
 
     subgraph Phase 4: Deterministic Audit
-    L --> M[python3 scripts/diff_audit.py --expect guards]
-    M --> N[Run Test Suite]
-    N --> O{Evidence Raw & Valid?}
-    O -- Yes --> P[Pause -> Human Authorization -> Git Commit]
-    O -- No --> Q[Rollback Working Tree & Branch]
+    L --> M["python3 scripts/diff_audit.py --expect guards"]
+    M --> N["Run Test Suite"]
+    N --> O{"Evidence Valid?"}
+    O -- Yes --> P["Pause -> Human Authorization -> Git Commit"]
+    O -- No --> Q["Rollback Working Tree"]
     end
 ```
 
@@ -135,22 +147,22 @@ yani-engine has a strictly decoupled architecture designed for scale and clarity
 
 ```mermaid
 graph TD
-    CLI[yani_engine/cli/main.py] -->|Hydrates| CFG[yani_engine/core/config.py]
-    CLI -->|Dispatches| ORC[yani_engine/core/orchestrator.py]
+    CLI["yani_engine/cli/main.py"] -->|"Hydrates"| CFG["yani_engine/core/config.py"]
+    CLI -->|"Dispatches"| ORC["yani_engine/core/orchestrator.py"]
     
-    CFG -->|Injects Providers| ORC
+    CFG -->|"Injects Providers"| ORC
     
-    ORC -->|Multi-Loop Async Mutex| LCK[yani_engine/core/locks.py]
-    ORC -->|AST State Machine| ST[yani_engine/core/state.py]
-    ORC -->|Semantic Wave Planning| PL[yani_engine/core/planner.py]
-    ORC -->|Process-Isolated Sandbox| SB[yani_engine/core/sandbox.py]
+    ORC -->|"Multi-Loop Async Mutex"| LCK["yani_engine/core/locks.py"]
+    ORC -->|"AST State Machine"| ST["yani_engine/core/state.py"]
+    ORC -->|"Semantic Wave Planning"| PL["yani_engine/core/planner.py"]
+    ORC -->|"Process-Isolated Sandbox"| SB["yani_engine/core/sandbox.py"]
     
-    ORC -->|MCP RPC Protocol| MCP[CodeGraph & Context7]
-    ORC -->|Provider Interface| LLM[yani_engine/core/llm_provider.py]
+    ORC -->|"MCP RPC Protocol"| MCP["CodeGraph & Context7"]
+    ORC -->|"Provider Interface"| LLM["yani_engine/core/llm_provider.py"]
     
-    LLM --> Gemini[GeminiProvider]
-    LLM --> Local[LocalProvider (Ollama/vLLM)]
-    LLM --> Agy[AntigravityProvider]
+    LLM --> Gemini["GeminiProvider"]
+    LLM --> Local["LocalProvider (Ollama/vLLM)"]
+    LLM --> Agy["AntigravityProvider"]
 ```
 
 ### Dynamic Vendor Tiering
@@ -178,12 +190,12 @@ yani-engine executes tasks in parallel waves via `asyncio.gather`. To prevent st
 ```mermaid
 sequenceDiagram
     autonumber
-    participant Worker as Parallel Worker
-    participant Orchestrator as LLMOrchestrator
-    participant MultiLoopLock as MultiLoopAsyncLock
-    participant State as state.py (_TASK_CACHE)
-    participant FileLock as _FILE_LOCK (ThreadPool)
-    participant Memory as memory.md
+    participant Worker as "Parallel Worker"
+    participant Orchestrator as "LLMOrchestrator"
+    participant MultiLoopLock as "MultiLoopAsyncLock"
+    participant State as "state.py (_TASK_CACHE)"
+    participant FileLock as "_FILE_LOCK (ThreadPool)"
+    participant Memory as "memory.md"
 
     Worker->>Orchestrator: execute_task(T-001)
     Orchestrator->>MultiLoopLock: async with _MEMORY_MUTEX
@@ -215,4 +227,4 @@ sequenceDiagram
 * **/yani-engine report**: Generates an improvement report detailing CodeGraph impact.
 * **/yani-engine update-docs**: Syncs documentation with the current codebase.
 * **/yani-engine status**: Shows the Task Registry and CodeGraph health.
-* **/yani-engine:yani-skill** (or `/yani-skill`): Deterministic, evidence-based planner and executor using co-change history and diff audits.
+* **/yani-engine:yani-skill** (or `/yani-skill`): **Lite Mode** — Deterministic, evidence-based planner and auditor using co-change history and diff audits.

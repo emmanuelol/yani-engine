@@ -17,7 +17,16 @@ yani-engine commands accept several granular flags to control behavior:
   - `--budget-threshold <pct>`: (Type: `integer`, Default: `80`) Specify the threshold percentage for token budget exhaustion before triggering a graceful shutdown.
 - `yani-engine resume`: Detects stale locks and offers options to resume, rollback, or skip.
 - `yani-engine report`: Generates an improvement report using CodeGraph metrics.
-- `yani-engine:yani-skill` (or `/yani-skill`): Deterministic planner & auditor using co-change coupling analysis and strict diff audit gates.
+- `yani-engine:yani-skill` (or `/yani-skill`): **Lite Fast-Path Mode** — Lightweight, deterministic planner & auditor for daily pairing without Docker setup.
+
+---
+
+## Choosing Between Full Harness and Lite Mode
+
+- **Use `/yani-engine start` (Full Harness)** when executing large architectural overhauls, running unattended overnight jobs, requiring process/Docker sandboxing, or tracking multi-wave parallel dependencies.
+- **Use `/yani-skill` (Lite Mode)** for daily feature work, quick bug fixes, and instant pairing where you want evidence-based convention guards and test-driven diff audits directly in your repo.
+
+---
 
 ## `memory.md` Configuration and Tracking
 
