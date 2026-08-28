@@ -12,9 +12,31 @@ It operates on a **"Zero-Copy Plugin"** model. Instead of polluting every target
 
 Under the hood, yani-engine leverages powerful, modern tools to give you the safest and most efficient agentic experience:
 
-* **MCP (Model Context Protocol):** Connects to specialized servers like **CodeGraph** (for rigorous blast radius analysis) and **Context7** (for deep semantic search).
-* **[uv](https://github.com/astral-sh/uv):** Used for lightning-fast, isolated Python environments, ensuring system Python integrity.
-* **RTK (Rust Token Killer):** Integrates this custom system tool to forcefully optimize memory and clear token bloat during heavy architectural refactors.
+* **CodeGraph (AST Blast-Radius Analysis):** Maps deep Abstract Syntax Tree (AST) relationships, reference graphs, and symbol call trees to calculate impact radius before applying code mutations.
+* **Context7 (Semantic Documentation Search):** Real-time semantic documentation retrieval for external libraries and APIs.
+* **MCP (Model Context Protocol):** Standardized RPC bridges connecting sub-agents seamlessly to CodeGraph, Context7, and custom tool sidecars.
+* **[uv](https://github.com/astral-sh/uv):** Lightning-fast, isolated Python environments, ensuring host Python integrity.
+* **RTK (Rust Token Killer):** High-throughput token optimization CLI proxy, cutting execution overhead and memory consumption by 60–90%.
+
+---
+
+## 🔍 CodeGraph Deep-Dive Integration
+
+yani-engine treats source code as a structured relational graph rather than plain text. Through native MCP and CLI integration, CodeGraph enforces strict architectural guardrails:
+
+```mermaid
+flowchart LR
+    A[Target File / Symbol] -->|Query AST Bounds| B[CodeGraph Indexer]
+    B -->|Build Call Graph| C{Calculate Blast Radius}
+    C -->|Affected Symbols <= 20| D[✅ Approve Staged Mutation]
+    C -->|Affected Symbols > 20| E[❌ Hard Block: Blast Radius Exceeded]
+    C -->|Timeout / Index Failure| F[🚫 Fail-Closed: Operation Rejected]
+```
+
+1. **AST Node & Call Graph Traversal**: Before any file modification, yani-engine queries CodeGraph to locate exact symbol definitions and trace all upstream/downstream callers across the workspace.
+2. **20-Symbol Blast-Radius Limit**: Prevents accidental architectural cascading failures. If modifying a function directly affects more than 20 external symbols, the write is immediately rejected and returned to the LLM for decomposition.
+3. **Fail-Closed Diff Gate**: If CodeGraph indexing times out (5-second hard ceiling) or encounters system degradation, yani-engine rejects the modification rather than failing open.
+4. **Semantic Import Coupling in Wave Planning**: `WavePlanner` queries CodeGraph impact caches to detect mutual import dependencies between tasks, preventing race conditions by scheduling coupled tasks into sequential waves.
 
 ---
 
@@ -31,6 +53,11 @@ cd yani-engine
 2. Install the plugin natively via `agy` (Global Client Linking):
 ```bash
 agy plugin install ./
+```
+
+3. (Optional) Run the automated installer to initialize dependencies and Docker base sandbox:
+```bash
+./install.sh
 ```
 
 That's it! yani-engine is now hooked into your `agy` environment. 🎉
@@ -53,8 +80,8 @@ yani-engine also supports **Native Antigravity Integration**. If the plugin dete
 ## 🛡️ Security Features
 
 yani-engine prioritizes safety during execution with two primary mechanisms:
-* **VS Code Diff-Gate**: File changes are written to a shadow `.tmp` copy while the original is backed up. If you reject a change during review, yani-engine automatically restores the original file. If VS Code is unavailable, a terminal-native `rich` diff is used.
-* **Zero-Trust Docker Sandbox (Shadow Clone Isolation)**: Sub-agents execute testing within a fully isolated Docker container using the "Shadow Clone" pattern. The codebase is safely cloned into the sandbox, providing agents with a fully mutable playground that prevents container crashes when installing packages or writing cache files.
+* **VS Code Diff-Gate**: File changes are written to a shadow `.tmp` copy while the original is backed up in `.yani/rollbacks/{task_id}/`. If you reject a change during review, yani-engine automatically restores the original file. If VS Code is unavailable, a terminal-native `rich` diff is used.
+* **Zero-Trust Docker Sandbox (Shadow Clone Isolation)**: Sub-agents execute testing within a fully isolated Docker container (`yani-base:latest`) using the "Shadow Clone" pattern. The codebase is safely cloned into `.yani/shadow_{worker_id}`, providing agents with a fully mutable playground that prevents container crashes when installing packages or writing cache files.
 
 ---
 
@@ -64,18 +91,21 @@ yani-engine has a strictly decoupled architecture designed for scale and clarity
 
 ```mermaid
 graph TD
-    CLI[cli/main.py] -->|Hydrates| CFG[core/config.py]
-    CLI -->|Dispatches| ORC[core/orchestrator.py]
+    CLI[yani_engine/cli/main.py] -->|Hydrates| CFG[yani_engine/core/config.py]
+    CLI -->|Dispatches| ORC[yani_engine/core/orchestrator.py]
     
     CFG -->|Injects Providers| ORC
     
-    ORC -->|State Mutation| ST[core/state.py]
-    ORC -->|Execution Waves| PL[core/planner.py]
-    ORC -->|Tools & Sandbox| SB[core/sandbox.py]
+    ORC -->|Multi-Loop Async Mutex| LCK[yani_engine/core/locks.py]
+    ORC -->|AST State Machine| ST[yani_engine/core/state.py]
+    ORC -->|Semantic Wave Planning| PL[yani_engine/core/planner.py]
+    ORC -->|Process-Isolated Sandbox| SB[yani_engine/core/sandbox.py]
     
-    ORC -->|Provider Interface| LLM[core/llm_provider.py]
+    ORC -->|MCP RPC Protocol| MCP[CodeGraph & Context7]
+    ORC -->|Provider Interface| LLM[yani_engine/core/llm_provider.py]
+    
     LLM --> Gemini[GeminiProvider]
-    LLM --> Local[LocalProvider]
+    LLM --> Local[LocalProvider (Ollama/vLLM)]
     LLM --> Agy[AntigravityProvider]
 ```
 
@@ -97,28 +127,36 @@ yani-engine employs advanced strategies to minimize API token consumption:
 
 ---
 
-## 🔒 Concurrency Safety
+## 🔒 Concurrency & Multi-Loop Safety
 
-yani-engine executes tasks in parallel waves via `asyncio.gather`. To prevent state corruption:
+yani-engine executes tasks in parallel waves via `asyncio.gather`. To prevent state corruption and event loop deadlocks:
 
 ```mermaid
 sequenceDiagram
-    participant Worker
-    participant Orchestrator
-    participant ASTMemoryMapper
-    participant memory.md
+    autonumber
+    participant Worker as Parallel Worker
+    participant Orchestrator as LLMOrchestrator
+    participant MultiLoopLock as MultiLoopAsyncLock
+    participant State as state.py (_TASK_CACHE)
+    participant FileLock as _FILE_LOCK (ThreadPool)
+    participant Memory as memory.md
 
-    Worker->>Orchestrator: execute_task()
-    Orchestrator->>ASTMemoryMapper: update_task_status("in_progress")
-    ASTMemoryMapper->>memory.md: Acquire Lock & Write DOM
-    Orchestrator->>Worker: LLM Tool Loop
-    Worker->>Orchestrator: Task Complete
-    Orchestrator->>ASTMemoryMapper: update_task_status("awaiting-review")
-    ASTMemoryMapper->>memory.md: Acquire Lock & Write DOM
+    Worker->>Orchestrator: execute_task(T-001)
+    Orchestrator->>MultiLoopLock: async with _MEMORY_MUTEX
+    MultiLoopLock-->>Orchestrator: Loop-Safe Lock Acquired
+    Orchestrator->>State: update_task_registry_row("in_progress")
+    State-->>Orchestrator: Cached in RAM
+    Orchestrator->>Worker: Dispatch LLM Tool Loop
+    Worker->>Orchestrator: Task Execution Finished
+    Orchestrator->>State: flush_task_registry()
+    State->>FileLock: asyncio.to_thread(_FILE_LOCK)
+    FileLock->>Memory: Atomic os.replace(tmp, "memory.md")
+    FileLock-->>State: Disk Flush Complete
 ```
 
-* **Unified Locking**: `memory.md` updates acquire both a thread-level `threading.Lock()` and an `asyncio.Lock()` to completely eliminate race conditions.
-* **AST DOM Manipulation**: yani-engine utilizes a custom `ASTMemoryMapper` to parse markdown files into a structural DOM model. State updates rely on surgically precise block location rather than fragile string replacements.
+* **MultiLoopAsyncLock Proxy**: Preserves global singleton object identity across imports while dynamically routing lock futures to the active event loop, preventing `RuntimeError: Event loop is closed` across multi-cycle test suites.
+* **Non-Blocking File Locking**: Cross-process `_FILE_LOCK` acquisitions run on background thread pools (`asyncio.to_thread`), preventing 120-second filesystem lock waits from freezing the main asyncio event loop.
+* **AST DOM Manipulation**: Utilizes a custom `ASTMemoryMapper` (backed by `markdown-it-py`) to manipulate markdown blocks as a structural DOM, eliminating race conditions and string-clobbering bugs.
 
 ---
 
@@ -133,4 +171,4 @@ sequenceDiagram
 * **/yani-engine report**: Generates an improvement report detailing CodeGraph impact.
 * **/yani-engine update-docs**: Syncs documentation with the current codebase.
 * **/yani-engine status**: Shows the Task Registry and CodeGraph health.
-
+* **/yani-engine:yani-skill** (or `/yani-skill`): Deterministic, evidence-based planner and executor using co-change history and diff audits.

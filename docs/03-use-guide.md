@@ -17,6 +17,7 @@ yani-engine commands accept several granular flags to control behavior:
   - `--budget-threshold <pct>`: (Type: `integer`, Default: `80`) Specify the threshold percentage for token budget exhaustion before triggering a graceful shutdown.
 - `yani-engine resume`: Detects stale locks and offers options to resume, rollback, or skip.
 - `yani-engine report`: Generates an improvement report using CodeGraph metrics.
+- `yani-engine:yani-skill` (or `/yani-skill`): Deterministic planner & auditor using co-change coupling analysis and strict diff audit gates.
 
 ## `memory.md` Configuration and Tracking
 

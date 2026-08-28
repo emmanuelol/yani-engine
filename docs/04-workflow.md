@@ -13,19 +13,19 @@ During the planning phase, changes undergo a rigorous 10-step CodeGraph Impact A
 4. **Call Graph Construction**: Builds a tree of downstream dependents.
 5. **Impact Radius Calculation**: Counts total affected symbols across the dependency chain.
 6. **Threshold Enforcement**: Rejects structural changes if the radius exceeds 20 symbols.
-7. **Cross-File Lock Check**: Verifies none of the affected files are locked by concurrent tasks.
-8. **Dependency Injection**: Sub-agent explicitly injects required contextual files.
+7. **Fail-Closed Timeout Protection**: If CodeGraph analysis exceeds 5 seconds, the modification is immediately blocked to prevent unmonitored blast-radius creep.
+8. **Cross-File Lock Check**: Verifies none of the affected files are locked by concurrent tasks.
 9. **Execution Approval**: Approves the modification scope for the execution wave.
 10. **State Registration**: Logs the blast radius data into the Task Registry field.
 
 ## 3. Execution (6-Step Checkpoint & Rollback Protocol)
 When running `/yani-engine execute`, the central yani-engine logic executes tasks using its isolated `.venv`. Each file modification strictly adheres to the 6-Step Checkpoint & Rollback Protocol:
 1. **Pre-Write Snapshot**: `CheckpointManager` logs the current state of the file before any modification.
-2. **Rollback Backup Generation**: A `.bak` file is safely stored in `.yani/rollbacks/{task_id}/`.
+2. **Rollback Backup Generation**: The original file is safely copied to `.yani/rollbacks/{task_id}/{encoded_path}`.
 3. **Registry Update**: A `planned` entry is created in the `Change Log` of `memory.md`.
-4. **Shadow File Creation**: The new code is written to a `.tmp` file for Diff-Gate review.
+4. **Shadow File Creation**: The new code is written to `.yani/tmp/{task_id}_{encoded_path}.tmp` for Diff-Gate review.
 5. **Diff-Gate Review**: VS Code (or Terminal) presents the diff against the rollback backup.
-6. **Commit or Revert**: If approved, `.tmp` overwrites the target; if rejected, the `.bak` file is restored to clear out any intermediate artifacts.
+6. **Commit or Revert**: If approved, `.tmp` atomically overwrites the target; if rejected, the rollback copy is restored to clear out any intermediate artifacts.
 
 ## 4. Communication & Optimization
 ### Caveman Integration (Dynamic Output Compression)
