@@ -1,3 +1,451 @@
+### SYSTEM INSTRUCTIONS ###
+CURRENT GIT BRANCH: `main`
+TARGET FILE: `dumbledoer/core/llm_provider.py`
+
+ROLE: Act as my Principal Software Engineer, Site Reliability Architect (SRE), and Chaos Engineer.
+OBJECTIVE: Conduct a deep code audit and scientific debugging of the provided module.
+RULES:
+1. Boundary Analysis: Cross-reference the code with callers/callees. Do not break contracts.
+2. Chaos Engineering: Assume network fails or DB drops. Ensure idempotency.
+3. Zero Quick Patches: Track down the root cause and explain the logical flaw.
+4. Branch Context: Ensure any proposed fixes or architectural plans align with the purpose of the current Git branch.
+
+EXPECTED OUTPUT:
+(A) Architecture Diagnosis
+(B) Risks and Errors (Bugs/Blockers)
+(C) Execution Action Plan (Task, Target File, Location, Action, DoD, Validation Method).
+###########################
+
+# Arquitectura Objetivo
+
+## Módulos que dependen de este archivo (Callers):
+- `dumbledoer/core/config.py`
+- `test_schema.py`
+- `dumbledoer/core/orchestrator.py`
+
+## Dependencias internas (Callees):
+- Ninguna.
+
+
+# Código Fuente
+
+### FILE: dumbledoer/core/llm_provider.py
+```python
+from abc import ABC, abstractmethod
+from typing import Any, List, Dict
+import httpx
+import json
+import uuid
+from google import genai
+from google.genai.types import Part
+import inspect
+
+def _convert_tool_to_openai_schema(tool_func) -> dict:
+    """Converts a DumbleDoer Python/MCP tool signature into an OpenAI-compatible function schema."""
+    name = getattr(tool_func, "__name__", "unknown_tool")
+    description = getattr(tool_func, "__doc__", "") or ""
+    
+    try:
+        sig = inspect.signature(tool_func)
+    except (TypeError, ValueError):
+        sig = inspect.Signature()
+
+    properties = {}
+    required = []
+    
+    for param_name, param in sig.parameters.items():
+        if param_name in ("self", "cls"):
+            continue
+            
+        # Map Python types to JSON schema types
+        param_type = "string"
+        annotation = param.annotation
+        if annotation is int:
+            param_type = "integer"
+        elif annotation is bool:
+            param_type = "boolean"
+        elif annotation is float:
+            param_type = "number"
+        elif annotation is list:
+            param_type = "array"
+            
+        properties[param_name] = {
+            "type": param_type,
+            "description": f"Parameter {param_name} for {name}"
+        }
+        
+        if param.default == inspect.Parameter.empty:
+            required.append(param_name)
+            
+    return {
+        "type": "function",
+        "function": {
+            "name": name,
+            "description": description.strip()[:1024],
+            "parameters": {
+                "type": "object",
+                "properties": properties,
+                "required": required
+            }
+        }
+    }
+
+class AbstractLLMProvider(ABC):    
+    @abstractmethod
+    async def create_chat_session(self, model_name: str, tools: List[Any]) -> Any:
+        pass    
+    
+    @abstractmethod
+    async def send_message(self, session: Any, payload: str | List[Any]) -> Any:
+        pass    
+    
+    @abstractmethod
+    def parse_tool_calls(self, response: Any) -> List[Dict]:
+        pass
+            
+    @abstractmethod
+    def format_tool_response(self, tool_name: str, result: str, call_id: str = None) -> Any:
+        pass
+
+    @abstractmethod
+    def format_tool_error(self, tool_name: str, error: str, call_id: str = None) -> Any:
+        pass
+
+    @abstractmethod
+    async def prune_history(self, session: Any, max_turns: int) -> tuple[Any, bool]:
+        """Prunes the session history to prevent context window bloat. Returns (updated_session, bool_if_pruned)."""
+        pass
+        
+    async def aclose(self):
+        """Cleanup hook for lingering HTTP sessions."""
+        pass
+        
+class GeminiProvider(AbstractLLMProvider):
+    def __init__(self, api_key: str):
+        self.client = genai.Client(api_key=api_key)
+        
+    async def create_chat_session(self, model_name: str, tools: List[Any]) -> Any:
+        # [FIX]: Await the async SDK call before mutating the session
+        session = await self.client.aio.chats.create(
+            model=model_name,
+            config={
+                "tools": tools,
+                "automatic_function_calling": {"disable": True}
+            }
+        )
+        session._dumbledoer_model = model_name
+        session._dumbledoer_tools = tools
+        return session
+        
+    async def send_message(self, session: Any, payload: str | List[Any]) -> Any:
+        return await session.send_message(payload)
+        
+    def parse_tool_calls(self, response: Any) -> List[Dict]:
+        calls = []
+        if response.function_calls:
+            for call in response.function_calls:
+                calls.append({
+                    "id": getattr(call, "id", None) or f"call_{uuid.uuid4().hex[:10]}",
+                    "name": call.name,
+                    "args": dict(call.args) if call.args else {}
+                })
+        return calls
+        
+    def format_tool_response(self, tool_name: str, result: str, call_id: str = None) -> Any:
+        part = Part.from_function_response(name=tool_name, response={"result": result})
+        if call_id and hasattr(part.function_response, "id"):
+            part.function_response.id = call_id
+        return part
+    
+    def format_tool_error(self, tool_name: str, error: str, call_id: str = None) -> Any:
+        part = Part.from_function_response(name=tool_name, response={"error": error})
+        if call_id and hasattr(part.function_response, "id"):
+            part.function_response.id = call_id
+        return part
+
+    async def prune_history(self, session: Any, max_turns: int) -> tuple[Any, bool]:
+        # [FIX]: Make pruning async to support the aio chats.create reconstruction
+        history = getattr(session, '_history', None)
+        if history is not None and len(history) > max_turns:
+            found_safe_boundary = False
+            slice_index = -(max_turns - 1)
+            
+            while abs(slice_index) <= len(history):
+                item = history[slice_index]
+                item_role = getattr(item, 'role', None) or (item.get('role') if isinstance(item, dict) else None)
+                if item_role == 'model':
+                    found_safe_boundary = True
+                    break
+                slice_index -= 1
+
+            if found_safe_boundary:
+                new_history = [history[0]] + history[slice_index:]
+                # Cleanly recreate session and await it
+                new_session = await self.client.aio.chats.create(
+                    model=getattr(session, '_dumbledoer_model', 'gemini-3.6-flash'),
+                    config={"tools": getattr(session, '_dumbledoer_tools', []), "automatic_function_calling": {"disable": True}},
+                    history=new_history
+                )
+                new_session._dumbledoer_model = getattr(session, '_dumbledoer_model', 'gemini-3.6-flash')
+                new_session._dumbledoer_tools = getattr(session, '_dumbledoer_tools', [])
+                return new_session, True
+        return session, False
+
+class MockUsage:
+    def __init__(self, count):
+        self.total_token_count = count
+
+class LocalResponse:
+    def __init__(self, msg, usage_obj):
+        self.text = msg.get("content", "") or ""
+        self.function_calls = msg.get("tool_calls", None)
+        self.usage_metadata = usage_obj
+
+class LocalProvider(AbstractLLMProvider):
+    """Interfaces with a local Ollama or vLLM instance using standard OpenAI schema."""
+    def __init__(self, base_url: str = "http://localhost:11434/v1"):
+        self.base_url = base_url
+        self.client = httpx.AsyncClient(timeout=120.0)
+
+    async def create_chat_session(self, model_name: str, tools: List[Any]) -> Any:
+        openai_tools = [_convert_tool_to_openai_schema(t) for t in tools if callable(t)]
+        return {
+            "model": model_name,
+            "_history": [],
+            "tools": openai_tools
+        }
+
+    async def send_message(self, session: Any, payload: str | List[Any]) -> Any:
+        # [FIX]: Idempotency - Clone the history to prevent duplicates on timeout/retry
+        candidate_history = list(session["_history"])
+        
+        if isinstance(payload, list):
+            for part in payload:
+                if isinstance(part, dict) and part.get("role") == "tool":
+                    candidate_history.append(part)
+                else:
+                    candidate_history.append({"role": "user", "content": str(part)})
+        else:
+            candidate_history.append({"role": "user", "content": str(payload)})
+        
+        request_body = {
+            "model": session["model"],
+            "messages": candidate_history
+        }
+        
+        if session.get("tools"):
+            request_body["tools"] = session["tools"]
+            request_body["tool_choice"] = "auto"
+
+        response = await self.client.post(
+            f"{self.base_url}/chat/completions",
+            json=request_body
+        )
+        response.raise_for_status()
+        data = response.json()
+        
+        message = data["choices"][0]["message"]
+        candidate_history.append(message)
+        
+        # Safely commit to state only after a 200 OK
+        session["_history"] = candidate_history
+        
+        usage_data = data.get("usage", {})
+        return LocalResponse(message, MockUsage(usage_data.get("total_tokens", 0)))
+
+    def parse_tool_calls(self, response: Any) -> List[Dict]:
+        calls = []
+        raw_tool_calls = getattr(response, "function_calls", None)
+        if raw_tool_calls:
+            for call in raw_tool_calls:
+                if isinstance(call, dict) and "function" in call:
+                    func_data = call["function"]
+                    args_raw = func_data.get("arguments", "{}")
+                    
+                    # [FIX]: Safely handle malformed tool JSON
+                    try:
+                        args = json.loads(args_raw) if isinstance(args_raw, str) else args_raw
+                        if not isinstance(args, dict):
+                            args = {}
+                    except json.JSONDecodeError:
+                        args = {}
+                        
+                    calls.append({
+                        "id": call.get("id") or f"call_{uuid.uuid4().hex[:10]}",
+                        "name": func_data.get("name", "unknown"),
+                        "args": args
+                    })
+        return calls
+
+    def format_tool_response(self, tool_name: str, result: str, call_id: str = None) -> Any:
+        # [FIX]: Hard-enforce tool_call_id inclusion to prevent 400 Bad Request
+        call_id = call_id or f"call_{uuid.uuid4().hex[:10]}"
+        return {"role": "tool", "name": tool_name, "content": result, "tool_call_id": call_id}
+
+    def format_tool_error(self, tool_name: str, error: str, call_id: str = None) -> Any:
+        call_id = call_id or f"call_{uuid.uuid4().hex[:10]}"
+        return {"role": "tool", "name": tool_name, "content": f"Error: {error}", "tool_call_id": call_id}
+
+    async def prune_history(self, session: Any, max_turns: int) -> tuple[Any, bool]:
+        history = session["_history"]
+        if len(history) > max_turns:
+            found_safe_boundary = False
+            slice_index = -(max_turns - 1)
+
+            # [FIX]: Off-by-one correction to guarantee boundary inclusion
+            while abs(slice_index) <= len(history):
+                item = history[slice_index]
+                if item.get("role") == "user":
+                    found_safe_boundary = True
+                    break
+                slice_index -= 1
+
+            if found_safe_boundary:
+                session["_history"] = [history[0]] + history[slice_index:]
+                return session, True
+
+        return session, False
+
+    async def aclose(self):
+        await self.client.aclose()
+
+
+class AntigravityProvider(AbstractLLMProvider):
+    """Hooks directly into the native 'agy' client to use native account credits."""
+    
+    def __init__(self):
+        try:
+            from agy.core.session import AgySession
+            self.agy_session = AgySession()
+        except ImportError:
+            raise RuntimeError("CRITICAL: Antigravity native modules not found. Are you running inside agy?")
+
+    async def create_chat_session(self, model_name: str, tools: List[Any]) -> Any:
+        return await self.agy_session.spawn_agent(
+            model=model_name,
+            tools=tools,
+            enforce_json=False
+        )
+
+    async def send_message(self, session: Any, payload: str | List[Any]) -> Any:
+        return await session.send(payload)
+
+    def parse_tool_calls(self, response: Any) -> List[Dict]:
+        calls = []
+        if getattr(response, 'tool_calls', None):
+            for call in response.tool_calls:
+                # [FIX]: Added exception protection for native client hallucinations
+                args_raw = call.arguments
+                try:
+                    args = args_raw if isinstance(args_raw, dict) else json.loads(args_raw)
+                    if not isinstance(args, dict):
+                        args = {}
+                except (json.JSONDecodeError, TypeError):
+                    args = {}
+                    
+                calls.append({
+                    "id": getattr(call, "id", None) or f"call_{uuid.uuid4().hex[:10]}",
+                    "name": call.name,
+                    "args": args
+                })
+        return calls
+
+    def format_tool_response(self, tool_name: str, result: str, call_id: str = None) -> Any:
+        from agy.core.types import ToolResult
+        return ToolResult(name=tool_name, content=result, tool_call_id=call_id)
+
+    def format_tool_error(self, tool_name: str, error: str, call_id: str = None) -> Any:
+        from agy.core.types import ToolResult
+        return ToolResult(name=tool_name, content=f"Error: {error}", is_error=True, tool_call_id=call_id)
+
+    async def prune_history(self, session: Any, max_turns: int) -> tuple[Any, bool]:
+        if hasattr(session, 'truncate_context'):
+            session.truncate_context(keep_recent=max_turns)
+            return session, True
+        return session, False
+
+```
+
+### FILE: dumbledoer/core/config.py
+```python
+import os
+from pydantic_settings import BaseSettings
+from typing import Dict, Any
+from dumbledoer.core.llm_provider import AbstractLLMProvider, GeminiProvider, LocalProvider, AntigravityProvider
+import socket
+
+def _is_local_alive(port=11434):
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(0.2)
+        return s.connect_ex(('127.0.0.1', port)) == 0
+
+# [FIX]: Global cache to prevent leaking httpx connections on repeated property access
+_GLOBAL_PROVIDER_CACHE = None
+
+class AppConfig(BaseSettings):
+    # API Keys & Auth
+    gemini_api_key: str | None = None
+    google_api_key: str | None = None
+    
+    # Execution Settings
+    start_at_index: int = 1
+    verbose: bool = False
+    
+    # Vendor-Agnostic Model Tiers
+    model_fast: str = "gemini-3.6-flash"
+    model_heavy: str = "gemini-3.1-pro-preview"
+    
+    # Budget Defaults
+    budget_limit: int = 50000000
+    budget_threshold_pct: int = 80
+    
+    class Config:
+        env_file = (os.path.expanduser("~/.gemini/config/plugins/dumbledoer/.env"), ".env")
+        env_file_encoding = "utf-8"
+        extra = "ignore"
+
+    @property
+    def providers(self) -> Dict[str, AbstractLLMProvider]:
+        global _GLOBAL_PROVIDER_CACHE
+        if _GLOBAL_PROVIDER_CACHE is not None:
+            return _GLOBAL_PROVIDER_CACHE
+
+        provs = {}
+        try:
+            import agy
+            provs["cloud"] = AntigravityProvider()
+        except (ImportError, RuntimeError): # [FIX]: Catch RuntimeError if native agy modules are broken
+            key = self.gemini_api_key or self.google_api_key or os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+            if key:
+                provs["cloud"] = GeminiProvider(api_key=key)
+                
+        if _is_local_alive():
+            provs["local"] = LocalProvider(base_url="http://localhost:11434/v1")
+            
+        if not provs:
+            raise RuntimeError("CRITICAL: No LLM providers could be initialized. Check API keys.")
+            
+        _GLOBAL_PROVIDER_CACHE = provs
+        return provs
+
+# Global Singleton instance
+config = AppConfig()
+
+```
+
+### FILE: test_schema.py
+```python
+from dumbledoer.core.llm_provider import _convert_tool_to_openai_schema
+from dumbledoer.core.state import read_file
+import json
+
+schema = _convert_tool_to_openai_schema(read_file)
+print(json.dumps(schema, indent=2))
+
+```
+
+### FILE: dumbledoer/core/orchestrator.py
+```python
 import sys
 import os
 import inspect
@@ -2214,4 +2662,7 @@ Success Criteria: {success_criteria}
                 os.replace(tmp_mem, "memory.md")
         print(f"Archived {len(to_archive)} session(s) → .dumbledoer/archive/ ({len(lines) - len(final_lines)} lines trimmed from memory.md)")
 
+
+
+```
 

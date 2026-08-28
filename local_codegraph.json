@@ -1,0 +1,1030 @@
+{
+    "metadata": {
+        "branch": "main",
+        "mapped_files_count": 84
+    },
+    "files": {
+        "plugin.json": {
+            "type": "config_file",
+            "format": ".json",
+            "top_level_keys": [
+                "name",
+                "version",
+                "description",
+                "commands"
+            ]
+        },
+        ".mcp.json": {
+            "type": "config_file",
+            "format": ".json",
+            "top_level_keys": [
+                "mcpServers"
+            ]
+        },
+        "audit_report.md": {
+            "type": "generic_text",
+            "size_bytes": 3509
+        },
+        "debug.py": {
+            "type": "python",
+            "imports": [
+                "asyncio",
+                "dumbledoer.core.orchestrator.LLMOrchestrator"
+            ],
+            "classes": [],
+            "functions": []
+        },
+        "purge_oom_debris.py": {
+            "type": "python",
+            "imports": [
+                "os",
+                "glob",
+                "shutil",
+                "subprocess"
+            ],
+            "classes": [],
+            "functions": [
+                {
+                    "name": "purge_system",
+                    "line": 6
+                }
+            ]
+        },
+        "README.md": {
+            "type": "generic_text",
+            "size_bytes": 6246
+        },
+        "requirements.txt": {
+            "type": "generic_text",
+            "size_bytes": 508
+        },
+        "run_dumbledoer.sh": {
+            "type": "generic_text",
+            "size_bytes": 189
+        },
+        "sync_knowledge.py": {
+            "type": "python",
+            "imports": [
+                "os",
+                "glob",
+                "re"
+            ],
+            "classes": [],
+            "functions": [
+                {
+                    "name": "parse_frontmatter",
+                    "line": 5
+                },
+                {
+                    "name": "main",
+                    "line": 25
+                }
+            ]
+        },
+        "SYSTEM_INSTRUCTIONS.md": {
+            "type": "generic_text",
+            "size_bytes": 1325
+        },
+        "targeted_context.md": {
+            "type": "generic_text",
+            "size_bytes": 2900
+        },
+        "test_debug.py": {
+            "type": "python",
+            "imports": [
+                "concurrent.futures",
+                "filelock.FileLock"
+            ],
+            "classes": [],
+            "functions": [
+                {
+                    "name": "worker",
+                    "line": 7
+                }
+            ]
+        },
+        "test_mutex.py": {
+            "type": "python",
+            "imports": [
+                "dumbledoer.core.locks.get_registry_lock",
+                "dumbledoer.core.orchestrator.get_registry_lock",
+                "dumbledoer.core.state.get_registry_lock"
+            ],
+            "classes": [],
+            "functions": []
+        },
+        "test_permissions.py": {
+            "type": "python",
+            "imports": [
+                "asyncio",
+                "os",
+                "stat",
+                "dumbledoer.core.sandbox.execute_bash"
+            ],
+            "classes": [],
+            "functions": []
+        },
+        "test_schema.py": {
+            "type": "python",
+            "imports": [
+                "dumbledoer.core.llm_provider._convert_tool_to_openai_schema",
+                "dumbledoer.core.state.read_file",
+                "json"
+            ],
+            "classes": [],
+            "functions": []
+        },
+        "test_sdk.py": {
+            "type": "python",
+            "imports": [
+                "sys",
+                "asyncio",
+                "os",
+                "google.genai",
+                "dumbledoer.core.sandbox.execute_bash"
+            ],
+            "classes": [],
+            "functions": []
+        },
+        "test_shutdown.py": {
+            "type": "python",
+            "imports": [
+                "asyncio",
+                "dumbledoer.core.orchestrator.LLMOrchestrator",
+                "dumbledoer.core.locks._MEMORY_MUTEX",
+                "os"
+            ],
+            "classes": [],
+            "functions": []
+        },
+        "test_tools.py": {
+            "type": "python",
+            "imports": [
+                "sys",
+                "asyncio",
+                "dumbledoer.core.orchestrator.LLMOrchestrator"
+            ],
+            "classes": [],
+            "functions": []
+        },
+        "test_waves.py": {
+            "type": "python",
+            "imports": [
+                "asyncio",
+                "dumbledoer.core.config.config",
+                "dumbledoer.core.planner.WavePlanner"
+            ],
+            "classes": [],
+            "functions": []
+        },
+        "install.sh": {
+            "type": "generic_text",
+            "size_bytes": 1870
+        },
+        "memory.md": {
+            "type": "generic_text",
+            "size_bytes": 330
+        },
+        "hooks/workspace-load.json": {
+            "type": "config_file",
+            "format": ".json",
+            "top_level_keys": [
+                "name",
+                "description",
+                "events",
+                "instructions"
+            ]
+        },
+        "agents/agnes.json": {
+            "type": "config_file",
+            "format": ".json",
+            "top_level_keys": [
+                "name",
+                "description",
+                "instructions"
+            ]
+        },
+        "commands/audit.json": {
+            "type": "config_file",
+            "format": ".json",
+            "top_level_keys": [
+                "name",
+                "description",
+                "execute"
+            ]
+        },
+        "commands/execute.json": {
+            "type": "config_file",
+            "format": ".json",
+            "top_level_keys": [
+                "name",
+                "description",
+                "execute"
+            ]
+        },
+        "commands/iterate.json": {
+            "type": "config_file",
+            "format": ".json",
+            "top_level_keys": [
+                "name",
+                "description",
+                "options",
+                "execute"
+            ]
+        },
+        "commands/report.json": {
+            "type": "config_file",
+            "format": ".json",
+            "top_level_keys": [
+                "name",
+                "description",
+                "execute"
+            ]
+        },
+        "commands/rollback.json": {
+            "type": "config_file",
+            "format": ".json",
+            "top_level_keys": [
+                "name",
+                "description",
+                "options",
+                "execute"
+            ]
+        },
+        "commands/start.json": {
+            "type": "config_file",
+            "format": ".json",
+            "top_level_keys": [
+                "name",
+                "description",
+                "execute"
+            ]
+        },
+        "commands/status.json": {
+            "type": "config_file",
+            "format": ".json",
+            "top_level_keys": [
+                "name",
+                "description",
+                "execute"
+            ]
+        },
+        "docs/01-installation.md": {
+            "type": "generic_text",
+            "size_bytes": 3120
+        },
+        "docs/03-use-guide.md": {
+            "type": "generic_text",
+            "size_bytes": 3252
+        },
+        "docs/04-workflow.md": {
+            "type": "generic_text",
+            "size_bytes": 3377
+        },
+        "docs/05-architecture.md": {
+            "type": "generic_text",
+            "size_bytes": 4592
+        },
+        "dumbledoer/__init__.py": {
+            "type": "python",
+            "imports": [],
+            "classes": [],
+            "functions": []
+        },
+        "scripts/context_assembler.py": {
+            "type": "python",
+            "imports": [
+                "os",
+                "json",
+                "argparse",
+                "pathlib.Path"
+            ],
+            "classes": [],
+            "functions": [
+                {
+                    "name": "load_graph_data",
+                    "line": 10
+                },
+                {
+                    "name": "resolve_import_to_filepath",
+                    "line": 21
+                },
+                {
+                    "name": "get_markdown_language",
+                    "line": 29
+                },
+                {
+                    "name": "build_targeted_context",
+                    "line": 34
+                }
+            ]
+        },
+        "scripts/generate_repository_export.py": {
+            "type": "python",
+            "imports": [
+                "os",
+                "math",
+                "pathlib.Path",
+                "datetime.datetime"
+            ],
+            "classes": [],
+            "functions": [
+                {
+                    "name": "get_repo_name",
+                    "line": 28
+                },
+                {
+                    "name": "is_ignored",
+                    "line": 35
+                },
+                {
+                    "name": "is_text_file",
+                    "line": 53
+                },
+                {
+                    "name": "generate_tree",
+                    "line": 63
+                },
+                {
+                    "name": "generate_repository_export",
+                    "line": 83
+                },
+                {
+                    "name": "open_next_file",
+                    "line": 134
+                }
+            ]
+        },
+        "scripts/map_repository.py": {
+            "type": "python",
+            "imports": [
+                "os",
+                "ast",
+                "json",
+                "fnmatch",
+                "subprocess",
+                "pathlib.Path",
+                "yaml"
+            ],
+            "classes": [
+                {
+                    "name": "CodeGraphBuilder",
+                    "line": 27,
+                    "methods": [
+                        "__init__",
+                        "visit_Import",
+                        "visit_ImportFrom",
+                        "visit_ClassDef",
+                        "visit_FunctionDef"
+                    ]
+                }
+            ],
+            "functions": [
+                {
+                    "name": "analyze_python_file",
+                    "line": 58
+                },
+                {
+                    "name": "analyze_dockerfile",
+                    "line": 75
+                },
+                {
+                    "name": "analyze_config_file",
+                    "line": 86
+                },
+                {
+                    "name": "analyze_generic_file",
+                    "line": 103
+                },
+                {
+                    "name": "get_git_branch",
+                    "line": 112
+                },
+                {
+                    "name": "load_gitignore_patterns",
+                    "line": 126
+                },
+                {
+                    "name": "is_ignored",
+                    "line": 138
+                },
+                {
+                    "name": "build_repository_graph",
+                    "line": 152
+                }
+            ]
+        },
+        "templates/knowledge-index-template.md": {
+            "type": "generic_text",
+            "size_bytes": 403
+        },
+        "templates/memory-template.md": {
+            "type": "generic_text",
+            "size_bytes": 1165
+        },
+        "lib/archive-protocol.md": {
+            "type": "generic_text",
+            "size_bytes": 4043
+        },
+        "lib/budget-detection.md": {
+            "type": "generic_text",
+            "size_bytes": 5037
+        },
+        "lib/checkpoint-protocol.md": {
+            "type": "generic_text",
+            "size_bytes": 4680
+        },
+        "lib/codegraph-integration.md": {
+            "type": "generic_text",
+            "size_bytes": 5046
+        },
+        "lib/common-preamble.md": {
+            "type": "generic_text",
+            "size_bytes": 4151
+        },
+        "lib/compression-policy.md": {
+            "type": "generic_text",
+            "size_bytes": 5297
+        },
+        "lib/context7-protocol.md": {
+            "type": "generic_text",
+            "size_bytes": 3506
+        },
+        "lib/knowledge-protocol.md": {
+            "type": "generic_text",
+            "size_bytes": 708
+        },
+        "lib/memory-archive-prompt.md": {
+            "type": "generic_text",
+            "size_bytes": 5618
+        },
+        "lib/memory-schema.md": {
+            "type": "generic_text",
+            "size_bytes": 12069
+        },
+        "skills/audit/INSTRUCTIONS.md": {
+            "type": "generic_text",
+            "size_bytes": 4027
+        },
+        "skills/audit/SKILL.md": {
+            "type": "generic_text",
+            "size_bytes": 607
+        },
+        "skills/caveman/INSTRUCTIONS.md": {
+            "type": "generic_text",
+            "size_bytes": 4451
+        },
+        "skills/caveman/SKILL.md": {
+            "type": "generic_text",
+            "size_bytes": 611
+        },
+        "skills/execute/INSTRUCTIONS.md": {
+            "type": "generic_text",
+            "size_bytes": 515
+        },
+        "skills/execute/SKILL.md": {
+            "type": "generic_text",
+            "size_bytes": 611
+        },
+        "skills/iterate/INSTRUCTIONS.md": {
+            "type": "generic_text",
+            "size_bytes": 6982
+        },
+        "skills/iterate/SKILL.md": {
+            "type": "generic_text",
+            "size_bytes": 611
+        },
+        "skills/obsidian-markdown/INSTRUCTIONS.md": {
+            "type": "generic_text",
+            "size_bytes": 5734
+        },
+        "skills/obsidian-markdown/SKILL.md": {
+            "type": "generic_text",
+            "size_bytes": 631
+        },
+        "skills/report/INSTRUCTIONS.md": {
+            "type": "generic_text",
+            "size_bytes": 7304
+        },
+        "skills/report/SKILL.md": {
+            "type": "generic_text",
+            "size_bytes": 609
+        },
+        "skills/resume/INSTRUCTIONS.md": {
+            "type": "generic_text",
+            "size_bytes": 6776
+        },
+        "skills/resume/SKILL.md": {
+            "type": "generic_text",
+            "size_bytes": 609
+        },
+        "skills/rollback/INSTRUCTIONS.md": {
+            "type": "generic_text",
+            "size_bytes": 5409
+        },
+        "skills/rollback/SKILL.md": {
+            "type": "generic_text",
+            "size_bytes": 613
+        },
+        "skills/start/INSTRUCTIONS.md": {
+            "type": "generic_text",
+            "size_bytes": 3729
+        },
+        "skills/start/SKILL.md": {
+            "type": "generic_text",
+            "size_bytes": 607
+        },
+        "skills/status/INSTRUCTIONS.md": {
+            "type": "generic_text",
+            "size_bytes": 3522
+        },
+        "skills/status/SKILL.md": {
+            "type": "generic_text",
+            "size_bytes": 609
+        },
+        "skills/update-docs/INSTRUCTIONS.md": {
+            "type": "generic_text",
+            "size_bytes": 8236
+        },
+        "skills/update-docs/reference.md": {
+            "type": "generic_text",
+            "size_bytes": 6438
+        },
+        "skills/update-docs/SKILL.md": {
+            "type": "generic_text",
+            "size_bytes": 619
+        },
+        "skills/obsidian-markdown/references/CALLOUTS.md": {
+            "type": "generic_text",
+            "size_bytes": 1239
+        },
+        "skills/obsidian-markdown/references/EMBEDS.md": {
+            "type": "generic_text",
+            "size_bytes": 862
+        },
+        "skills/obsidian-markdown/references/PROPERTIES.md": {
+            "type": "generic_text",
+            "size_bytes": 1150
+        },
+        "dumbledoer/cli/main.py": {
+            "type": "python",
+            "imports": [
+                "argparse",
+                "asyncio",
+                "sys",
+                "dumbledoer.core.orchestrator.LLMOrchestrator",
+                "dumbledoer.core.config.config"
+            ],
+            "classes": [],
+            "functions": [
+                {
+                    "name": "main",
+                    "line": 29
+                }
+            ]
+        },
+        "dumbledoer/core/config.py": {
+            "type": "python",
+            "imports": [
+                "os",
+                "pydantic_settings.BaseSettings",
+                "typing.Dict",
+                "typing.Any",
+                "dumbledoer.core.llm_provider.AbstractLLMProvider",
+                "dumbledoer.core.llm_provider.GeminiProvider",
+                "dumbledoer.core.llm_provider.LocalProvider",
+                "dumbledoer.core.llm_provider.AntigravityProvider",
+                "socket",
+                "agy"
+            ],
+            "classes": [
+                {
+                    "name": "AppConfig",
+                    "line": 15,
+                    "methods": [
+                        "providers"
+                    ]
+                },
+                {
+                    "name": "Config",
+                    "line": 32,
+                    "methods": []
+                }
+            ],
+            "functions": [
+                {
+                    "name": "_is_local_alive",
+                    "line": 7
+                }
+            ]
+        },
+        "dumbledoer/core/llm_provider.py": {
+            "type": "python",
+            "imports": [
+                "abc.ABC",
+                "abc.abstractmethod",
+                "typing.Any",
+                "typing.List",
+                "typing.Dict",
+                "httpx",
+                "json",
+                "uuid",
+                "google.genai",
+                "google.genai.types.Part",
+                "inspect",
+                "agy.core.session.AgySession",
+                "agy.core.types.ToolResult",
+                "agy.core.types.ToolResult"
+            ],
+            "classes": [
+                {
+                    "name": "AbstractLLMProvider",
+                    "line": 60,
+                    "methods": [
+                        "parse_tool_calls",
+                        "format_tool_response",
+                        "format_tool_error"
+                    ]
+                },
+                {
+                    "name": "GeminiProvider",
+                    "line": 90,
+                    "methods": [
+                        "__init__",
+                        "parse_tool_calls",
+                        "format_tool_response",
+                        "format_tool_error"
+                    ]
+                },
+                {
+                    "name": "MockUsage",
+                    "line": 161,
+                    "methods": [
+                        "__init__"
+                    ]
+                },
+                {
+                    "name": "LocalResponse",
+                    "line": 165,
+                    "methods": [
+                        "__init__"
+                    ]
+                },
+                {
+                    "name": "LocalProvider",
+                    "line": 171,
+                    "methods": [
+                        "__init__",
+                        "parse_tool_calls",
+                        "format_tool_response",
+                        "format_tool_error"
+                    ]
+                },
+                {
+                    "name": "AntigravityProvider",
+                    "line": 280,
+                    "methods": [
+                        "__init__",
+                        "parse_tool_calls",
+                        "format_tool_response",
+                        "format_tool_error"
+                    ]
+                }
+            ],
+            "functions": [
+                {
+                    "name": "_convert_tool_to_openai_schema",
+                    "line": 10
+                }
+            ]
+        },
+        "dumbledoer/core/locks.py": {
+            "type": "python",
+            "imports": [
+                "threading",
+                "asyncio",
+                "filelock.FileLock"
+            ],
+            "classes": [],
+            "functions": [
+                {
+                    "name": "get_registry_lock",
+                    "line": 13
+                }
+            ]
+        },
+        "dumbledoer/core/orchestrator.py": {
+            "type": "python",
+            "imports": [
+                "sys",
+                "os",
+                "inspect",
+                "asyncio",
+                "hashlib",
+                "dotenv.load_dotenv",
+                "argparse",
+                "subprocess",
+                "shlex",
+                "re",
+                "contextlib.AsyncExitStack",
+                "shutil",
+                "difflib",
+                "dumbledoer.core.locks._MEMORY_MUTEX",
+                "dumbledoer.core.locks._REGISTRY_LOCK",
+                "dumbledoer.core.locks.get_registry_lock",
+                "dumbledoer.core.sandbox.execute_bash",
+                "dumbledoer.core.sandbox._ensure_warm_sandbox",
+                "dumbledoer.core.sandbox._teardown_warm_sandbox",
+                "dumbledoer.core.sandbox.run_rtk",
+                "dumbledoer.core.state.append_handoff_summary",
+                "dumbledoer.core.state.append_session_log_row",
+                "dumbledoer.core.state.get_registry_lock",
+                "dumbledoer.core.state.ASTMemoryMapper",
+                "dumbledoer.core.state.update_task_registry_row",
+                "dumbledoer.core.state.CheckpointManager",
+                "dumbledoer.core.state.OrphanRecoveryScanner",
+                "dumbledoer.core.state.TaskRegistryState",
+                "dumbledoer.core.state.read_file",
+                "dumbledoer.core.state.write_file_with_review",
+                "dumbledoer.core.state.add_task",
+                "dumbledoer.core.state.read_code_block",
+                "dumbledoer.core.state.record_knowledge",
+                "dumbledoer.core.state.register_task_batch",
+                "dumbledoer.core.state.flush_task_registry",
+                "dumbledoer.core.planner.WavePlanner",
+                "dumbledoer.core.llm_provider.AbstractLLMProvider",
+                "dumbledoer.core.config.config",
+                "mcp.client.session.ClientSession",
+                "mcp.client.stdio.stdio_client",
+                "mcp.client.stdio.StdioServerParameters",
+                "sys",
+                "subprocess",
+                "sys",
+                "sys",
+                "hashlib",
+                "random",
+                "re",
+                "time",
+                "inspect",
+                "re",
+                "dumbledoer.core.sandbox._ensure_warm_sandbox",
+                "datetime",
+                "uuid",
+                "re",
+                "subprocess",
+                "subprocess",
+                "shutil",
+                "sys",
+                "os",
+                "difflib",
+                "rich.syntax.Syntax",
+                "rich.console.Console",
+                "rich.prompt.Prompt",
+                "rich.console.Console",
+                "re",
+                "glob",
+                "datetime",
+                "rich.prompt.Prompt",
+                "rich.console.Console",
+                "json",
+                "subprocess",
+                "glob",
+                "rich.progress.Progress",
+                "rich.progress.SpinnerColumn",
+                "rich.progress.TextColumn",
+                "rich.progress.BarColumn",
+                "rich.progress.TaskProgressColumn",
+                "rich.console.Console",
+                "dumbledoer.core.state.flush_task_registry",
+                "dumbledoer.core.sandbox._teardown_warm_sandbox",
+                "rich.console.Console",
+                "rich.markdown.Markdown",
+                "difflib",
+                "datetime.datetime",
+                "rich.console.Console",
+                "rich.table.Table",
+                "json",
+                "filelock.FileLock",
+                "re",
+                "subprocess",
+                "dumbledoer.core.locks.get_registry_lock",
+                "dumbledoer.core.locks._MEMORY_MUTEX",
+                "subprocess",
+                "re",
+                "glob",
+                "re",
+                "rich.console.Console",
+                "rich.table.Table",
+                "rich.prompt.Prompt",
+                "glob",
+                "datetime.datetime",
+                "datetime.datetime",
+                "rich.console.Console",
+                "glob",
+                "rich.console.Console",
+                "rich.console.Console",
+                "re",
+                "re",
+                "datetime.datetime"
+            ],
+            "classes": [
+                {
+                    "name": "PlanValidator",
+                    "line": 33,
+                    "methods": []
+                },
+                {
+                    "name": "BudgetExhaustedException",
+                    "line": 36,
+                    "methods": []
+                },
+                {
+                    "name": "DependencyGraphError",
+                    "line": 39,
+                    "methods": []
+                },
+                {
+                    "name": "BudgetManager",
+                    "line": 42,
+                    "methods": [
+                        "__init__",
+                        "add_tokens",
+                        "check_and_harvest"
+                    ]
+                },
+                {
+                    "name": "LLMOrchestrator",
+                    "line": 66,
+                    "methods": [
+                        "__init__",
+                        "_get_tools_for_command",
+                        "_create_mcp_wrapper"
+                    ]
+                }
+            ],
+            "functions": [
+                {
+                    "name": "_parse_knowledge",
+                    "line": 1680
+                }
+            ]
+        },
+        "dumbledoer/core/planner.py": {
+            "type": "python",
+            "imports": [
+                "ast",
+                "os",
+                "dumbledoer.core.state.TaskRegistryState",
+                "subprocess",
+                "asyncio",
+                "re"
+            ],
+            "classes": [
+                {
+                    "name": "WavePlanner",
+                    "line": 5,
+                    "methods": [
+                        "__init__"
+                    ]
+                }
+            ],
+            "functions": []
+        },
+        "dumbledoer/core/sandbox.py": {
+            "type": "python",
+            "imports": [
+                "dumbledoer.core.locks._MEMORY_MUTEX",
+                "dumbledoer.core.locks._REGISTRY_LOCK",
+                "dumbledoer.core.locks.get_registry_lock",
+                "os",
+                "sys",
+                "asyncio",
+                "subprocess",
+                "shutil",
+                "shlex",
+                "hashlib",
+                "hashlib",
+                "time",
+                "hashlib",
+                "atexit",
+                "glob",
+                "hashlib",
+                "os",
+                "hashlib",
+                "uuid"
+            ],
+            "classes": [],
+            "functions": [
+                {
+                    "name": "_is_sandbox_warm_sync",
+                    "line": 10
+                },
+                {
+                    "name": "_do_warm",
+                    "line": 23
+                },
+                {
+                    "name": "_do_teardown",
+                    "line": 99
+                },
+                {
+                    "name": "_cleanup_all_sandboxes",
+                    "line": 115
+                }
+            ]
+        },
+        "dumbledoer/core/state.py": {
+            "type": "python",
+            "imports": [
+                "dumbledoer.core.locks._MEMORY_MUTEX",
+                "dumbledoer.core.locks._KNOWLEDGE_MUTEX",
+                "dumbledoer.core.locks._REGISTRY_LOCK",
+                "dumbledoer.core.locks.get_registry_lock",
+                "dumbledoer.core.locks._FILE_LOCK",
+                "markdown_it.MarkdownIt",
+                "sys",
+                "os",
+                "subprocess",
+                "asyncio",
+                "re",
+                "glob",
+                "shutil",
+                "filecmp",
+                "filelock.FileLock",
+                "filelock",
+                "os",
+                "uuid",
+                "json",
+                "dumbledoer.core.config.config",
+                "rich.console.Console",
+                "rich.console.Console",
+                "rich.prompt.Confirm",
+                "rich.console.Console",
+                "re",
+                "uuid",
+                "time",
+                "datetime.datetime",
+                "re",
+                "glob",
+                "re",
+                "datetime.datetime",
+                "subprocess",
+                "asyncio",
+                "datetime.datetime",
+                "ast",
+                "re"
+            ],
+            "classes": [
+                {
+                    "name": "ASTMemoryMapper",
+                    "line": 18,
+                    "methods": [
+                        "locate_heading_block",
+                        "append_to_markdown_table"
+                    ]
+                },
+                {
+                    "name": "CheckpointManager",
+                    "line": 149,
+                    "methods": []
+                },
+                {
+                    "name": "OrphanRecoveryScanner",
+                    "line": 201,
+                    "methods": []
+                },
+                {
+                    "name": "TaskRegistryState",
+                    "line": 299,
+                    "methods": [
+                        "__init__",
+                        "_load_tasks_unlocked",
+                        "_sync_to_markdown_unlocked"
+                    ]
+                }
+            ],
+            "functions": [
+                {
+                    "name": "_invalidate_task_cache",
+                    "line": 134
+                },
+                {
+                    "name": "_atomic_write_memory_unlocked",
+                    "line": 139
+                },
+                {
+                    "name": "_read",
+                    "line": 440
+                },
+                {
+                    "name": "_extract",
+                    "line": 744
+                },
+                {
+                    "name": "_write_file",
+                    "line": 784
+                }
+            ]
+        }
+    }
+}
