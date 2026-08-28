@@ -2,27 +2,31 @@
 CURRENT GIT BRANCH: `main`
 TARGET FILE: `dumbledoer/core/state.py`
 
-ROLE: Act as my Principal Software Engineer, Site Reliability Architect (SRE), and Chaos Engineer.
-OBJECTIVE: Conduct a deep code audit and scientific debugging of the provided module.
+ROLE: Act as my Principal QA Engineer and Architecture Auditor.
+OBJECTIVE: Conduct a strict post-implementation review of the newly updated code. Verify that objectives were met and no regressions were introduced.
 RULES:
-1. Boundary Analysis: Cross-reference the code with callers/callees. Do not break contracts.
-2. Chaos Engineering: Assume network fails or DB drops. Ensure idempotency.
-3. Zero Quick Patches: Track down the root cause and explain the logical flaw.
-4. Branch Context: Ensure any proposed fixes or architectural plans align with the purpose of the current Git branch.
+1. Regression Profiling: Analyze callers/callees below. Did the changes break the interface for any caller?
+2. DoD Verification: Strictly evaluate the new code against the Definition of Done provided below.
+3. Anti-Fragility Check: Ensure no silent failures, memory leaks, or latent bugs were introduced.
+4. Branch Context: Keep in mind the current branch context when evaluating the scope of the feature/fix.
 
 EXPECTED OUTPUT:
-(A) Architecture Diagnosis
-(B) Risks and Errors (Bugs/Blockers)
-(C) Execution Action Plan (Task, Target File, Location, Action, DoD, Validation Method).
+(A) Goal Achievement Status [PASS / FAIL / PARTIAL]
+(B) Regression Analysis
+(C) Residual Risks & Code Smells
+(D) Final Verdict (Merge or Hotfix)
 ###########################
+
+### ⚠️ USER ACTION REQUIRED: PASTE THE DEFINITION OF DONE (DoD) BELOW THIS LINE ⚠️ ###
+> DoD: [Pega aquí el DoD o el objetivo que queríamos lograr]
 
 # Arquitectura Objetivo
 
 ## Módulos que dependen de este archivo (Callers):
-- `test_mutex.py`
-- `dumbledoer/core/planner.py`
-- `test_schema.py`
 - `dumbledoer/core/orchestrator.py`
+- `dumbledoer/core/planner.py`
+- `test_mutex.py`
+- `test_schema.py`
 
 ## Dependencias internas (Callees):
 - Ninguna.
@@ -174,11 +178,12 @@ def _atomic_write_memory_unlocked(content: str):
     import os, uuid
     tmp_path = f".dumbledoer/tmp/memory_{uuid.uuid4().hex[:6]}.tmp"
     os.makedirs(".dumbledoer/tmp", exist_ok=True)
-    with open(tmp_path, "w", encoding="utf-8") as f:
-        f.write(content)
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(tmp_path, "memory.md")
+    with _FILE_LOCK:
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            f.write(content)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, "memory.md")
 
 class CheckpointManager:
     async def write_rollback_copy(self, target_path: str, rollback_path: str):
@@ -302,7 +307,7 @@ class OrphanRecoveryScanner:
                 if os.path.exists(possible_rollback):
                     bak_file = possible_rollback
                 else:
-                    bak_files = glob.glob(os.path.join(bak_dir, f"*_{encoded_path}.bak"))
+                    bak_files = glob.glob(os.path.join(bak_dir, "*", encoded_path))
                     if bak_files:
                         bak_file = bak_files[0]
                         
@@ -412,11 +417,14 @@ class TaskRegistryState:
             lines = content.splitlines()
 
             header_line = next((l for l in lines[start_idx+1:end_idx] if "|" in l and "Task ID" in l), None)
+            stat_idx, owner_idx, sess_idx, chk_idx = 4, 5, 7, 8
             if header_line:
-                headers = [h.strip() for h in header_line.split("|") if h.strip()]
-                stat_idx = headers.index("Status") + 1 if "Status" in headers else 4
-            else:
-                stat_idx = 4
+                headers = [h.strip() for h in header_line.split("|")]
+                for idx, h in enumerate(headers):
+                    if h == "Status": stat_idx = idx
+                    elif h == "Owner": owner_idx = idx
+                    elif "Session" in h: sess_idx = idx
+                    elif "Checkpoint" in h: chk_idx = idx
 
             new_block = []
             for line in lines[start_idx+1:end_idx]:
@@ -425,15 +433,21 @@ class TaskRegistryState:
                     tid = parts[1].strip()
                     if tid in tasks:
                         t_data = tasks[tid]
-                        # Pad parts array if malformed
-                        while len(parts) < 10:
+                        max_req_idx = max(stat_idx, owner_idx, sess_idx, chk_idx)
+                        
+                        # Pad parts array if malformed without hardcoding length
+                        while len(parts) <= max_req_idx + 1:
                             parts.append(" ")
+                            
                         parts[stat_idx] = f" {t_data.get('status', 'unknown')} "
-                        parts[5] = f" {t_data.get('owner', '—')} "
-                        parts[7] = f" {t_data.get('session', '—')} "
-                        parts[8] = f" {t_data.get('checkpoint', 'none')} "
-                        new_block.append("|".join(parts[:9]) + " |")
-
+                        parts[owner_idx] = f" {t_data.get('owner', '—')} "
+                        parts[sess_idx] = f" {t_data.get('session', '—')} "
+                        parts[chk_idx] = f" {t_data.get('checkpoint', 'none')} "
+                        
+                        # Preserve all trailing custom columns
+                        if parts[-1].strip() != "":
+                            parts.append("")
+                        new_block.append("|".join(parts))
                     else:
                         new_block.append(line)
                 else:
@@ -497,7 +511,7 @@ async def write_file_with_review(path: str, content: str, task_id: str, **kwargs
                 if match and int(match.group(1)) > 20:
                     return f"Error: CodeGraph impact threshold exceeded ({match.group(1)} symbols > 20). Write blocked."
         except subprocess.TimeoutExpired:
-            print("Warning: CodeGraph CLI timed out. Bypassing impact threshold check to prevent agent lockup.")
+            return "Error: CodeGraph impact analysis timed out (5s limit). Write blocked (fail-closed)."
         except subprocess.CalledProcessError as e:
             print(f"Warning: CodeGraph impact check failed (exit {e.returncode}). Proceeding with caution.")
         except Exception as e:
@@ -825,156 +839,6 @@ def _write_file(path: str, content: str) -> str:
         return f"Error writing file {path}: {e}"
 
 
-
-```
-
-### FILE: test_mutex.py
-```python
-from dumbledoer.core.locks import get_registry_lock
-from dumbledoer.core.orchestrator import get_registry_lock as orch_lock
-from dumbledoer.core.state import get_registry_lock as state_lock
-print(id(get_registry_lock()) == id(orch_lock()) == id(state_lock()))
-
-```
-
-### FILE: dumbledoer/core/planner.py
-```python
-import ast
-import os
-from dumbledoer.core.state import TaskRegistryState
-
-class WavePlanner:
-    def __init__(self, start_at_index: int = 0, mcp_sessions: dict = None):
-        self.start_at_index = start_at_index
-        self._impact_cache: dict[str, str] = {}  # Cache impact outputs per file
-        self.mcp_sessions = mcp_sessions or {}
-
-    async def _get_file_impact(self, file_path: str) -> str:
-        """Fetches and caches CodeGraph impact output once per file."""
-        if file_path in self._impact_cache:
-            return self._impact_cache[file_path]
-
-        if "codegraph" in self.mcp_sessions:
-            try:
-                res = await self.mcp_sessions["codegraph"].call_tool("codegraph_impact", arguments={"file_path": file_path})
-                if res and res.content:
-                    output = res.content[0].text
-                    self._impact_cache[file_path] = output
-                    return output
-            except Exception:
-                pass
-
-        if os.path.exists(".codegraph"):
-            try:
-                import subprocess, asyncio
-                res = await asyncio.to_thread(
-                    subprocess.run,
-                    ["npx", "--yes", "--package=@colbymchenry/codegraph", "codegraph", "impact", file_path],
-                    capture_output=True, text=True, timeout=5
-                )
-                self._impact_cache[file_path] = res.stdout
-                return res.stdout
-            except Exception:
-                pass
-        self._impact_cache[file_path] = ""
-        return ""
-
-    async def _files_are_import_coupled(self, file_a: str, file_b: str) -> bool:
-        """Check if file_a imports file_b or vice versa using cached impact or Python AST."""
-        if os.path.exists(".codegraph") or "codegraph" in self.mcp_sessions:
-            impact_a = await self._get_file_impact(file_a)
-            if file_b in impact_a:
-                return True
-            impact_b = await self._get_file_impact(file_b)
-            if file_a in impact_b:
-                return True
-            return False
-
-        # Fallback shallow AST logic...
-        try:
-            for src, target in [(file_a, file_b), (file_b, file_a)]:
-                if not os.path.exists(src) or not src.endswith(".py"):
-                    continue
-                with open(src, "r", encoding="utf-8") as f:
-                    tree = ast.parse(f.read())
-                target_module = os.path.splitext(os.path.basename(target))[0]
-                target_dotpath = target.replace("/", ".").replace(".py", "")
-                for node in ast.walk(tree):
-                    if isinstance(node, ast.Import):
-                        for alias in node.names:
-                            if target_module in alias.name or target_dotpath in alias.name:
-                                return True
-                    elif isinstance(node, ast.ImportFrom):
-                        if node.module and (target_module in node.module or target_dotpath in node.module):
-                            return True
-            return False
-        except Exception:
-            return False
-
-    async def get_pending_waves(self) -> list[list[dict]]:
-        state = TaskRegistryState()
-        tasks_dict = await state.load_tasks()
-        tasks = list(tasks_dict.values())
-        
-        # Apply the explicit bounding index constraint
-        import re
-
-        pending_tasks = {
-            t['id']: t for t in tasks 
-            if ("pending" in t['status'] or "error" in t['status'])
-            and int(re.search(r'\d+', t['id']).group()) >= self.start_at_index
-        }
-        completed_task_ids = {t['id'] for t in tasks if "completed" in t['status']}
-        
-        waves = []
-        while pending_tasks:
-            current_wave = []
-            claimed_files_in_wave = set()
-            
-            for t_id, t in list(pending_tasks.items()):
-                if all(d in completed_task_ids for d in t['deps']):
-                    task_files = set(t.get('outputs', []))
-
-                    # [SEMANTIC DEPENDENCY CHECK] Detect import coupling between task outputs
-                    import_coupled = False
-                    for claimed_file in claimed_files_in_wave:
-                        for task_file in task_files:
-                            if await self._files_are_import_coupled(claimed_file, task_file):
-                                import_coupled = True
-                                break
-                        if import_coupled:
-                            break
-
-                    if not task_files or (not task_files.intersection(claimed_files_in_wave) and not import_coupled):
-                        current_wave.append(t)
-                        claimed_files_in_wave.update(task_files)
-                        
-            if not current_wave:
-                if pending_tasks:
-                    blocked = []
-                    for t_id, t in pending_tasks.items():
-                        unfulfilled = [d for d in t['deps'] if d not in completed_task_ids]
-                        blocked.append(f"{t_id} (missing: {', '.join(unfulfilled)})")
-                    print(f"Warning: Cannot schedule remaining pending tasks. They are blocked by uncompleted dependencies: {'; '.join(blocked)}")
-                    break
-                
-            waves.append(current_wave)
-            for t in current_wave:
-                del pending_tasks[t['id']]
-                completed_task_ids.add(t['id'])
-                
-        return waves
-
-```
-
-### FILE: test_schema.py
-```python
-from dumbledoer.core.llm_provider import _convert_tool_to_openai_schema
-from dumbledoer.core.state import read_file
-import json
-
-schema = _convert_tool_to_openai_schema(read_file)
-print(json.dumps(schema, indent=2))
 
 ```
 
@@ -3197,6 +3061,156 @@ Success Criteria: {success_criteria}
         print(f"Archived {len(to_archive)} session(s) → .dumbledoer/archive/ ({len(lines) - len(final_lines)} lines trimmed from memory.md)")
 
 
+
+```
+
+### FILE: dumbledoer/core/planner.py
+```python
+import ast
+import os
+from dumbledoer.core.state import TaskRegistryState
+
+class WavePlanner:
+    def __init__(self, start_at_index: int = 0, mcp_sessions: dict = None):
+        self.start_at_index = start_at_index
+        self._impact_cache: dict[str, str] = {}  # Cache impact outputs per file
+        self.mcp_sessions = mcp_sessions or {}
+
+    async def _get_file_impact(self, file_path: str) -> str:
+        """Fetches and caches CodeGraph impact output once per file."""
+        if file_path in self._impact_cache:
+            return self._impact_cache[file_path]
+
+        if "codegraph" in self.mcp_sessions:
+            try:
+                res = await self.mcp_sessions["codegraph"].call_tool("codegraph_impact", arguments={"file_path": file_path})
+                if res and res.content:
+                    output = res.content[0].text
+                    self._impact_cache[file_path] = output
+                    return output
+            except Exception:
+                pass
+
+        if os.path.exists(".codegraph"):
+            try:
+                import subprocess, asyncio
+                res = await asyncio.to_thread(
+                    subprocess.run,
+                    ["npx", "--yes", "--package=@colbymchenry/codegraph", "codegraph", "impact", file_path],
+                    capture_output=True, text=True, timeout=5
+                )
+                self._impact_cache[file_path] = res.stdout
+                return res.stdout
+            except Exception:
+                pass
+        self._impact_cache[file_path] = ""
+        return ""
+
+    async def _files_are_import_coupled(self, file_a: str, file_b: str) -> bool:
+        """Check if file_a imports file_b or vice versa using cached impact or Python AST."""
+        if os.path.exists(".codegraph") or "codegraph" in self.mcp_sessions:
+            impact_a = await self._get_file_impact(file_a)
+            if file_b in impact_a:
+                return True
+            impact_b = await self._get_file_impact(file_b)
+            if file_a in impact_b:
+                return True
+            return False
+
+        # Fallback shallow AST logic...
+        try:
+            for src, target in [(file_a, file_b), (file_b, file_a)]:
+                if not os.path.exists(src) or not src.endswith(".py"):
+                    continue
+                with open(src, "r", encoding="utf-8") as f:
+                    tree = ast.parse(f.read())
+                target_module = os.path.splitext(os.path.basename(target))[0]
+                target_dotpath = target.replace("/", ".").replace(".py", "")
+                for node in ast.walk(tree):
+                    if isinstance(node, ast.Import):
+                        for alias in node.names:
+                            if target_module in alias.name or target_dotpath in alias.name:
+                                return True
+                    elif isinstance(node, ast.ImportFrom):
+                        if node.module and (target_module in node.module or target_dotpath in node.module):
+                            return True
+            return False
+        except Exception:
+            return False
+
+    async def get_pending_waves(self) -> list[list[dict]]:
+        state = TaskRegistryState()
+        tasks_dict = await state.load_tasks()
+        tasks = list(tasks_dict.values())
+        
+        # Apply the explicit bounding index constraint
+        import re
+
+        pending_tasks = {
+            t['id']: t for t in tasks 
+            if ("pending" in t['status'] or "error" in t['status'])
+            and int(re.search(r'\d+', t['id']).group()) >= self.start_at_index
+        }
+        completed_task_ids = {t['id'] for t in tasks if "completed" in t['status']}
+        
+        waves = []
+        while pending_tasks:
+            current_wave = []
+            claimed_files_in_wave = set()
+            
+            for t_id, t in list(pending_tasks.items()):
+                if all(d in completed_task_ids for d in t['deps']):
+                    task_files = set(t.get('outputs', []))
+
+                    # [SEMANTIC DEPENDENCY CHECK] Detect import coupling between task outputs
+                    import_coupled = False
+                    for claimed_file in claimed_files_in_wave:
+                        for task_file in task_files:
+                            if await self._files_are_import_coupled(claimed_file, task_file):
+                                import_coupled = True
+                                break
+                        if import_coupled:
+                            break
+
+                    if not task_files or (not task_files.intersection(claimed_files_in_wave) and not import_coupled):
+                        current_wave.append(t)
+                        claimed_files_in_wave.update(task_files)
+                        
+            if not current_wave:
+                if pending_tasks:
+                    blocked = []
+                    for t_id, t in pending_tasks.items():
+                        unfulfilled = [d for d in t['deps'] if d not in completed_task_ids]
+                        blocked.append(f"{t_id} (missing: {', '.join(unfulfilled)})")
+                    print(f"Warning: Cannot schedule remaining pending tasks. They are blocked by uncompleted dependencies: {'; '.join(blocked)}")
+                    break
+                
+            waves.append(current_wave)
+            for t in current_wave:
+                del pending_tasks[t['id']]
+                completed_task_ids.add(t['id'])
+                
+        return waves
+
+```
+
+### FILE: test_mutex.py
+```python
+from dumbledoer.core.locks import get_registry_lock
+from dumbledoer.core.orchestrator import get_registry_lock as orch_lock
+from dumbledoer.core.state import get_registry_lock as state_lock
+print(id(get_registry_lock()) == id(orch_lock()) == id(state_lock()))
+
+```
+
+### FILE: test_schema.py
+```python
+from dumbledoer.core.llm_provider import _convert_tool_to_openai_schema
+from dumbledoer.core.state import read_file
+import json
+
+schema = _convert_tool_to_openai_schema(read_file)
+print(json.dumps(schema, indent=2))
 
 ```
 

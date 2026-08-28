@@ -140,11 +140,12 @@ def _atomic_write_memory_unlocked(content: str):
     import os, uuid
     tmp_path = f".dumbledoer/tmp/memory_{uuid.uuid4().hex[:6]}.tmp"
     os.makedirs(".dumbledoer/tmp", exist_ok=True)
-    with open(tmp_path, "w", encoding="utf-8") as f:
-        f.write(content)
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(tmp_path, "memory.md")
+    with _FILE_LOCK:
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            f.write(content)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, "memory.md")
 
 class CheckpointManager:
     async def write_rollback_copy(self, target_path: str, rollback_path: str):
@@ -268,7 +269,7 @@ class OrphanRecoveryScanner:
                 if os.path.exists(possible_rollback):
                     bak_file = possible_rollback
                 else:
-                    bak_files = glob.glob(os.path.join(bak_dir, f"*_{encoded_path}.bak"))
+                    bak_files = glob.glob(os.path.join(bak_dir, "*", encoded_path))
                     if bak_files:
                         bak_file = bak_files[0]
                         
@@ -378,11 +379,14 @@ class TaskRegistryState:
             lines = content.splitlines()
 
             header_line = next((l for l in lines[start_idx+1:end_idx] if "|" in l and "Task ID" in l), None)
+            stat_idx, owner_idx, sess_idx, chk_idx = 4, 5, 7, 8
             if header_line:
-                headers = [h.strip() for h in header_line.split("|") if h.strip()]
-                stat_idx = headers.index("Status") + 1 if "Status" in headers else 4
-            else:
-                stat_idx = 4
+                headers = [h.strip() for h in header_line.split("|")]
+                for idx, h in enumerate(headers):
+                    if h == "Status": stat_idx = idx
+                    elif h == "Owner": owner_idx = idx
+                    elif "Session" in h: sess_idx = idx
+                    elif "Checkpoint" in h: chk_idx = idx
 
             new_block = []
             for line in lines[start_idx+1:end_idx]:
@@ -391,15 +395,21 @@ class TaskRegistryState:
                     tid = parts[1].strip()
                     if tid in tasks:
                         t_data = tasks[tid]
-                        # Pad parts array if malformed
-                        while len(parts) < 10:
+                        max_req_idx = max(stat_idx, owner_idx, sess_idx, chk_idx)
+                        
+                        # Pad parts array if malformed without hardcoding length
+                        while len(parts) <= max_req_idx + 1:
                             parts.append(" ")
+                            
                         parts[stat_idx] = f" {t_data.get('status', 'unknown')} "
-                        parts[5] = f" {t_data.get('owner', '—')} "
-                        parts[7] = f" {t_data.get('session', '—')} "
-                        parts[8] = f" {t_data.get('checkpoint', 'none')} "
-                        new_block.append("|".join(parts[:9]) + " |")
-
+                        parts[owner_idx] = f" {t_data.get('owner', '—')} "
+                        parts[sess_idx] = f" {t_data.get('session', '—')} "
+                        parts[chk_idx] = f" {t_data.get('checkpoint', 'none')} "
+                        
+                        # Preserve all trailing custom columns
+                        if parts[-1].strip() != "":
+                            parts.append("")
+                        new_block.append("|".join(parts))
                     else:
                         new_block.append(line)
                 else:
@@ -463,7 +473,7 @@ async def write_file_with_review(path: str, content: str, task_id: str, **kwargs
                 if match and int(match.group(1)) > 20:
                     return f"Error: CodeGraph impact threshold exceeded ({match.group(1)} symbols > 20). Write blocked."
         except subprocess.TimeoutExpired:
-            print("Warning: CodeGraph CLI timed out. Bypassing impact threshold check to prevent agent lockup.")
+            return "Error: CodeGraph impact analysis timed out (5s limit). Write blocked (fail-closed)."
         except subprocess.CalledProcessError as e:
             print(f"Warning: CodeGraph impact check failed (exit {e.returncode}). Proceeding with caution.")
         except Exception as e:
