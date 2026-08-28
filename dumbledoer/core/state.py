@@ -122,11 +122,13 @@ async def flush_task_registry():
         
     async with _MEMORY_MUTEX:
         async with get_registry_lock():
-            with _FILE_LOCK:
-                state = TaskRegistryState()
-                state._sync_to_markdown_unlocked(_TASK_CACHE)
-                _CACHE_DIRTY = False
-                print("💾 [STATE] Successfully flushed registry cache to disk.")
+            def _sync():
+                with _FILE_LOCK:
+                    state = TaskRegistryState()
+                    state._sync_to_markdown_unlocked(_TASK_CACHE)
+            await asyncio.to_thread(_sync)
+            _CACHE_DIRTY = False
+            print("💾 [STATE] Successfully flushed registry cache to disk.")
         
 
 
@@ -146,6 +148,9 @@ def _atomic_write_memory_unlocked(content: str):
             f.flush()
             os.fsync(f.fileno())
         os.replace(tmp_path, "memory.md")
+
+async def _async_atomic_write_memory(content: str):
+    await asyncio.to_thread(_atomic_write_memory_unlocked, content)
 
 class CheckpointManager:
     async def write_rollback_copy(self, target_path: str, rollback_path: str):
@@ -294,7 +299,7 @@ class OrphanRecoveryScanner:
                         os.remove(t)
                         
             if new_content != content:
-                _atomic_write_memory_unlocked(new_content)
+                await _async_atomic_write_memory(new_content)
                 _invalidate_task_cache()
 
 class TaskRegistryState:
@@ -627,7 +632,7 @@ async def register_task_batch(tasks: list[dict]) -> str:
                 
                 lines = lines[:reg_insert] + rows_to_insert + lines[reg_insert:]
 
-                _atomic_write_memory_unlocked("\n".join(lines) + "\n")
+                await _async_atomic_write_memory("\n".join(lines) + "\n")
                 _invalidate_task_cache()
                     
                 success_msg = f"Successfully registered tasks {', '.join(incoming_task_ids)}."
@@ -734,7 +739,7 @@ async def append_handoff_summary(summary: str):
                     content = "\n".join(lines[:start_idx] + [summary.strip()] + lines[end_idx:])
                 else:
                     content += f"\n\n{summary}"
-                _atomic_write_memory_unlocked(content)
+                await _async_atomic_write_memory(content)
                 _invalidate_task_cache()
 
 async def append_session_log_row(session_id: str, task_id: str) -> str:
@@ -744,8 +749,10 @@ async def append_session_log_row(session_id: str, task_id: str) -> str:
     row = f"| {session_id} | {start_time} | — | {task_id} | in_progress | — |"
     async with _MEMORY_MUTEX:
         async with get_registry_lock():
-            with _FILE_LOCK:
-                ASTMemoryMapper.append_to_markdown_table("memory.md", "Session Log", row)
+            def _append():
+                with _FILE_LOCK:
+                    ASTMemoryMapper.append_to_markdown_table("memory.md", "Session Log", row)
+            await asyncio.to_thread(_append)
     return f"Session {session_id} logged for task {task_id}."
 
 

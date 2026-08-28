@@ -1,38 +1,54 @@
 ### SYSTEM INSTRUCTIONS ###
 CURRENT GIT BRANCH: `main`
-TARGET FILE: `dumbledoer/core/state.py`
+TARGET FILE: `dumbledoer/core/locks.py`
 
-ROLE: Act as my Principal QA Engineer and Architecture Auditor.
-OBJECTIVE: Conduct a strict post-implementation review of the newly updated code. Verify that objectives were met and no regressions were introduced.
+ROLE: Act as my Principal Software Engineer, Site Reliability Architect (SRE), and Chaos Engineer.
+OBJECTIVE: Conduct a deep code audit and scientific debugging of the provided module.
 RULES:
-1. Regression Profiling: Analyze callers/callees below. Did the changes break the interface for any caller?
-2. DoD Verification: Strictly evaluate the new code against the Definition of Done provided below.
-3. Anti-Fragility Check: Ensure no silent failures, memory leaks, or latent bugs were introduced.
-4. Branch Context: Keep in mind the current branch context when evaluating the scope of the feature/fix.
+1. Boundary Analysis: Cross-reference the code with callers/callees. Do not break contracts.
+2. Chaos Engineering: Assume network fails or DB drops. Ensure idempotency.
+3. Zero Quick Patches: Track down the root cause and explain the logical flaw.
+4. Branch Context: Ensure any proposed fixes or architectural plans align with the purpose of the current Git branch.
 
 EXPECTED OUTPUT:
-(A) Goal Achievement Status [PASS / FAIL / PARTIAL]
-(B) Regression Analysis
-(C) Residual Risks & Code Smells
-(D) Final Verdict (Merge or Hotfix)
+(A) Architecture Diagnosis
+(B) Risks and Errors (Bugs/Blockers)
+(C) Execution Action Plan (Task, Target File, Location, Action, DoD, Validation Method).
 ###########################
-
-### ⚠️ USER ACTION REQUIRED: PASTE THE DEFINITION OF DONE (DoD) BELOW THIS LINE ⚠️ ###
-> DoD: [Pega aquí el DoD o el objetivo que queríamos lograr]
 
 # Arquitectura Objetivo
 
 ## Módulos que dependen de este archivo (Callers):
-- `dumbledoer/core/orchestrator.py`
-- `dumbledoer/core/planner.py`
+- `dumbledoer/core/state.py`
 - `test_mutex.py`
-- `test_schema.py`
+- `test_shutdown.py`
+- `dumbledoer/core/sandbox.py`
+- `dumbledoer/core/orchestrator.py`
 
 ## Dependencias internas (Callees):
 - Ninguna.
 
 
 # Código Fuente
+
+### FILE: dumbledoer/core/locks.py
+```python
+import threading
+import asyncio
+from filelock import FileLock
+
+_REGISTRY_LOCK = asyncio.Lock()
+_MEMORY_MUTEX = asyncio.Lock()
+_KNOWLEDGE_MUTEX = asyncio.Lock()
+
+# Cross-process file lock for memory.md synchronization
+# Extended timeout to 120s to accommodate heavy execution waves
+_FILE_LOCK = FileLock("memory.md.lock", timeout=120)
+
+def get_registry_lock():
+    return _REGISTRY_LOCK
+
+```
 
 ### FILE: dumbledoer/core/state.py
 ```python
@@ -839,6 +855,351 @@ def _write_file(path: str, content: str) -> str:
         return f"Error writing file {path}: {e}"
 
 
+
+```
+
+### FILE: test_mutex.py
+```python
+from dumbledoer.core.locks import get_registry_lock
+from dumbledoer.core.orchestrator import get_registry_lock as orch_lock
+from dumbledoer.core.state import get_registry_lock as state_lock
+print(id(get_registry_lock()) == id(orch_lock()) == id(state_lock()))
+
+```
+
+### FILE: test_shutdown.py
+```python
+import asyncio
+from dumbledoer.core.orchestrator import LLMOrchestrator
+from dumbledoer.core.locks import _MEMORY_MUTEX
+import os
+
+async def run_stress_test():
+    # Setup dummy memory.md
+    with open("memory.md", "w") as f:
+        f.write("## Task Registry\n| T-001 | Test 1 | change | pending | - | none | - | none |\n| T-002 | Test 2 | change | pending | - | none | - | none |\n| T-003 | Test 3 | change | pending | - | none | - | none |\n## Session Handoff Summary\n")
+    
+    orch = LLMOrchestrator(budget_limit=1000, plugin_dir=".")
+    
+    # Simulate a crash loop where tasks exhaust budget
+    async def fake_task(tid):
+        try:
+            await orch._graceful_shutdown(task_id=tid)
+        except Exception as e:
+            print(f"Exception from {tid}: {e}")
+
+    await asyncio.gather(fake_task("T-001"), fake_task("T-002"), fake_task("T-003"))
+    
+    print("Stress test completed.")
+    with open("memory.md", "r") as f:
+        print("Memory.md excerpt:")
+        print(f.read())
+
+asyncio.run(run_stress_test())
+
+```
+
+### FILE: dumbledoer/core/sandbox.py
+```python
+from dumbledoer.core.locks import _MEMORY_MUTEX, _REGISTRY_LOCK, get_registry_lock
+import os
+import sys
+import asyncio
+import subprocess
+import shutil
+import shlex
+import signal
+
+
+def _is_sandbox_warm_sync(worker_id: str) -> bool:
+    try:
+        import hashlib
+        project_hash = hashlib.md5(os.getcwd().encode()).hexdigest()[:8]
+        # Added timeout to prevent sync blocking if Docker daemon hangs
+        result = subprocess.run(
+            ["docker", "ps", "-q", "-f", f"name=dumbledoer-sandbox-{project_hash}-{worker_id}"], 
+            capture_output=True, text=True, timeout=5
+        )
+        return bool(result.stdout.strip())
+    except Exception:
+        return False
+
+# TASK 1: Async Sandbox State Resolver
+async def _is_sandbox_warm(worker_id: str) -> bool:
+    """Non-blocking validation of active container state to prevent event loop starvation."""
+    return await asyncio.to_thread(_is_sandbox_warm_sync, worker_id)
+
+async def _ensure_warm_sandbox(task_id: str = None, worker_id: str = None, sandbox_mode: str = "dumbledoer-base") -> bool:
+    active_id = worker_id or task_id
+    if not active_id: return False
+    
+    def _do_warm():
+        try:
+            import hashlib
+            project_hash = hashlib.md5(os.getcwd().encode()).hexdigest()[:8]
+            container_name = f"dumbledoer-sandbox-{project_hash}-{active_id}"
+            
+            # Check if already running
+            chk = subprocess.run(["docker", "ps", "-q", "-f", f"name={container_name}"], capture_output=True, text=True)
+            if chk.stdout.strip():
+                return True
+                
+            # Ruthlessly purge any exited or crashed containers holding the target name
+            subprocess.run(["docker", "rm", "-f", container_name], capture_output=True, check=False)
+                
+            # Create Shadow Clone Atomically
+            shadow_dir = os.path.abspath(f".dumbledoer/shadow_{active_id}")
+            shadow_tmp = f"{shadow_dir}.tmp"
+            
+            if os.path.exists(shadow_tmp):
+                shutil.rmtree(shadow_tmp)
+            os.makedirs(shadow_tmp, exist_ok=True)
+            
+            # Remove copy_function=os.link to prevent Hard Link Sandbox Escapes
+            ignore_patterns = shutil.ignore_patterns(
+                ".git", ".venv", "venv", "env", ".pytest_cache", "__pycache__", 
+                "node_modules", ".dumbledoer", ".codegraph", "*.tmp", "*.bak", "shadow_*"
+            )
+            shutil.copytree(os.getcwd(), shadow_tmp, ignore=ignore_patterns, dirs_exist_ok=True)
+            
+            # Dynamic Target Image Resolution
+            target_image = "dumbledoer-base:latest"
+            
+            if sandbox_mode.startswith("docker:"):
+                target_image = sandbox_mode.split(":")[1]
+            elif sandbox_mode == "auto":
+                if os.path.exists(os.path.join(shadow_dir, "Dockerfile")):
+                    target_image = f"dumbledoer-custom-{project_hash}"
+                    print(f"Building native sandbox from project Dockerfile: {target_image}...")
+                    subprocess.run(["docker", "build", "-t", target_image, "."], cwd=shadow_dir, capture_output=True, check=True)
+            
+            user_map = f"{os.getuid()}:{os.getgid()}"
+            subprocess.run(
+                ["docker", "run", "--rm", "-d", "-i", 
+                 "--user", user_map,
+                 "--memory=1500m", "--memory-swap=1500m",  # Strict RAM cap
+                 "--name", container_name,
+                 "-v", f"{shadow_dir}:/workspace", "-w", "/workspace", 
+                 target_image, "/bin/bash"],
+                capture_output=True,
+                check=True
+            )
+            
+            # Verify it started dynamically
+            import time
+            for _ in range(5):
+                chk2 = subprocess.run(
+                    ["docker", "inspect", "-f", "{{.State.Running}}", container_name],
+                    capture_output=True, text=True
+                )
+                if chk2.stdout.strip() == "true":
+                    return True
+                time.sleep(0.2)
+            
+            return False
+        except Exception as e:
+            raise RuntimeError(f"Docker infrastructure failure. Is the daemon running? Details: {e}")
+    return await asyncio.to_thread(_do_warm)
+
+async def _teardown_warm_sandbox(task_id: str = None, worker_id: str = None):
+    active_id = worker_id or task_id
+    if not active_id: return
+    def _do_teardown():
+        try:
+            import hashlib
+            project_hash = hashlib.md5(os.getcwd().encode()).hexdigest()[:8]
+            container_name = f"dumbledoer-sandbox-{project_hash}-{active_id}"
+            subprocess.run(["docker", "rm", "-f", container_name], capture_output=True)
+            shadow_dir = os.path.abspath(f".dumbledoer/shadow_{active_id}")
+            if os.path.exists(shadow_dir):
+                shutil.rmtree(shadow_dir)
+        except Exception:
+            pass
+    await asyncio.to_thread(_do_teardown)
+
+import atexit
+import glob
+
+def _cleanup_all_sandboxes():
+    try:
+        import hashlib
+        import os
+        project_hash = hashlib.md5(os.getcwd().encode()).hexdigest()[:8]
+        res = subprocess.run(["docker", "ps", "-q", "-f", f"name=dumbledoer-sandbox-{project_hash}-"], capture_output=True, text=True, timeout=10)
+        if res.stdout.strip():
+            for cid in res.stdout.strip().splitlines():
+                subprocess.run(["docker", "rm", "-f", cid], capture_output=True, timeout=10)
+        for shadow_dir in glob.glob(".dumbledoer/shadow_*"):
+            shutil.rmtree(shadow_dir, ignore_errors=True)
+    except Exception:
+        pass
+
+atexit.register(_cleanup_all_sandboxes)
+
+async def _safe_async_execute(cmd_args: list, timeout: int = 120, max_bytes: int = 131072) -> str:
+    """
+    Executes a subprocess asynchronously, draining streams non-blockingly
+    to prevent OS pipe buffer deadlocks on massive output.
+    """
+    try:
+        # TASK 2: Launch process with process group isolation (start_new_session)
+        process = await asyncio.create_subprocess_exec(
+            *cmd_args,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            limit=1024 * 1024,
+            start_new_session=True
+        )
+    except Exception as e:
+        return f"Error initiating subprocess: {str(e)}"
+
+    async def _drain_stream(stream, stream_name: str) -> tuple[str, bool]:
+        output = bytearray()
+        truncated = False
+        while True:
+            chunk = await stream.read(4096)
+            if not chunk:
+                break
+            
+            if len(output) + len(chunk) > max_bytes:
+                output.extend(chunk[:(max_bytes - len(output))])
+                truncated = True
+                break
+                
+            output.extend(chunk)
+            
+        return output.decode('utf-8', errors='replace'), truncated
+
+    stdout_task = asyncio.create_task(_drain_stream(process.stdout, 'stdout'))
+    stderr_task = asyncio.create_task(_drain_stream(process.stderr, 'stderr'))
+
+    try:
+        await asyncio.wait_for(process.wait(), timeout=timeout)
+        
+        stdout_text, stdout_trunc = await stdout_task
+        stderr_text, stderr_trunc = await stderr_task
+        
+        res = f"STDOUT:\n{stdout_text}"
+        if stdout_trunc:
+            res += f"\n... [SYSTEM OVERRIDE: {max_bytes} byte limit reached. Truncated.]"
+            
+        res += f"\nSTDERR:\n{stderr_text}"
+        if stderr_trunc:
+            res += f"\n... [SYSTEM OVERRIDE: {max_bytes} byte limit reached. Truncated.]"
+            
+        return res
+
+    except asyncio.TimeoutError:
+        # TASK 2: Ruthless termination of the entire Process Group to stop orphan leaks
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError, OSError):
+            try:
+                process.kill()
+            except ProcessLookupError:
+                pass
+        return f"CRITICAL: Command timed out after {timeout} seconds and was forcefully killed (SIGKILL)."
+        
+    finally:
+        if not stdout_task.done(): stdout_task.cancel()
+        if not stderr_task.done(): stderr_task.cancel()
+
+async def execute_bash(command: str, sandbox_mode: str = "dumbledoer-base", task_id: str = None, worker_id: str = None) -> str:
+    work_dir = os.getcwd() if sandbox_mode == "native" else "/workspace"
+    env_wrapper = f"export PYTHONPATH={work_dir}:$PYTHONPATH && {command}"
+    
+    user_map = f"{os.getuid()}:{os.getgid()}"
+    
+    if sandbox_mode == "native":
+        return await _safe_async_execute(["bash", "-c", env_wrapper], timeout=120)
+        
+    elif sandbox_mode and sandbox_mode.startswith("compose:"):
+        service_name = sandbox_mode.split(":")[1]
+        return await _safe_async_execute(
+            ["docker", "compose", "exec", "-T", "--user", user_map, service_name, "/bin/bash", "-c", env_wrapper],
+            timeout=300
+        )
+
+    else:
+        image = "dumbledoer-base:latest"
+        if sandbox_mode and sandbox_mode.startswith("docker:"):
+            image = sandbox_mode.split(":")[1]
+        elif sandbox_mode == "auto" and os.path.exists("Dockerfile"):
+            image = "dumbledoer-custom-fallback"
+            await asyncio.to_thread(subprocess.run, ["docker", "build", "-t", image, "."], check=True, capture_output=True, text=True)
+
+        active_id = worker_id or task_id
+        
+        # TASK 1: Implement non-blocking state check for active container status
+        if active_id and await _is_sandbox_warm(active_id):
+            import hashlib
+            project_hash = hashlib.md5(os.getcwd().encode()).hexdigest()[:8]
+            container_name = f"dumbledoer-sandbox-{project_hash}-{active_id}"
+            
+            return await _safe_async_execute(
+                ["docker", "exec", "--user", user_map, container_name, "/bin/bash", "-c", env_wrapper],
+                timeout=300
+            )
+        else:
+            import uuid
+            ephemeral_dir = os.path.abspath(f".dumbledoer/ephemeral_{uuid.uuid4().hex[:8]}")
+            ignore_patterns = shutil.ignore_patterns(
+                ".git", ".venv", "venv", "env", ".pytest_cache", "__pycache__", 
+                "node_modules", ".dumbledoer", ".codegraph", "*.tmp", "*.bak", "shadow_*"
+            )
+            shutil.copytree(os.getcwd(), ephemeral_dir, ignore=ignore_patterns, dirs_exist_ok=True)
+            
+            try:
+                return await _safe_async_execute(
+                    ["docker", "run", "--rm", 
+                     "--user", user_map,
+                     "--memory=1500m", "--memory-swap=1500m",
+                     "-v", f"{ephemeral_dir}:/workspace:rw", "-w", "/workspace", 
+                     image, "/bin/bash", "-c", env_wrapper],
+                    timeout=300
+                )
+            finally:
+                # TASK 3: Escalated Ephemeral Directory Cleanup
+                if os.path.exists(ephemeral_dir):
+                    try:
+                        shutil.rmtree(ephemeral_dir)
+                    except Exception:
+                        # Fallback: Root-level purge via disposable Alpine container
+                        try:
+                            await asyncio.shield(_safe_async_execute([
+                                "docker", "run", "--rm", 
+                                "-v", f"{ephemeral_dir}:/tmp/workspace", 
+                                "alpine", "rm", "-rf", "/tmp/workspace"
+                            ], timeout=30))
+                        except Exception:
+                            pass
+                        # Final garbage collection attempt
+                        shutil.rmtree(ephemeral_dir, ignore_errors=True)
+
+async def run_rtk(command: str) -> str:
+    rtk_bin = shutil.which("rtk")
+    if not rtk_bin:
+        cargo_path = os.path.expanduser("~/.cargo/bin/rtk")
+        if os.path.exists(cargo_path):
+            rtk_bin = cargo_path
+        elif os.path.exists("./bin/rtk"):
+            rtk_bin = "./bin/rtk"
+        else:
+            return "Error: RTK binary not found in standard paths."
+
+    # TASK 4: Safe Lexical Parsing for malformed LLM commands
+    try:
+        args = [rtk_bin] + shlex.split(command)
+    except ValueError as e:
+        return f"Error parsing command: {e}. Please ensure all quotes are matched and closed."
+
+    try:
+        result = await asyncio.to_thread(subprocess.run, args, capture_output=True, text=True, check=True)
+        return result.stdout
+    except subprocess.CalledProcessError as e:
+        return f"Error ({e.returncode}):\nSTDOUT: {e.stdout}\nSTDERR: {e.stderr}"
+    except Exception as e:
+        return f"Exception executing rtk command: {e}"
 
 ```
 
@@ -3061,156 +3422,6 @@ Success Criteria: {success_criteria}
         print(f"Archived {len(to_archive)} session(s) → .dumbledoer/archive/ ({len(lines) - len(final_lines)} lines trimmed from memory.md)")
 
 
-
-```
-
-### FILE: dumbledoer/core/planner.py
-```python
-import ast
-import os
-from dumbledoer.core.state import TaskRegistryState
-
-class WavePlanner:
-    def __init__(self, start_at_index: int = 0, mcp_sessions: dict = None):
-        self.start_at_index = start_at_index
-        self._impact_cache: dict[str, str] = {}  # Cache impact outputs per file
-        self.mcp_sessions = mcp_sessions or {}
-
-    async def _get_file_impact(self, file_path: str) -> str:
-        """Fetches and caches CodeGraph impact output once per file."""
-        if file_path in self._impact_cache:
-            return self._impact_cache[file_path]
-
-        if "codegraph" in self.mcp_sessions:
-            try:
-                res = await self.mcp_sessions["codegraph"].call_tool("codegraph_impact", arguments={"file_path": file_path})
-                if res and res.content:
-                    output = res.content[0].text
-                    self._impact_cache[file_path] = output
-                    return output
-            except Exception:
-                pass
-
-        if os.path.exists(".codegraph"):
-            try:
-                import subprocess, asyncio
-                res = await asyncio.to_thread(
-                    subprocess.run,
-                    ["npx", "--yes", "--package=@colbymchenry/codegraph", "codegraph", "impact", file_path],
-                    capture_output=True, text=True, timeout=5
-                )
-                self._impact_cache[file_path] = res.stdout
-                return res.stdout
-            except Exception:
-                pass
-        self._impact_cache[file_path] = ""
-        return ""
-
-    async def _files_are_import_coupled(self, file_a: str, file_b: str) -> bool:
-        """Check if file_a imports file_b or vice versa using cached impact or Python AST."""
-        if os.path.exists(".codegraph") or "codegraph" in self.mcp_sessions:
-            impact_a = await self._get_file_impact(file_a)
-            if file_b in impact_a:
-                return True
-            impact_b = await self._get_file_impact(file_b)
-            if file_a in impact_b:
-                return True
-            return False
-
-        # Fallback shallow AST logic...
-        try:
-            for src, target in [(file_a, file_b), (file_b, file_a)]:
-                if not os.path.exists(src) or not src.endswith(".py"):
-                    continue
-                with open(src, "r", encoding="utf-8") as f:
-                    tree = ast.parse(f.read())
-                target_module = os.path.splitext(os.path.basename(target))[0]
-                target_dotpath = target.replace("/", ".").replace(".py", "")
-                for node in ast.walk(tree):
-                    if isinstance(node, ast.Import):
-                        for alias in node.names:
-                            if target_module in alias.name or target_dotpath in alias.name:
-                                return True
-                    elif isinstance(node, ast.ImportFrom):
-                        if node.module and (target_module in node.module or target_dotpath in node.module):
-                            return True
-            return False
-        except Exception:
-            return False
-
-    async def get_pending_waves(self) -> list[list[dict]]:
-        state = TaskRegistryState()
-        tasks_dict = await state.load_tasks()
-        tasks = list(tasks_dict.values())
-        
-        # Apply the explicit bounding index constraint
-        import re
-
-        pending_tasks = {
-            t['id']: t for t in tasks 
-            if ("pending" in t['status'] or "error" in t['status'])
-            and int(re.search(r'\d+', t['id']).group()) >= self.start_at_index
-        }
-        completed_task_ids = {t['id'] for t in tasks if "completed" in t['status']}
-        
-        waves = []
-        while pending_tasks:
-            current_wave = []
-            claimed_files_in_wave = set()
-            
-            for t_id, t in list(pending_tasks.items()):
-                if all(d in completed_task_ids for d in t['deps']):
-                    task_files = set(t.get('outputs', []))
-
-                    # [SEMANTIC DEPENDENCY CHECK] Detect import coupling between task outputs
-                    import_coupled = False
-                    for claimed_file in claimed_files_in_wave:
-                        for task_file in task_files:
-                            if await self._files_are_import_coupled(claimed_file, task_file):
-                                import_coupled = True
-                                break
-                        if import_coupled:
-                            break
-
-                    if not task_files or (not task_files.intersection(claimed_files_in_wave) and not import_coupled):
-                        current_wave.append(t)
-                        claimed_files_in_wave.update(task_files)
-                        
-            if not current_wave:
-                if pending_tasks:
-                    blocked = []
-                    for t_id, t in pending_tasks.items():
-                        unfulfilled = [d for d in t['deps'] if d not in completed_task_ids]
-                        blocked.append(f"{t_id} (missing: {', '.join(unfulfilled)})")
-                    print(f"Warning: Cannot schedule remaining pending tasks. They are blocked by uncompleted dependencies: {'; '.join(blocked)}")
-                    break
-                
-            waves.append(current_wave)
-            for t in current_wave:
-                del pending_tasks[t['id']]
-                completed_task_ids.add(t['id'])
-                
-        return waves
-
-```
-
-### FILE: test_mutex.py
-```python
-from dumbledoer.core.locks import get_registry_lock
-from dumbledoer.core.orchestrator import get_registry_lock as orch_lock
-from dumbledoer.core.state import get_registry_lock as state_lock
-print(id(get_registry_lock()) == id(orch_lock()) == id(state_lock()))
-
-```
-
-### FILE: test_schema.py
-```python
-from dumbledoer.core.llm_provider import _convert_tool_to_openai_schema
-from dumbledoer.core.state import read_file
-import json
-
-schema = _convert_tool_to_openai_schema(read_file)
-print(json.dumps(schema, indent=2))
 
 ```
 
