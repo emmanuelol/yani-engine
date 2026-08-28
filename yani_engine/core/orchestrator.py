@@ -20,7 +20,7 @@ from yani_engine.core.state import (
     get_registry_lock, ASTMemoryMapper, 
     update_task_registry_row, CheckpointManager, OrphanRecoveryScanner, 
     TaskRegistryState, read_file, write_file_with_review,
-    add_task, read_code_block, record_knowledge, register_task_batch,
+    read_code_block, record_knowledge, register_task_batch,
     flush_task_registry
 )
 from yani_engine.core.planner import WavePlanner
@@ -79,7 +79,7 @@ class LLMOrchestrator:
         # Determine the primary provider for backwards compatibility in tools
         self.provider = self.providers.get("cloud", list(self.providers.values())[0])
 
-        self.local_tools = [read_file, read_code_block, write_file_with_review, execute_bash, update_task_registry_row, run_rtk, add_task, register_task_batch, record_knowledge]
+        self.local_tools = [read_file, read_code_block, write_file_with_review, execute_bash, update_task_registry_row, run_rtk, register_task_batch, record_knowledge]
         self.gemini_tools = list(self.local_tools)
         try:
             with open("memory.md", "r", encoding="utf-8") as f:
@@ -102,7 +102,7 @@ class LLMOrchestrator:
     # Dynamic tool filtering per command to reduce token consumption
     COMMAND_TOOL_WHITELIST = {
         # ADDED: execute_bash and wildcard codegraph_* so the LLM can actually discover the repo
-        "start":   {"read_file", "add_task", "register_task_batch", "write_file_with_review", "execute_bash", "codegraph_*", "context7_*"},
+        "start":   {"read_file", "register_task_batch", "write_file_with_review", "execute_bash", "codegraph_*", "context7_*"},
         # STRICT iterate WHITELIST: Blocked add_task to force register_task_batch
         "iterate": {"register_task_batch", "read_file", "read_code_block", "update_task_registry_row", "codegraph_search", "codegraph_impact", "context7_*"},
         # --- NEW EXPLICIT WHITELIST FOR EXECUTE ---
@@ -111,7 +111,7 @@ class LLMOrchestrator:
         "status":  {"read_file", "execute_bash"},
         "rollback": {"read_file", "execute_bash"},
         "report":  {"read_file", "execute_bash", "update_task_registry_row"},
-        "audit":   {"read_file", "read_code_block", "execute_bash", "add_task", "register_task_batch", "update_task_registry_row", "codegraph_*", "context7_*"},
+        "audit":   {"read_file", "read_code_block", "execute_bash", "register_task_batch", "update_task_registry_row", "codegraph_*", "context7_*"},
         "resume":  {"read_file", "execute_bash"},
         "update-docs": {"read_file", "execute_bash", "codegraph_*", "context7_*"}
     }
@@ -1867,9 +1867,21 @@ Success Criteria: {success_criteria}
 
                 # 5. Task Generation & Handoff
                 console.print("\n[cyan]Queueing tasks...[/cyan]")
-                for t in tasks_to_create:
-                    desc = f"Surgically patch {t['file']} to resolve: {', '.join(t['reasons'])}. STRICTLY preserve human rationale, Mermaid diagrams, and tables."
-                    res = await add_task(title=f"Update docs: {os.path.basename(t['file'])}", task_type="change", description=desc, outputs=t['file'])
+                tasks_batch = [
+                    {
+                        "title": f"Update docs: {os.path.basename(t['file'])}",
+                        "task_type": "change",
+                        "deps": "none",
+                        "description": f"Surgically patch {t['file']} to resolve: {', '.join(t['reasons'])}. STRICTLY preserve human rationale, Mermaid diagrams, and tables.",
+                        "outputs": t['file'],
+                        "success_criteria": "TBD",
+                        "estimated_effort": "small",
+                        "codegraph_impact": "—"
+                    }
+                    for t in tasks_to_create
+                ]
+                if tasks_batch:
+                    res = await register_task_batch(tasks_batch)
                     console.print(f"[dim]{res}[/dim]")
 
                 from datetime import datetime
