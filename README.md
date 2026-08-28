@@ -8,6 +8,24 @@ It operates on a **"Zero-Copy Plugin"** model. Instead of polluting every target
 
 ---
 
+## 📑 Table of Contents
+
+- [🚀 Core Technologies](#-core-technologies)
+- [🔍 CodeGraph Deep-Dive Integration](#-codegraph-deep-dive-integration)
+- [💡 yani-skill: The "Lite" Fast-Path Companion](#-yani-skill-the-lite-fast-path-companion)
+- [🛠️ Installation](#️-installation)
+- [🔑 Authentication & Configuration](#-authentication--configuration)
+- [🛡️ Security Features](#️-security-features)
+- [🏗️ Core Architecture (Decoupled & Modular)](#️-core-architecture-decoupled--modular)
+- [⚡ Token Optimization Architecture](#-token-optimization-architecture)
+- [🔒 Concurrency & Multi-Loop Safety](#-concurrency--multi-loop-safety)
+- [🔄 The Workflow & Command Summary](#-the-workflow--command-summary)
+  - [🎓 Example: Your First Autonomous Refactor](#-example-your-first-autonomous-refactor)
+- [👥 Authors](#-authors)
+- [📄 License](#-license)
+
+---
+
 ## 🚀 Core Technologies
 
 Under the hood, yani-engine leverages powerful, modern tools to give you the safest and most efficient agentic experience:
