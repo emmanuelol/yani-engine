@@ -648,15 +648,6 @@ async def register_task_batch(tasks: list[dict]) -> str:
                 print(f"❌ [STATE ERROR] {error_msg}")
                 return error_msg
 
-async def add_task(title: str, task_type: str = "change", deps: str = "none", description: str = "", outputs: str = "none", success_criteria: str = "TBD", estimated_effort: str = "small", codegraph_impact: str = "—") -> str:
-    """DEPRECATED. Use register_task_batch instead. Registers a new atomic task to the memory.md Task Registry."""
-    return await register_task_batch([{
-        "title": title, "task_type": task_type, "deps": deps, "description": description,
-        "outputs": outputs, "success_criteria": success_criteria, "estimated_effort": estimated_effort,
-        "codegraph_impact": codegraph_impact
-    }])
-    
-
 async def record_knowledge(title: str, entry_type: str, description: str, rationale: str, supersedes: str = "none") -> str:
     """Saves a durable learning securely to the Vault using an Async Mutex."""
     async with _KNOWLEDGE_MUTEX:
