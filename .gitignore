@@ -19,7 +19,6 @@ __pycache__/
 *.corrupted.*
 memory.md.lock
 .yani/
-.dumbledoer/
 
 # Exports & Logs
 *.log

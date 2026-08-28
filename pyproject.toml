@@ -19,7 +19,6 @@ dependencies = [
 [project.scripts]
 yani = "yani_engine.cli.main:main"
 yani-engine = "yani_engine.cli.main:main"
-dumbledoer = "yani_engine.cli.main:main"
 
 [build-system]
 requires = ["hatchling"]

@@ -13,7 +13,7 @@ except ImportError:
 
 EXCLUDE_DIRS = {
     '.git', '.pytest_cache', '__pycache__', 'venv', 'env', '.venv', '.venv_app',
-    'node_modules', 'dist', 'build', '.deps', '.dumbledoer', 'rollbacks', 'scratch',
+    'node_modules', 'dist', 'build', '.deps', '.yani', 'rollbacks', 'scratch',
     '.vscode', 'ruff_cache', '.checkpoints', '.codegraph', '.obsidian', '_jobs', 
     '_agents', 'archive', 'routes', 'schemas', 'knowledge'
 }

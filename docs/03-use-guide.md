@@ -21,10 +21,15 @@ yani-engine commands accept several granular flags to control behavior:
 
 ---
 
-## Choosing Between Full Harness and Lite Mode
+## 🧑‍🏫 Tutorial: Choosing the Right Tool for the Job
 
-- **Use `/yani-engine start` (Full Harness)** when executing large architectural overhauls, running unattended overnight jobs, requiring process/Docker sandboxing, or tracking multi-wave parallel dependencies.
-- **Use `/yani-skill` (Lite Mode)** for daily feature work, quick bug fixes, and instant pairing where you want evidence-based convention guards and test-driven diff audits directly in your repo.
+yani-engine adapts to the complexity of your task. Here is how to decide which execution path to take:
+
+**Scenario A: "I need to fix a quick UI bug in my React component."**
+Use **Lite Mode**. Run `/yani-skill` in your terminal. It skips the Docker sandbox and immediately calculates the historical Git co-change ratio for your target file. It writes a failing test, implements the fix, and runs a strict diff-audit against your base branch before pausing for your approval.
+
+**Scenario B: "I need to migrate my entire backend from Flask to FastAPI."**
+Use the **Full Harness**. Run `/yani-engine start`. This requires structural blast-radius protection. The engine will query the CodeGraph AST to ensure no single refactor wave breaks more than 20 upstream symbols. It will execute the migration asynchronously across multiple sub-agents, utilizing `memory.md` to track persistent state and checkpoint backups.
 
 ---
 

@@ -228,3 +228,13 @@ sequenceDiagram
 * **/yani-engine update-docs**: Syncs documentation with the current codebase.
 * **/yani-engine status**: Shows the Task Registry and CodeGraph health.
 * **/yani-engine:yani-skill** (or `/yani-skill`): **Lite Mode** — Deterministic, evidence-based planner and auditor using co-change history and diff audits.
+
+### 🎓 Example: Your First Autonomous Refactor
+
+Let's walk through using `yani-engine` to safely update a deprecated API across your project:
+
+1. **Initialize the Agent:** Navigate to your project directory and run `/yani-engine start`. Provide a prompt like: *"Refactor all instances of the v1 Auth API to use the new v2 JWT endpoints."*
+2. **Review the Plan:** `yani-engine` will map the codebase using CodeGraph, identifying exactly which files depend on the old API, and generate a task plan in `memory.md`.
+3. **Authorize Execution:** Run `/yani-engine execute`. Sub-agents will begin modifying files in an isolated Docker sandbox.
+4. **Approve the Diffs:** Before any code is committed, the VS Code Diff-Gate will pause execution and present you with a clean before/after comparison. 
+5. **Finalize:** Once you approve the changes, the rollback copies are cleared, and the updated code is written directly to your working tree.

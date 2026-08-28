@@ -18,7 +18,7 @@ mkdir -p "$PLUGIN_DIR"
 
 # 2. Copy source files (excluding unwanted directories)
 echo "📦 Copying files to global plugin directory..."
-rsync -av --exclude='.git' --exclude='.venv' --exclude='.yani' --exclude='.dumbledoer' --exclude='__pycache__' ./ "$PLUGIN_DIR/"
+rsync -av --exclude='.git' --exclude='.venv' --exclude='.yani' --exclude='__pycache__' ./ "$PLUGIN_DIR/"
 
 # 3. Create the Virtual Environment natively in the global directory using uv
 echo "⚡ Creating virtual environment using uv..."
@@ -39,7 +39,7 @@ if [ -f "bin/rtk" ]; then
     echo "⚙️ Granting execution permissions to RTK..."
     chmod +x bin/rtk
 fi
-chmod +x run_yani.sh run_dumbledoer.sh
+chmod +x run_yani.sh
 
 # 6. Initialize the Agent Workspace locally (for the repo we ran this from, optional)
 cd - > /dev/null
