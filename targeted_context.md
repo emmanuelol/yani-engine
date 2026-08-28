@@ -2,26 +2,30 @@
 CURRENT GIT BRANCH: `main`
 TARGET FILE: `dumbledoer/core/llm_provider.py`
 
-ROLE: Act as my Principal Software Engineer, Site Reliability Architect (SRE), and Chaos Engineer.
-OBJECTIVE: Conduct a deep code audit and scientific debugging of the provided module.
+ROLE: Act as my Principal QA Engineer and Architecture Auditor.
+OBJECTIVE: Conduct a strict post-implementation review of the newly updated code. Verify that objectives were met and no regressions were introduced.
 RULES:
-1. Boundary Analysis: Cross-reference the code with callers/callees. Do not break contracts.
-2. Chaos Engineering: Assume network fails or DB drops. Ensure idempotency.
-3. Zero Quick Patches: Track down the root cause and explain the logical flaw.
-4. Branch Context: Ensure any proposed fixes or architectural plans align with the purpose of the current Git branch.
+1. Regression Profiling: Analyze callers/callees below. Did the changes break the interface for any caller?
+2. DoD Verification: Strictly evaluate the new code against the Definition of Done provided below.
+3. Anti-Fragility Check: Ensure no silent failures, memory leaks, or latent bugs were introduced.
+4. Branch Context: Keep in mind the current branch context when evaluating the scope of the feature/fix.
 
 EXPECTED OUTPUT:
-(A) Architecture Diagnosis
-(B) Risks and Errors (Bugs/Blockers)
-(C) Execution Action Plan (Task, Target File, Location, Action, DoD, Validation Method).
+(A) Goal Achievement Status [PASS / FAIL / PARTIAL]
+(B) Regression Analysis
+(C) Residual Risks & Code Smells
+(D) Final Verdict (Merge or Hotfix)
 ###########################
+
+### ⚠️ USER ACTION REQUIRED: PASTE THE DEFINITION OF DONE (DoD) BELOW THIS LINE ⚠️ ###
+> DoD: [Pega aquí el DoD o el objetivo que queríamos lograr]
 
 # Arquitectura Objetivo
 
 ## Módulos que dependen de este archivo (Callers):
-- `dumbledoer/core/config.py`
-- `test_schema.py`
 - `dumbledoer/core/orchestrator.py`
+- `test_schema.py`
+- `dumbledoer/core/config.py`
 
 ## Dependencias internas (Callees):
 - Ninguna.
@@ -60,19 +64,25 @@ def _convert_tool_to_openai_schema(tool_func) -> dict:
         # Map Python types to JSON schema types
         param_type = "string"
         annotation = param.annotation
+        import typing
+        origin = typing.get_origin(annotation)
         if annotation is int:
             param_type = "integer"
         elif annotation is bool:
             param_type = "boolean"
         elif annotation is float:
             param_type = "number"
-        elif annotation is list:
+        elif annotation is list or origin in (list, tuple, set, typing.List, typing.Sequence):
             param_type = "array"
             
-        properties[param_name] = {
+        prop_schema = {
             "type": param_type,
             "description": f"Parameter {param_name} for {name}"
         }
+        if param_type == "array":
+            prop_schema["items"] = {"type": "string"}
+            
+        properties[param_name] = prop_schema
         
         if param.default == inspect.Parameter.empty:
             required.append(param_name)
@@ -165,7 +175,9 @@ class GeminiProvider(AbstractLLMProvider):
 
     async def prune_history(self, session: Any, max_turns: int) -> tuple[Any, bool]:
         # [FIX]: Make pruning async to support the aio chats.create reconstruction
-        history = getattr(session, '_history', None)
+        history = getattr(session, 'history', None) or getattr(session, '_history', None)
+        if history is None and hasattr(session, 'get_history') and callable(session.get_history):
+            history = session.get_history()
         if history is not None and len(history) > max_turns:
             found_safe_boundary = False
             slice_index = -(max_turns - 1)
@@ -270,8 +282,11 @@ class LocalProvider(AbstractLLMProvider):
                     except json.JSONDecodeError:
                         args = {}
                         
+                    call_id = call.get("id") or f"call_{uuid.uuid4().hex[:10]}"
+                    call["id"] = call_id
+                    
                     calls.append({
-                        "id": call.get("id") or f"call_{uuid.uuid4().hex[:10]}",
+                        "id": call_id,
                         "name": func_data.get("name", "unknown"),
                         "args": args
                     })
@@ -363,84 +378,6 @@ class AntigravityProvider(AbstractLLMProvider):
             session.truncate_context(keep_recent=max_turns)
             return session, True
         return session, False
-
-```
-
-### FILE: dumbledoer/core/config.py
-```python
-import os
-from pydantic_settings import BaseSettings
-from typing import Dict, Any
-from dumbledoer.core.llm_provider import AbstractLLMProvider, GeminiProvider, LocalProvider, AntigravityProvider
-import socket
-
-def _is_local_alive(port=11434):
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.settimeout(0.2)
-        return s.connect_ex(('127.0.0.1', port)) == 0
-
-# [FIX]: Global cache to prevent leaking httpx connections on repeated property access
-_GLOBAL_PROVIDER_CACHE = None
-
-class AppConfig(BaseSettings):
-    # API Keys & Auth
-    gemini_api_key: str | None = None
-    google_api_key: str | None = None
-    
-    # Execution Settings
-    start_at_index: int = 1
-    verbose: bool = False
-    
-    # Vendor-Agnostic Model Tiers
-    model_fast: str = "gemini-3.6-flash"
-    model_heavy: str = "gemini-3.1-pro-preview"
-    
-    # Budget Defaults
-    budget_limit: int = 50000000
-    budget_threshold_pct: int = 80
-    
-    class Config:
-        env_file = (os.path.expanduser("~/.gemini/config/plugins/dumbledoer/.env"), ".env")
-        env_file_encoding = "utf-8"
-        extra = "ignore"
-
-    @property
-    def providers(self) -> Dict[str, AbstractLLMProvider]:
-        global _GLOBAL_PROVIDER_CACHE
-        if _GLOBAL_PROVIDER_CACHE is not None:
-            return _GLOBAL_PROVIDER_CACHE
-
-        provs = {}
-        try:
-            import agy
-            provs["cloud"] = AntigravityProvider()
-        except (ImportError, RuntimeError): # [FIX]: Catch RuntimeError if native agy modules are broken
-            key = self.gemini_api_key or self.google_api_key or os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
-            if key:
-                provs["cloud"] = GeminiProvider(api_key=key)
-                
-        if _is_local_alive():
-            provs["local"] = LocalProvider(base_url="http://localhost:11434/v1")
-            
-        if not provs:
-            raise RuntimeError("CRITICAL: No LLM providers could be initialized. Check API keys.")
-            
-        _GLOBAL_PROVIDER_CACHE = provs
-        return provs
-
-# Global Singleton instance
-config = AppConfig()
-
-```
-
-### FILE: test_schema.py
-```python
-from dumbledoer.core.llm_provider import _convert_tool_to_openai_schema
-from dumbledoer.core.state import read_file
-import json
-
-schema = _convert_tool_to_openai_schema(read_file)
-print(json.dumps(schema, indent=2))
 
 ```
 
@@ -2663,6 +2600,84 @@ Success Criteria: {success_criteria}
         print(f"Archived {len(to_archive)} session(s) → .dumbledoer/archive/ ({len(lines) - len(final_lines)} lines trimmed from memory.md)")
 
 
+
+```
+
+### FILE: test_schema.py
+```python
+from dumbledoer.core.llm_provider import _convert_tool_to_openai_schema
+from dumbledoer.core.state import read_file
+import json
+
+schema = _convert_tool_to_openai_schema(read_file)
+print(json.dumps(schema, indent=2))
+
+```
+
+### FILE: dumbledoer/core/config.py
+```python
+import os
+from pydantic_settings import BaseSettings
+from typing import Dict, Any
+from dumbledoer.core.llm_provider import AbstractLLMProvider, GeminiProvider, LocalProvider, AntigravityProvider
+import socket
+
+def _is_local_alive(port=11434):
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(0.2)
+        return s.connect_ex(('127.0.0.1', port)) == 0
+
+# [FIX]: Global cache to prevent leaking httpx connections on repeated property access
+_GLOBAL_PROVIDER_CACHE = None
+
+class AppConfig(BaseSettings):
+    # API Keys & Auth
+    gemini_api_key: str | None = None
+    google_api_key: str | None = None
+    
+    # Execution Settings
+    start_at_index: int = 1
+    verbose: bool = False
+    
+    # Vendor-Agnostic Model Tiers
+    model_fast: str = "gemini-3.6-flash"
+    model_heavy: str = "gemini-3.1-pro-preview"
+    
+    # Budget Defaults
+    budget_limit: int = 50000000
+    budget_threshold_pct: int = 80
+    
+    class Config:
+        env_file = (os.path.expanduser("~/.gemini/config/plugins/dumbledoer/.env"), ".env")
+        env_file_encoding = "utf-8"
+        extra = "ignore"
+
+    @property
+    def providers(self) -> Dict[str, AbstractLLMProvider]:
+        global _GLOBAL_PROVIDER_CACHE
+        if _GLOBAL_PROVIDER_CACHE is not None:
+            return _GLOBAL_PROVIDER_CACHE
+
+        provs = {}
+        try:
+            import agy
+            provs["cloud"] = AntigravityProvider()
+        except (ImportError, RuntimeError): # [FIX]: Catch RuntimeError if native agy modules are broken
+            key = self.gemini_api_key or self.google_api_key or os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+            if key:
+                provs["cloud"] = GeminiProvider(api_key=key)
+                
+        if _is_local_alive():
+            provs["local"] = LocalProvider(base_url="http://localhost:11434/v1")
+            
+        if not provs:
+            raise RuntimeError("CRITICAL: No LLM providers could be initialized. Check API keys.")
+            
+        _GLOBAL_PROVIDER_CACHE = provs
+        return provs
+
+# Global Singleton instance
+config = AppConfig()
 
 ```
 

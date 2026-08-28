@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+import typing
 from typing import Any, List, Dict
 import httpx
 import json
@@ -27,19 +28,24 @@ def _convert_tool_to_openai_schema(tool_func) -> dict:
         # Map Python types to JSON schema types
         param_type = "string"
         annotation = param.annotation
+        origin = typing.get_origin(annotation)
         if annotation is int:
             param_type = "integer"
         elif annotation is bool:
             param_type = "boolean"
         elif annotation is float:
             param_type = "number"
-        elif annotation is list:
+        elif annotation is list or origin in (list, tuple, set, typing.List, typing.Sequence):
             param_type = "array"
             
-        properties[param_name] = {
+        prop_schema = {
             "type": param_type,
             "description": f"Parameter {param_name} for {name}"
         }
+        if param_type == "array":
+            prop_schema["items"] = {"type": "string"}
+            
+        properties[param_name] = prop_schema
         
         if param.default == inspect.Parameter.empty:
             required.append(param_name)
@@ -132,7 +138,9 @@ class GeminiProvider(AbstractLLMProvider):
 
     async def prune_history(self, session: Any, max_turns: int) -> tuple[Any, bool]:
         # [FIX]: Make pruning async to support the aio chats.create reconstruction
-        history = getattr(session, '_history', None)
+        history = getattr(session, 'history', None) or getattr(session, '_history', None)
+        if history is None and hasattr(session, 'get_history') and callable(session.get_history):
+            history = session.get_history()
         if history is not None and len(history) > max_turns:
             found_safe_boundary = False
             slice_index = -(max_turns - 1)
@@ -237,8 +245,11 @@ class LocalProvider(AbstractLLMProvider):
                     except json.JSONDecodeError:
                         args = {}
                         
+                    call_id = call.get("id") or f"call_{uuid.uuid4().hex[:10]}"
+                    call["id"] = call_id
+                    
                     calls.append({
-                        "id": call.get("id") or f"call_{uuid.uuid4().hex[:10]}",
+                        "id": call_id,
                         "name": func_data.get("name", "unknown"),
                         "args": args
                     })
