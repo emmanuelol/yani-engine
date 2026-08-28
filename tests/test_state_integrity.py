@@ -43,6 +43,7 @@ async def test_update_memory_registry_concurrency(tmp_path):
 async def test_temp_file_collision(mock_confirm, mock_checkpoint, mock_subprocess, tmp_path):
     """Test that concurrent write_file_with_review calls for same basename don't collide."""
     from unittest.mock import AsyncMock
+    mock_subprocess.return_value.stdout = "Affected symbols: 2\n"
     mock_checkpoint.return_value.write_rollback_copy = AsyncMock()
     mock_checkpoint.return_value.log_planned_change = AsyncMock()
     mock_checkpoint.return_value.write_checkpoint_json = AsyncMock()
@@ -60,8 +61,8 @@ async def test_temp_file_collision(mock_confirm, mock_checkpoint, mock_subproces
         # Run simultaneously
         await asyncio.gather(run_write("api/utils.py"), run_write("db/utils.py"))
         
-        # Verify two tmp files exist in .yani_engine/tmp
-        tmp_dir = ".yani_engine/tmp"
+        # Verify two tmp files exist in .yani/tmp
+        tmp_dir = ".yani/tmp"
         assert os.path.exists(tmp_dir)
         tmp_files = os.listdir(tmp_dir)
         assert len(tmp_files) == 2

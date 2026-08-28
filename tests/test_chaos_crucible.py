@@ -15,10 +15,10 @@ def setup_test_env(tmp_path):
     original_cwd = os.getcwd()
     os.chdir(tmp_path)
     
-    # Setup .yani_engine directories
-    os.makedirs(".yani_engine/tmp", exist_ok=True)
-    os.makedirs(".yani_engine/checkpoints", exist_ok=True)
-    os.makedirs(".yani_engine/rollbacks", exist_ok=True)
+    # Setup .yani directories
+    os.makedirs(".yani/tmp", exist_ok=True)
+    os.makedirs(".yani/checkpoints", exist_ok=True)
+    os.makedirs(".yani/rollbacks", exist_ok=True)
     
     # Initialize basic memory.md
     with open("memory.md", "w") as f:
@@ -68,7 +68,7 @@ async def test_parallel_sandbox_isolation(mock_run, setup_test_env):
 async def test_unattended_orphan_recovery_deadlock(mock_confirm, setup_test_env):
     """Asserts that unattended scanner deletes orphaned .tmp files and never prompts."""
     
-    tmp_file_path = ".yani_engine/tmp/T-999_fake__file.py.tmp"
+    tmp_file_path = ".yani/tmp/T-999_fake__file.py.tmp"
     with open(tmp_file_path, "w") as f:
         f.write("broken code")
         
@@ -124,7 +124,7 @@ async def test_native_qa_intercept_syntax_error(setup_test_env):
         
     # Initialize CLI with a fake API key
     with patch.dict(os.environ, {"GEMINI_API_KEY": "fake_key"}):
-        cli = yani_engineCLI()
+        cli = YaniEngineCLI()
     
     # We must patch the client so it doesn't crash on None
     mock_chat_session = MagicMock()

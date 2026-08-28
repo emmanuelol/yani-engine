@@ -565,7 +565,7 @@ class LLMOrchestrator:
             description = f"Task {task_id}"
 
         # --- NEW: Dynamically parse sandbox_mode from memory.md ---
-        self.sandbox_mode = "yani-base"
+        self.sandbox_mode = getattr(self, "sandbox_mode", "yani-base")
         if mem_content:
             config_start, config_end = ASTMemoryMapper.locate_heading_block(mem_content, "##", "Config")
             if config_start != -1:
@@ -1594,7 +1594,6 @@ Success Criteria: {success_criteria}
                     print("Error: memory.md not found. Run /yani-engine:start to begin.")
                     return
 
-                from yani_engine.core.locks import get_registry_lock, _MEMORY_MUTEX
                 async with _MEMORY_MUTEX:
                     async with get_registry_lock():
                         with open("memory.md", "r", encoding="utf-8") as f:

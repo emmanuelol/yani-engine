@@ -35,6 +35,8 @@ class MockLLMProvider(AbstractLLMProvider):
     def prune_history(self, session: any, max_turns: int) -> tuple[any, bool]:
         return session, False
 
+from yani_engine.core.state import TaskRegistryState, update_task_registry_row, flush_task_registry
+
 @pytest.mark.asyncio
 async def test_update_task_registry_concurrency():
     state = TaskRegistryState()
@@ -53,6 +55,7 @@ async def test_update_task_registry_concurrency():
         
     tasks = [update_task(f"T-{i:03d}") for i in range(10)]
     await asyncio.gather(*tasks)
+    await flush_task_registry()
     
     # 3. Read memory.md and assert all 10 state changes exist
     updated_tasks = state._load_tasks_unlocked()
@@ -66,6 +69,7 @@ async def test_update_task_registry_concurrency():
 async def test_mock_llm_provider():
     provider = MockLLMProvider()
     orchestrator = LLMOrchestrator()
+    orchestrator.sandbox_mode = "native"
     orchestrator.provider = provider
     orchestrator.providers = {"cloud": provider}
     

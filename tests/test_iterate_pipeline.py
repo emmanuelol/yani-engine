@@ -19,7 +19,8 @@ async def test_iterate_tool_whitelist():
 @pytest.mark.asyncio
 async def test_iterate_manifest_options():
     """Verify the iterate.json manifest exposes the required prompt and enrich options to the overarching client."""
-    manifest_path = "commands/iterate.json"
+    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    manifest_path = os.path.join(repo_root, "commands/iterate.json")
     assert os.path.exists(manifest_path), "iterate.json manifest must exist."
     
     with open(manifest_path, "r") as f:
@@ -53,46 +54,47 @@ async def test_iterate_memory_slicing_token_clamp(mock_sliced_memory):
     assert "Task Registry" in requested_sections, "Task Registry must be included for context."
 
 @pytest.mark.asyncio
-@patch("yani_engine.core.state.ASTMemoryMapper")
-@patch("builtins.open", new_callable=MagicMock)
-async def test_register_task_batch_soft_warnings(mock_open, mock_mapper):
+async def test_register_task_batch_soft_warnings(tmp_path):
     """Verify that poorly formatted tasks trigger soft warnings and auto-patching rather than hard failures."""
-    
-    # Mocking the AST mapper to return valid block indices
-    mock_mapper.locate_heading_block.side_effect = [
-        (10, 20),  # Task Registry
-        (30, 40),  # Archive Index
-        (50, 60),  # Task Details
-        (10, 20)   # Task Registry (new)
-    ]
-    
-    # Provide a mock memory.md content
-    mock_file = MagicMock()
-    mock_file.read.return_value = "## Task Registry\n\n## Archive Index\n\n## Task Details\n"
-    mock_file.__enter__.return_value = mock_file
-    mock_open.return_value = mock_file
-    
-    malformed_tasks = [
-        {
-            "title": "Fix the database login error", # Missing [Category]
-            "task_type": "change",
-            "deps": "none",
-            "description": "Fix it.",
-            "outputs": "db/auth.py, db/models.py, api/routes.py, ui/login.js", # > 2 files
-            "estimated_effort": "small" # Atomicity violation
-        }
-    ]
-    
-    # Capture print statements to verify the soft warnings fired
-    with patch("builtins.print") as mock_print:
-        result = await register_task_batch(malformed_tasks)
+    original_cwd = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        memory_content = (
+            "# Memory\n\n"
+            "## Task Registry\n"
+            "| Task ID | Title | Type | Status | Owner | Depends On | Assigned Session | Checkpoint |\n"
+            "|---|---|---|---|---|---|---|---|\n\n"
+            "## Archive Index\n"
+            "| Task ID | Title | Category | Owner | Session | Archive File |\n"
+            "|---|---|---|---|---|---|\n\n"
+            "## Task Details\n"
+        )
+        with open("memory.md", "w") as f:
+            f.write(memory_content)
+
+        malformed_tasks = [
+            {
+                "title": "Fix the database login error", # Missing [Category]
+                "task_type": "change",
+                "deps": "none",
+                "description": "Fix it.",
+                "outputs": "db/auth.py, db/models.py, api/routes.py, ui/login.js", # > 2 files
+                "estimated_effort": "small" # Atomicity violation
+            }
+        ]
         
-    assert "Successfully registered tasks" in result, "The batch registration should succeed despite the warnings."
-    
-    # Verify the title was auto-patched
-    assert malformed_tasks[0]["title"] == "[Uncategorized] Fix the database login error", "The title was not auto-patched."
-    
-    # Verify warnings were logged to stdout
-    print_calls = [call.args[0] for call in mock_print.call_args_list]
-    assert any("missing [Category] tag" in msg for msg in print_calls), "Category soft warning did not fire."
-    assert any("assigned 4 files to a 'small' effort tier" in msg for msg in print_calls), "Atomicity soft warning did not fire."
+        # Capture print statements to verify the soft warnings fired
+        with patch("builtins.print") as mock_print:
+            result = await register_task_batch(malformed_tasks)
+            
+        assert "Successfully registered tasks" in result, "The batch registration should succeed despite the warnings."
+        
+        # Verify the title was auto-patched
+        assert malformed_tasks[0]["title"] == "[Uncategorized] Fix the database login error", "The title was not auto-patched."
+        
+        # Verify warnings were logged to stdout
+        print_calls = [str(call.args[0]) for call in mock_print.call_args_list if call.args]
+        assert any("missing [Category] tag" in msg for msg in print_calls), "Category soft warning did not fire."
+        assert any("assigned 4 files to a 'small' effort tier" in msg for msg in print_calls), "Atomicity soft warning did not fire."
+    finally:
+        os.chdir(original_cwd)

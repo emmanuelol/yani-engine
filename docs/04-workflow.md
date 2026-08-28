@@ -27,7 +27,14 @@ When running `/yani-engine execute`, the central yani-engine logic executes task
 5. **Diff-Gate Review**: VS Code (or Terminal) presents the diff against the rollback backup.
 6. **Commit or Revert**: If approved, `.tmp` atomically overwrites the target; if rejected, the rollback copy is restored to clear out any intermediate artifacts.
 
-## 4. Communication & Optimization
+## 4. `yani-skill` Deterministic Workflow (Alternative Strict Path)
+When invoking `/yani-skill` (or `/yani-engine:yani-skill`), the execution follows an evidence-based, four-phase lifecycle:
+1. **Recon & Convention Mining**: Executes `cochange.py` on target files to compute historical commit coupling and verify reproducibility via `verify_evidence.py`. High ratios establish hard `convention_guards`.
+2. **Atomic Planning**: Generates `plan.json` and runs `validate_plan.py` to ensure schema validity and non-overlapping `files_touched`. Pauses for explicit human confirmation.
+3. **Test-Driven Execution (TDA)**: Creates an isolated temporal branch (`yani/T-XX`), writes failing tests first, and implements changes.
+4. **Deterministic Audit**: Executes `diff_audit.py` comparing the working tree to the base branch and asserting all `--expect` convention guards were satisfied before prompting for human commit authorization.
+
+## 5. Communication & Optimization
 ### Caveman Integration (Dynamic Output Compression)
 To maximize token savings during execution, yani-engine leverages the **Caveman** skill. This enforces an ultra-compressed communication mode, aggressively filtering out pleasantries and redundant markdown formatting from the LLM’s output. It operates at multiple intensity levels to cut token usage by up to 75% while retaining full technical accuracy during heavy multi-turn loops.
 
@@ -37,5 +44,5 @@ At the completion of complex tasks, yani-engine logs durable learnings to the Kn
 - Saves findings in structured markdown entries (`knowledge/entries/`).
 - Synchronizes with `knowledge/index.md` via `sync_knowledge.py` (OP-9 protocol) for automatic re-ingestion in future sessions, enabling bridging of decisions across multiple project instances.
 
-## 5. Completion
+## 6. Completion
 yani-engine generates the `/report` locally and synchronizes `memory.md`. Your project is updated, while yani-engine safely returns to idle in its centralized location.

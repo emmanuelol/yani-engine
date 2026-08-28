@@ -453,9 +453,14 @@ class TaskRegistryState:
 
 async def read_file(path: str) -> str:
     def _read():
-        expanded_path = os.path.expanduser(path)
-        with open(expanded_path, "r", encoding="utf-8") as f:
-            return f.read()
+        try:
+            expanded_path = os.path.expanduser(path)
+            with open(expanded_path, "r", encoding="utf-8") as f:
+                return f.read()
+        except FileNotFoundError:
+            return f"Error: File not found: {path}"
+        except Exception as e:
+            return f"Error reading {path}: {e}"
     return await asyncio.to_thread(_read)
 
 async def write_file_with_review(path: str, content: str, task_id: str, **kwargs) -> str:

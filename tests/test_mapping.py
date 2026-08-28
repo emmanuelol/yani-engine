@@ -5,7 +5,7 @@ from yani_engine.core.orchestrator import LLMOrchestrator as YaniEngineCLI
 
 @patch.dict(os.environ, {"GEMINI_API_KEY": "dummy_key"})
 def test_mcp_wrapper_sanitizes_slashes():
-    cli = yani_engineCLI()
+    cli = YaniEngineCLI()
     cli.mcp_sessions = {"codegraph": MagicMock()}
     
     dummy_tool = MagicMock()

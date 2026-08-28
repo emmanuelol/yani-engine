@@ -1,9 +1,12 @@
 import pytest
+import os
 import re
 
 def test_token_bleed():
     """Verify that agent loops are strictly clamped to avoid token bleeds."""
-    with open('yani_engine/core/orchestrator.py', 'r') as f:
+    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    target = os.path.join(repo_root, 'yani_engine/core/orchestrator.py')
+    with open(target, 'r') as f:
         content = f.read()
     
     # Verify the clamp fix

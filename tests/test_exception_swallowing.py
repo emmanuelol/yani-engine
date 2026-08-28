@@ -1,9 +1,12 @@
 import pytest
+import os
 import ast
 
 def test_exception_swallowing():
     """Verify that the worker loop safely calls queue.task_done() even during crashes."""
-    with open('yani_engine/core/orchestrator.py', 'r') as f:
+    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    target = os.path.join(repo_root, 'yani_engine/core/orchestrator.py')
+    with open(target, 'r') as f:
         tree = ast.parse(f.read())
         
     found_worker = False

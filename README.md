@@ -30,7 +30,7 @@ flowchart LR
     B -->|Build Call Graph| C{Calculate Blast Radius}
     C -->|Affected Symbols <= 20| D[✅ Approve Staged Mutation]
     C -->|Affected Symbols > 20| E[❌ Hard Block: Blast Radius Exceeded]
-    C -->|Timeout / Index Failure| F[🚫 Fail-Closed: Operation Rejected]
+    C -->|Timeout / Failure| F[🚫 Fail-Closed: Operation Blocked]
 ```
 
 1. **AST Node & Call Graph Traversal**: Before any file modification, yani-engine queries CodeGraph to locate exact symbol definitions and trace all upstream/downstream callers across the workspace.
@@ -40,13 +40,57 @@ flowchart LR
 
 ---
 
+## 🧭 `yani-skill` (Deterministic Planning & Evidence-Based Execution)
+
+Included natively is **`yani-skill`** (triggered via `/yani-skill` or `/yani-engine:yani-skill`), a ruthless, evidence-driven execution framework that discovers implicit repo conventions and audits diffs deterministically.
+
+```mermaid
+flowchart TD
+    subgraph Phase 1: Recon
+    A[Target File] -->|python3 scripts/cochange.py| B[Analyze Git History]
+    B -->|Ratio > 0.8| C[Establish convention_guard]
+    C -->|python3 scripts/verify_evidence.py| D{Reproducible?}
+    D -- Yes --> E[Validated Evidence]
+    D -- No --> F[Reject Assumption]
+    end
+
+    subgraph Phase 2: Atomic Plan
+    E --> G[Draft plan.json]
+    G -->|python3 scripts/validate_plan.py| H{Schema & Overlap Check}
+    H -- Pass --> I[Await Human Approval]
+    end
+
+    subgraph Phase 3: TDA Execution
+    I --> J[Branch: yani/T-01]
+    J --> K[Write Test First]
+    K --> L[Implement Mutation]
+    end
+
+    subgraph Phase 4: Deterministic Audit
+    L --> M[python3 scripts/diff_audit.py --expect guards]
+    M --> N[Run Test Suite]
+    N --> O{Evidence Raw & Valid?}
+    O -- Yes --> P[Pause -> Human Authorization -> Git Commit]
+    O -- No --> Q[Rollback Working Tree & Branch]
+    end
+```
+
+### Key Tooling in `skills/yani-skill/scripts/`
+
+* **`cochange.py`**: Scans `git log` to calculate historical coupling between files. If editing `A.py` historically coincided with `B.json` in >80% of commits, `B.json` becomes an unbreakable `convention_guard`.
+* **`verify_evidence.py`**: Re-evaluates co-change findings against a specific git commit SHA, ensuring assertions are reproducible and not hallucinated.
+* **`validate_plan.py`**: Verifies that `plan.json` adheres to strict atomic schema rules and that no two concurrent tasks touch overlapping files.
+* **`diff_audit.py`**: Compares the working tree against the base branch, ensuring no undeclared files were modified and that all `--expect` convention guards were fulfilled.
+
+---
+
 ## 🛠️ Installation
 
 Installing yani-engine is incredibly straightforward. You install it as a native plugin to `agy` by pointing it to your local repository clone.
 
 1. Clone this repository to your local machine:
 ```bash
-git clone <repository-url>
+git clone https://github.com/emmanuelol/yani-engine.git
 cd yani-engine
 ```
 
