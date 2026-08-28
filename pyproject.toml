@@ -3,6 +3,11 @@ name = "yani-engine"
 version = "1.0.0"
 description = "yani-engine Agentic Harness 🐩"
 readme = "README.md"
+license = "MIT"
+authors = [
+  { name = "Emmanuel", url = "https://github.com/emmanuelol" },
+  { name = "Carlos", url = "https://github.com/carlosaol" }
+]
 requires-python = ">=3.10"
 dependencies = [
  "google-genai>=2.8.0",

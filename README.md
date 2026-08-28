@@ -238,3 +238,18 @@ Let's walk through using `yani-engine` to safely update a deprecated API across 
 3. **Authorize Execution:** Run `/yani-engine execute`. Sub-agents will begin modifying files in an isolated Docker sandbox.
 4. **Approve the Diffs:** Before any code is committed, the VS Code Diff-Gate will pause execution and present you with a clean before/after comparison. 
 5. **Finalize:** Once you approve the changes, the rollback copies are cleared, and the updated code is written directly to your working tree.
+
+---
+
+## 👥 Authors
+
+Created and maintained by:
+* **Emmanuel** ([@emmanuelol](https://github.com/emmanuelol))
+* **Carlos** ([@carlosaol](https://github.com/carlosaol))
+
+---
+
+## 📄 License
+
+This project is licensed under the **MIT License** — see the [LICENSE](LICENSE) file for details. Included is an ironclad warranty disclaimer providing complete liability insulation for open-source and commercial adoption.
+
