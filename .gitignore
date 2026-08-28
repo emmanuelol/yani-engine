@@ -1,4 +1,11 @@
 # ==========================================
+# Environment & Secrets (Local Only - NEVER Push)
+# ==========================================
+.env
+.env.*
+!.env.example
+
+# ==========================================
 # Yani Engine - Runtime, State & Cache
 # ==========================================
 .yani/
@@ -7,6 +14,7 @@
 local_codegraph.json
 audit_report.md
 qa_attempts.json
+targeted_context.md
 *.lock
 *.tmp
 *.bak
