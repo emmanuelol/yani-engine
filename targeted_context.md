@@ -1,31 +1,27 @@
 ### SYSTEM INSTRUCTIONS ###
 CURRENT GIT BRANCH: `main`
-TARGET FILE: `dumbledoer/core/llm_provider.py`
+TARGET FILE: `dumbledoer/core/sandbox.py`
 
-ROLE: Act as my Principal QA Engineer and Architecture Auditor.
-OBJECTIVE: Conduct a strict post-implementation review of the newly updated code. Verify that objectives were met and no regressions were introduced.
+ROLE: Act as my Principal Software Engineer, Site Reliability Architect (SRE), and Chaos Engineer.
+OBJECTIVE: Conduct a deep code audit and scientific debugging of the provided module.
 RULES:
-1. Regression Profiling: Analyze callers/callees below. Did the changes break the interface for any caller?
-2. DoD Verification: Strictly evaluate the new code against the Definition of Done provided below.
-3. Anti-Fragility Check: Ensure no silent failures, memory leaks, or latent bugs were introduced.
-4. Branch Context: Keep in mind the current branch context when evaluating the scope of the feature/fix.
+1. Boundary Analysis: Cross-reference the code with callers/callees. Do not break contracts.
+2. Chaos Engineering: Assume network fails or DB drops. Ensure idempotency.
+3. Zero Quick Patches: Track down the root cause and explain the logical flaw.
+4. Branch Context: Ensure any proposed fixes or architectural plans align with the purpose of the current Git branch.
 
 EXPECTED OUTPUT:
-(A) Goal Achievement Status [PASS / FAIL / PARTIAL]
-(B) Regression Analysis
-(C) Residual Risks & Code Smells
-(D) Final Verdict (Merge or Hotfix)
+(A) Architecture Diagnosis
+(B) Risks and Errors (Bugs/Blockers)
+(C) Execution Action Plan (Task, Target File, Location, Action, DoD, Validation Method).
 ###########################
-
-### ⚠️ USER ACTION REQUIRED: PASTE THE DEFINITION OF DONE (DoD) BELOW THIS LINE ⚠️ ###
-> DoD: [Pega aquí el DoD o el objetivo que queríamos lograr]
 
 # Arquitectura Objetivo
 
 ## Módulos que dependen de este archivo (Callers):
+- `test_sdk.py`
+- `test_permissions.py`
 - `dumbledoer/core/orchestrator.py`
-- `test_schema.py`
-- `dumbledoer/core/config.py`
 
 ## Dependencias internas (Callees):
 - Ninguna.
@@ -33,351 +29,347 @@ EXPECTED OUTPUT:
 
 # Código Fuente
 
-### FILE: dumbledoer/core/llm_provider.py
+### FILE: dumbledoer/core/sandbox.py
 ```python
-from abc import ABC, abstractmethod
-from typing import Any, List, Dict
-import httpx
-import json
-import uuid
-from google import genai
-from google.genai.types import Part
-import inspect
+from dumbledoer.core.locks import _MEMORY_MUTEX, _REGISTRY_LOCK, get_registry_lock
+import os
+import sys
+import asyncio
+import subprocess
+import shutil
+import shlex  # <--- NEW: Global import required for run_rtk and execute_bash
 
-def _convert_tool_to_openai_schema(tool_func) -> dict:
-    """Converts a DumbleDoer Python/MCP tool signature into an OpenAI-compatible function schema."""
-    name = getattr(tool_func, "__name__", "unknown_tool")
-    description = getattr(tool_func, "__doc__", "") or ""
-    
+
+def _is_sandbox_warm_sync(worker_id: str) -> bool:
     try:
-        sig = inspect.signature(tool_func)
-    except (TypeError, ValueError):
-        sig = inspect.Signature()
+        import hashlib
+        project_hash = hashlib.md5(os.getcwd().encode()).hexdigest()[:8]
+        result = subprocess.run(["docker", "ps", "-q", "-f", f"name=dumbledoer-sandbox-{project_hash}-{worker_id}"], capture_output=True, text=True)
+        return bool(result.stdout.strip())
+    except Exception:
+        return False
 
-    properties = {}
-    required = []
+async def _ensure_warm_sandbox(task_id: str = None, worker_id: str = None, sandbox_mode: str = "dumbledoer-base") -> bool:
+    active_id = worker_id or task_id
+    if not active_id: return False
     
-    for param_name, param in sig.parameters.items():
-        if param_name in ("self", "cls"):
-            continue
-            
-        # Map Python types to JSON schema types
-        param_type = "string"
-        annotation = param.annotation
-        import typing
-        origin = typing.get_origin(annotation)
-        if annotation is int:
-            param_type = "integer"
-        elif annotation is bool:
-            param_type = "boolean"
-        elif annotation is float:
-            param_type = "number"
-        elif annotation is list or origin in (list, tuple, set, typing.List, typing.Sequence):
-            param_type = "array"
-            
-        prop_schema = {
-            "type": param_type,
-            "description": f"Parameter {param_name} for {name}"
-        }
-        if param_type == "array":
-            prop_schema["items"] = {"type": "string"}
-            
-        properties[param_name] = prop_schema
-        
-        if param.default == inspect.Parameter.empty:
-            required.append(param_name)
-            
-    return {
-        "type": "function",
-        "function": {
-            "name": name,
-            "description": description.strip()[:1024],
-            "parameters": {
-                "type": "object",
-                "properties": properties,
-                "required": required
-            }
-        }
-    }
-
-class AbstractLLMProvider(ABC):    
-    @abstractmethod
-    async def create_chat_session(self, model_name: str, tools: List[Any]) -> Any:
-        pass    
-    
-    @abstractmethod
-    async def send_message(self, session: Any, payload: str | List[Any]) -> Any:
-        pass    
-    
-    @abstractmethod
-    def parse_tool_calls(self, response: Any) -> List[Dict]:
-        pass
-            
-    @abstractmethod
-    def format_tool_response(self, tool_name: str, result: str, call_id: str = None) -> Any:
-        pass
-
-    @abstractmethod
-    def format_tool_error(self, tool_name: str, error: str, call_id: str = None) -> Any:
-        pass
-
-    @abstractmethod
-    async def prune_history(self, session: Any, max_turns: int) -> tuple[Any, bool]:
-        """Prunes the session history to prevent context window bloat. Returns (updated_session, bool_if_pruned)."""
-        pass
-        
-    async def aclose(self):
-        """Cleanup hook for lingering HTTP sessions."""
-        pass
-        
-class GeminiProvider(AbstractLLMProvider):
-    def __init__(self, api_key: str):
-        self.client = genai.Client(api_key=api_key)
-        
-    async def create_chat_session(self, model_name: str, tools: List[Any]) -> Any:
-        # [FIX]: Await the async SDK call before mutating the session
-        session = await self.client.aio.chats.create(
-            model=model_name,
-            config={
-                "tools": tools,
-                "automatic_function_calling": {"disable": True}
-            }
-        )
-        session._dumbledoer_model = model_name
-        session._dumbledoer_tools = tools
-        return session
-        
-    async def send_message(self, session: Any, payload: str | List[Any]) -> Any:
-        return await session.send_message(payload)
-        
-    def parse_tool_calls(self, response: Any) -> List[Dict]:
-        calls = []
-        if response.function_calls:
-            for call in response.function_calls:
-                calls.append({
-                    "id": getattr(call, "id", None) or f"call_{uuid.uuid4().hex[:10]}",
-                    "name": call.name,
-                    "args": dict(call.args) if call.args else {}
-                })
-        return calls
-        
-    def format_tool_response(self, tool_name: str, result: str, call_id: str = None) -> Any:
-        part = Part.from_function_response(name=tool_name, response={"result": result})
-        if call_id and hasattr(part.function_response, "id"):
-            part.function_response.id = call_id
-        return part
-    
-    def format_tool_error(self, tool_name: str, error: str, call_id: str = None) -> Any:
-        part = Part.from_function_response(name=tool_name, response={"error": error})
-        if call_id and hasattr(part.function_response, "id"):
-            part.function_response.id = call_id
-        return part
-
-    async def prune_history(self, session: Any, max_turns: int) -> tuple[Any, bool]:
-        # [FIX]: Make pruning async to support the aio chats.create reconstruction
-        history = getattr(session, 'history', None) or getattr(session, '_history', None)
-        if history is None and hasattr(session, 'get_history') and callable(session.get_history):
-            history = session.get_history()
-        if history is not None and len(history) > max_turns:
-            found_safe_boundary = False
-            slice_index = -(max_turns - 1)
-            
-            while abs(slice_index) <= len(history):
-                item = history[slice_index]
-                item_role = getattr(item, 'role', None) or (item.get('role') if isinstance(item, dict) else None)
-                if item_role == 'model':
-                    found_safe_boundary = True
-                    break
-                slice_index -= 1
-
-            if found_safe_boundary:
-                new_history = [history[0]] + history[slice_index:]
-                # Cleanly recreate session and await it
-                new_session = await self.client.aio.chats.create(
-                    model=getattr(session, '_dumbledoer_model', 'gemini-3.6-flash'),
-                    config={"tools": getattr(session, '_dumbledoer_tools', []), "automatic_function_calling": {"disable": True}},
-                    history=new_history
-                )
-                new_session._dumbledoer_model = getattr(session, '_dumbledoer_model', 'gemini-3.6-flash')
-                new_session._dumbledoer_tools = getattr(session, '_dumbledoer_tools', [])
-                return new_session, True
-        return session, False
-
-class MockUsage:
-    def __init__(self, count):
-        self.total_token_count = count
-
-class LocalResponse:
-    def __init__(self, msg, usage_obj):
-        self.text = msg.get("content", "") or ""
-        self.function_calls = msg.get("tool_calls", None)
-        self.usage_metadata = usage_obj
-
-class LocalProvider(AbstractLLMProvider):
-    """Interfaces with a local Ollama or vLLM instance using standard OpenAI schema."""
-    def __init__(self, base_url: str = "http://localhost:11434/v1"):
-        self.base_url = base_url
-        self.client = httpx.AsyncClient(timeout=120.0)
-
-    async def create_chat_session(self, model_name: str, tools: List[Any]) -> Any:
-        openai_tools = [_convert_tool_to_openai_schema(t) for t in tools if callable(t)]
-        return {
-            "model": model_name,
-            "_history": [],
-            "tools": openai_tools
-        }
-
-    async def send_message(self, session: Any, payload: str | List[Any]) -> Any:
-        # [FIX]: Idempotency - Clone the history to prevent duplicates on timeout/retry
-        candidate_history = list(session["_history"])
-        
-        if isinstance(payload, list):
-            for part in payload:
-                if isinstance(part, dict) and part.get("role") == "tool":
-                    candidate_history.append(part)
-                else:
-                    candidate_history.append({"role": "user", "content": str(part)})
-        else:
-            candidate_history.append({"role": "user", "content": str(payload)})
-        
-        request_body = {
-            "model": session["model"],
-            "messages": candidate_history
-        }
-        
-        if session.get("tools"):
-            request_body["tools"] = session["tools"]
-            request_body["tool_choice"] = "auto"
-
-        response = await self.client.post(
-            f"{self.base_url}/chat/completions",
-            json=request_body
-        )
-        response.raise_for_status()
-        data = response.json()
-        
-        message = data["choices"][0]["message"]
-        candidate_history.append(message)
-        
-        # Safely commit to state only after a 200 OK
-        session["_history"] = candidate_history
-        
-        usage_data = data.get("usage", {})
-        return LocalResponse(message, MockUsage(usage_data.get("total_tokens", 0)))
-
-    def parse_tool_calls(self, response: Any) -> List[Dict]:
-        calls = []
-        raw_tool_calls = getattr(response, "function_calls", None)
-        if raw_tool_calls:
-            for call in raw_tool_calls:
-                if isinstance(call, dict) and "function" in call:
-                    func_data = call["function"]
-                    args_raw = func_data.get("arguments", "{}")
-                    
-                    # [FIX]: Safely handle malformed tool JSON
-                    try:
-                        args = json.loads(args_raw) if isinstance(args_raw, str) else args_raw
-                        if not isinstance(args, dict):
-                            args = {}
-                    except json.JSONDecodeError:
-                        args = {}
-                        
-                    call_id = call.get("id") or f"call_{uuid.uuid4().hex[:10]}"
-                    call["id"] = call_id
-                    
-                    calls.append({
-                        "id": call_id,
-                        "name": func_data.get("name", "unknown"),
-                        "args": args
-                    })
-        return calls
-
-    def format_tool_response(self, tool_name: str, result: str, call_id: str = None) -> Any:
-        # [FIX]: Hard-enforce tool_call_id inclusion to prevent 400 Bad Request
-        call_id = call_id or f"call_{uuid.uuid4().hex[:10]}"
-        return {"role": "tool", "name": tool_name, "content": result, "tool_call_id": call_id}
-
-    def format_tool_error(self, tool_name: str, error: str, call_id: str = None) -> Any:
-        call_id = call_id or f"call_{uuid.uuid4().hex[:10]}"
-        return {"role": "tool", "name": tool_name, "content": f"Error: {error}", "tool_call_id": call_id}
-
-    async def prune_history(self, session: Any, max_turns: int) -> tuple[Any, bool]:
-        history = session["_history"]
-        if len(history) > max_turns:
-            found_safe_boundary = False
-            slice_index = -(max_turns - 1)
-
-            # [FIX]: Off-by-one correction to guarantee boundary inclusion
-            while abs(slice_index) <= len(history):
-                item = history[slice_index]
-                if item.get("role") == "user":
-                    found_safe_boundary = True
-                    break
-                slice_index -= 1
-
-            if found_safe_boundary:
-                session["_history"] = [history[0]] + history[slice_index:]
-                return session, True
-
-        return session, False
-
-    async def aclose(self):
-        await self.client.aclose()
-
-
-class AntigravityProvider(AbstractLLMProvider):
-    """Hooks directly into the native 'agy' client to use native account credits."""
-    
-    def __init__(self):
+    def _do_warm():
         try:
-            from agy.core.session import AgySession
-            self.agy_session = AgySession()
-        except ImportError:
-            raise RuntimeError("CRITICAL: Antigravity native modules not found. Are you running inside agy?")
+            import hashlib
+            project_hash = hashlib.md5(os.getcwd().encode()).hexdigest()[:8]
+            container_name = f"dumbledoer-sandbox-{project_hash}-{active_id}"
+            
+            # Check if already running
+            chk = subprocess.run(["docker", "ps", "-q", "-f", f"name={container_name}"], capture_output=True, text=True)
+            if chk.stdout.strip():
+                return True
+                
+            # Ruthlessly purge any exited or crashed containers holding the target name
+            subprocess.run(["docker", "rm", "-f", container_name], capture_output=True, check=False)
+                
+            # Create Shadow Clone Atomically
+            shadow_dir = os.path.abspath(f".dumbledoer/shadow_{active_id}")
+            shadow_tmp = f"{shadow_dir}.tmp"
+            
+            if os.path.exists(shadow_tmp):
+                shutil.rmtree(shadow_tmp)
+            os.makedirs(shadow_tmp, exist_ok=True)
+            
+            # Remove copy_function=os.link to prevent Hard Link Sandbox Escapes
+            ignore_patterns = shutil.ignore_patterns(
+                ".git", ".venv", "venv", "env", ".pytest_cache", "__pycache__", 
+                "node_modules", ".dumbledoer", ".codegraph", "*.tmp", "*.bak", "shadow_*"
+            )
+            shutil.copytree(os.getcwd(), shadow_tmp, ignore=ignore_patterns, dirs_exist_ok=True)
+            
+            # Atomic swap
+            if os.path.exists(shadow_dir):
+                shutil.rmtree(shadow_dir)
+            os.replace(shadow_tmp, shadow_dir)
+            
+            # --- NEW: Dynamic Target Image Resolution ---
+            target_image = "dumbledoer-base:latest"
+            
+            if sandbox_mode.startswith("docker:"):
+                target_image = sandbox_mode.split(":")[1]
+            elif sandbox_mode == "auto":
+                if os.path.exists(os.path.join(shadow_dir, "Dockerfile")):
+                    target_image = f"dumbledoer-custom-{project_hash}"
+                    print(f"Building native sandbox from project Dockerfile: {target_image}...")
+                    subprocess.run(["docker", "build", "-t", target_image, "."], cwd=shadow_dir, capture_output=True, check=True)
+            
+            user_map = f"{os.getuid()}:{os.getgid()}"
+            subprocess.run(
+                ["docker", "run", "--rm", "-d", "-i", 
+                 "--user", user_map,
+                 "--memory=1500m", "--memory-swap=1500m",  # Strict RAM cap
+                 "--name", container_name,
+                 "-v", f"{shadow_dir}:/workspace", "-w", "/workspace", 
+                 target_image, "/bin/bash"],
+                capture_output=True,
+                check=True
+            )
+            
+            # Verify it started dynamically
+            import time
+            for _ in range(5):
+                chk2 = subprocess.run(
+                    ["docker", "inspect", "-f", "{{.State.Running}}", container_name],
+                    capture_output=True, text=True
+                )
+                if chk2.stdout.strip() == "true":
+                    return True
+                time.sleep(0.2)
+            
+            return False
+        except Exception as e:
+            raise RuntimeError(f"Docker infrastructure failure. Is the daemon running? Details: {e}")
+    return await asyncio.to_thread(_do_warm)
 
-    async def create_chat_session(self, model_name: str, tools: List[Any]) -> Any:
-        return await self.agy_session.spawn_agent(
-            model=model_name,
-            tools=tools,
-            enforce_json=False
+async def _teardown_warm_sandbox(task_id: str = None, worker_id: str = None):
+    active_id = worker_id or task_id
+    if not active_id: return
+    def _do_teardown():
+        try:
+            import hashlib
+            project_hash = hashlib.md5(os.getcwd().encode()).hexdigest()[:8]
+            container_name = f"dumbledoer-sandbox-{project_hash}-{active_id}"
+            subprocess.run(["docker", "rm", "-f", container_name], capture_output=True)
+            shadow_dir = os.path.abspath(f".dumbledoer/shadow_{active_id}")
+            if os.path.exists(shadow_dir):
+                shutil.rmtree(shadow_dir)
+        except Exception:
+            pass
+    await asyncio.to_thread(_do_teardown)
+
+import atexit
+import glob
+
+def _cleanup_all_sandboxes():
+    try:
+        import hashlib
+        import os
+        project_hash = hashlib.md5(os.getcwd().encode()).hexdigest()[:8]
+        # stop all running dumbledoer-sandbox containers for this project
+        res = subprocess.run(["docker", "ps", "-q", "-f", f"name=dumbledoer-sandbox-{project_hash}-"], capture_output=True, text=True, timeout=10)
+        if res.stdout.strip():
+            for cid in res.stdout.strip().splitlines():
+                subprocess.run(["docker", "rm", "-f", cid], capture_output=True, timeout=10)
+        # remove all shadow dirs
+        for shadow_dir in glob.glob(".dumbledoer/shadow_*"):
+            shutil.rmtree(shadow_dir, ignore_errors=True)
+    except Exception:
+        pass
+
+atexit.register(_cleanup_all_sandboxes)
+
+async def _safe_async_execute(cmd_args: list, timeout: int = 120, max_bytes: int = 131072) -> str:
+    """
+    Executes a subprocess asynchronously, draining streams non-blockingly
+    to prevent OS pipe buffer deadlocks on massive output.
+    """
+    try:
+        # Launch process with asyncio pipes
+        process = await asyncio.create_subprocess_exec(
+            *cmd_args,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            limit=1024 * 1024  # 1MB internal buffer limit to prevent RAM exhaustion
+        )
+    except Exception as e:
+        return f"Error initiating subprocess: {str(e)}"
+
+    async def _drain_stream(stream, stream_name: str) -> tuple[str, bool]:
+        output = bytearray()
+        truncated = False
+        while True:
+            # Read in 4KB chunks
+            chunk = await stream.read(4096)
+            if not chunk:
+                break
+            
+            if len(output) + len(chunk) > max_bytes:
+                # Append only up to the max_bytes limit, then stop reading
+                output.extend(chunk[:(max_bytes - len(output))])
+                truncated = True
+                break
+                
+            output.extend(chunk)
+            
+        return output.decode('utf-8', errors='replace'), truncated
+
+    stdout_task = asyncio.create_task(_drain_stream(process.stdout, 'stdout'))
+    stderr_task = asyncio.create_task(_drain_stream(process.stderr, 'stderr'))
+
+    try:
+        # Await process exit with a hard timeout ceiling
+        await asyncio.wait_for(process.wait(), timeout=timeout)
+        
+        stdout_text, stdout_trunc = await stdout_task
+        stderr_text, stderr_trunc = await stderr_task
+        
+        # Format output cleanly
+        res = f"STDOUT:\n{stdout_text}"
+        if stdout_trunc:
+            res += f"\n... [SYSTEM OVERRIDE: {max_bytes} byte limit reached. Truncated.]"
+            
+        res += f"\nSTDERR:\n{stderr_text}"
+        if stderr_trunc:
+            res += f"\n... [SYSTEM OVERRIDE: {max_bytes} byte limit reached. Truncated.]"
+            
+        return res
+
+    except asyncio.TimeoutError:
+        # Chaos Engineering: Ruthless termination on timeout
+        try:
+            process.kill()
+        except ProcessLookupError:
+            pass # Process already exited
+        return f"CRITICAL: Command timed out after {timeout} seconds and was forcefully killed (SIGKILL)."
+        
+    finally:
+        # Cleanup dangling stream readers if killed early
+        if not stdout_task.done(): stdout_task.cancel()
+        if not stderr_task.done(): stderr_task.cancel()
+
+async def execute_bash(command: str, sandbox_mode: str = "dumbledoer-base", task_id: str = None, worker_id: str = None) -> str:
+    # NEW: Dynamically resolve the workspace path based on execution context
+    work_dir = os.getcwd() if sandbox_mode == "native" else "/workspace"
+    # Remove shlex.quote to prevent Contract Violation in Command Parsing
+    env_wrapper = f"export PYTHONPATH={work_dir}:$PYTHONPATH && {command}"
+    
+    # Process User Mapping
+    user_map = f"{os.getuid()}:{os.getgid()}"
+    
+    # --- APPLY FIX 3: Secure Native Sandbox Execution ---
+    if sandbox_mode == "native":
+        return await _safe_async_execute(["bash", "-c", env_wrapper], timeout=120)
+        
+    # --- NEW: Docker Compose Integration ---
+    elif sandbox_mode and sandbox_mode.startswith("compose:"):
+        service_name = sandbox_mode.split(":")[1]
+        return await _safe_async_execute(
+            ["docker", "compose", "exec", "-T", "--user", user_map, service_name, "/bin/bash", "-c", env_wrapper],
+            timeout=300
         )
 
-    async def send_message(self, session: Any, payload: str | List[Any]) -> Any:
-        return await session.send(payload)
+    # --- UPDATED: Fallback parsing for 'auto' and 'docker:<image>' ---
+    else:
+        image = "dumbledoer-base:latest"
+        if sandbox_mode and sandbox_mode.startswith("docker:"):
+            image = sandbox_mode.split(":")[1]
+        elif sandbox_mode == "auto" and os.path.exists("Dockerfile"):
+            image = "dumbledoer-custom-fallback"
+            await asyncio.to_thread(subprocess.run, ["docker", "build", "-t", image, "."], check=True, capture_output=True, text=True)
 
-    def parse_tool_calls(self, response: Any) -> List[Dict]:
-        calls = []
-        if getattr(response, 'tool_calls', None):
-            for call in response.tool_calls:
-                # [FIX]: Added exception protection for native client hallucinations
-                args_raw = call.arguments
-                try:
-                    args = args_raw if isinstance(args_raw, dict) else json.loads(args_raw)
-                    if not isinstance(args, dict):
-                        args = {}
-                except (json.JSONDecodeError, TypeError):
-                    args = {}
-                    
-                calls.append({
-                    "id": getattr(call, "id", None) or f"call_{uuid.uuid4().hex[:10]}",
-                    "name": call.name,
-                    "args": args
-                })
-        return calls
+        active_id = worker_id or task_id
+        if active_id and _is_sandbox_warm_sync(active_id):
+            import hashlib
+            project_hash = hashlib.md5(os.getcwd().encode()).hexdigest()[:8]
+            container_name = f"dumbledoer-sandbox-{project_hash}-{active_id}"
+            
+            return await _safe_async_execute(
+                ["docker", "exec", "--user", user_map, container_name, "/bin/bash", "-c", env_wrapper],
+                timeout=300
+            )
+        else:
+            # Mount as read-write (:rw) so discovery commands (pip install, touch) work.
+            # Extended timeout (300s) to support heavy installs.
+            import uuid
+            ephemeral_dir = os.path.abspath(f".dumbledoer/ephemeral_{uuid.uuid4().hex[:8]}")
+            ignore_patterns = shutil.ignore_patterns(
+                ".git", ".venv", "venv", "env", ".pytest_cache", "__pycache__", 
+                "node_modules", ".dumbledoer", ".codegraph", "*.tmp", "*.bak", "shadow_*"
+            )
+            shutil.copytree(os.getcwd(), ephemeral_dir, ignore=ignore_patterns, dirs_exist_ok=True)
+            
+            try:
+                return await _safe_async_execute(
+                    ["docker", "run", "--rm", 
+                     "--user", user_map,
+                     "--memory=1500m", "--memory-swap=1500m",
+                     "-v", f"{ephemeral_dir}:/workspace:rw", "-w", "/workspace", 
+                     image, "/bin/bash", "-c", env_wrapper],
+                    timeout=300
+                )
+            finally:
+                if os.path.exists(ephemeral_dir):
+                    shutil.rmtree(ephemeral_dir, ignore_errors=True)
 
-    def format_tool_response(self, tool_name: str, result: str, call_id: str = None) -> Any:
-        from agy.core.types import ToolResult
-        return ToolResult(name=tool_name, content=result, tool_call_id=call_id)
+async def run_rtk(command: str) -> str:
+    rtk_bin = shutil.which("rtk")
+    if not rtk_bin:
+        cargo_path = os.path.expanduser("~/.cargo/bin/rtk")
+        if os.path.exists(cargo_path):
+            rtk_bin = cargo_path
+        elif os.path.exists("./bin/rtk"):
+            rtk_bin = "./bin/rtk"
+        else:
+            raise RuntimeError("Error: RTK binary not found in standard paths.")
 
-    def format_tool_error(self, tool_name: str, error: str, call_id: str = None) -> Any:
-        from agy.core.types import ToolResult
-        return ToolResult(name=tool_name, content=f"Error: {error}", is_error=True, tool_call_id=call_id)
+    try:
+        args = [rtk_bin] + shlex.split(command)
+        result = await asyncio.to_thread(subprocess.run, args, capture_output=True, text=True, check=True)
+        return result.stdout
+    except subprocess.CalledProcessError as e:
+        raise RuntimeError(f"Error ({e.returncode}):\nSTDOUT: {e.stdout}\nSTDERR: {e.stderr}")
+    except Exception as e:
+        raise RuntimeError(f"Exception executing rtk command: {e}")
 
-    async def prune_history(self, session: Any, max_turns: int) -> tuple[Any, bool]:
-        if hasattr(session, 'truncate_context'):
-            session.truncate_context(keep_recent=max_turns)
-            return session, True
-        return session, False
+
+```
+
+### FILE: test_sdk.py
+```python
+import sys
+sys.path.append('.')
+import asyncio
+import os
+from google import genai
+from dumbledoer.core.sandbox import execute_bash
+
+async def test():
+    client = genai.Client()
+    chat = client.aio.chats.create(model='gemini-2.5-flash')
+    response = await chat.send_message(
+        'Please run echo hello using execute_bash', 
+        config={'tools': [execute_bash], 'automatic_function_calling': {'disable': False}}
+    )
+    print("Response text:", response.text)
+    if hasattr(response, "candidates") and response.candidates:
+        if response.candidates[0].content.parts:
+            print("Response parts:", [p for p in response.candidates[0].content.parts])
+
+if __name__ == "__main__":
+    asyncio.run(test())
+
+```
+
+### FILE: test_permissions.py
+```python
+import asyncio
+import os
+import stat
+from dumbledoer.core.sandbox import execute_bash
+
+async def test_permissions():
+    result = await execute_bash("touch /workspace/test_perm.txt")
+    print("Command Output:", result)
+    
+    file_path = "test_perm.txt"
+    if os.path.exists(file_path):
+        stat_info = os.stat(file_path)
+        print(f"File UID: {stat_info.st_uid}")
+        print(f"Host UID: {os.getuid()}")
+        if stat_info.st_uid == os.getuid():
+            print("SUCCESS: File is owned by the host user.")
+        else:
+            print("FAILURE: File is NOT owned by the host user.")
+    else:
+        print("FAILURE: File not found.")
+
+if __name__ == "__main__":
+    asyncio.run(test_permissions())
 
 ```
 
@@ -2600,84 +2592,6 @@ Success Criteria: {success_criteria}
         print(f"Archived {len(to_archive)} session(s) → .dumbledoer/archive/ ({len(lines) - len(final_lines)} lines trimmed from memory.md)")
 
 
-
-```
-
-### FILE: test_schema.py
-```python
-from dumbledoer.core.llm_provider import _convert_tool_to_openai_schema
-from dumbledoer.core.state import read_file
-import json
-
-schema = _convert_tool_to_openai_schema(read_file)
-print(json.dumps(schema, indent=2))
-
-```
-
-### FILE: dumbledoer/core/config.py
-```python
-import os
-from pydantic_settings import BaseSettings
-from typing import Dict, Any
-from dumbledoer.core.llm_provider import AbstractLLMProvider, GeminiProvider, LocalProvider, AntigravityProvider
-import socket
-
-def _is_local_alive(port=11434):
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.settimeout(0.2)
-        return s.connect_ex(('127.0.0.1', port)) == 0
-
-# [FIX]: Global cache to prevent leaking httpx connections on repeated property access
-_GLOBAL_PROVIDER_CACHE = None
-
-class AppConfig(BaseSettings):
-    # API Keys & Auth
-    gemini_api_key: str | None = None
-    google_api_key: str | None = None
-    
-    # Execution Settings
-    start_at_index: int = 1
-    verbose: bool = False
-    
-    # Vendor-Agnostic Model Tiers
-    model_fast: str = "gemini-3.6-flash"
-    model_heavy: str = "gemini-3.1-pro-preview"
-    
-    # Budget Defaults
-    budget_limit: int = 50000000
-    budget_threshold_pct: int = 80
-    
-    class Config:
-        env_file = (os.path.expanduser("~/.gemini/config/plugins/dumbledoer/.env"), ".env")
-        env_file_encoding = "utf-8"
-        extra = "ignore"
-
-    @property
-    def providers(self) -> Dict[str, AbstractLLMProvider]:
-        global _GLOBAL_PROVIDER_CACHE
-        if _GLOBAL_PROVIDER_CACHE is not None:
-            return _GLOBAL_PROVIDER_CACHE
-
-        provs = {}
-        try:
-            import agy
-            provs["cloud"] = AntigravityProvider()
-        except (ImportError, RuntimeError): # [FIX]: Catch RuntimeError if native agy modules are broken
-            key = self.gemini_api_key or self.google_api_key or os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
-            if key:
-                provs["cloud"] = GeminiProvider(api_key=key)
-                
-        if _is_local_alive():
-            provs["local"] = LocalProvider(base_url="http://localhost:11434/v1")
-            
-        if not provs:
-            raise RuntimeError("CRITICAL: No LLM providers could be initialized. Check API keys.")
-            
-        _GLOBAL_PROVIDER_CACHE = provs
-        return provs
-
-# Global Singleton instance
-config = AppConfig()
 
 ```
 
