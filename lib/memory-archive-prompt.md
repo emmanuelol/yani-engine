@@ -38,7 +38,7 @@ Session {sessionId} archived and ready for review.
 Tasks completed: {N} | Tasks remaining: {M}
 
 Would you like to archive memory.md to start fresh for the next session?
-  [archive]  Save a full snapshot of memory.md → .dumbledoer/archive/ and reset to a blank state.
+  [archive]  Save a full snapshot of memory.md → .yani/archive/ and reset to a blank state.
   [skip]     Keep memory.md as-is and close normally.
 ```
 
@@ -66,7 +66,7 @@ A failure before step 4's rename MUST leave `memory.md` untouched.
 
 Write the verbatim contents of `memory.md` to:
 ```
-.dumbledoer/tmp/memory-archive-{sessionId}.tmp
+.yani/tmp/memory-archive-{sessionId}.tmp
 ```
 
 ### Step 2 — Verify temporary archive
@@ -84,8 +84,8 @@ and stop — do not proceed to step 3.
 
 Atomic rename (or copy + delete on platforms without atomic rename):
 ```
-.dumbledoer/tmp/memory-archive-{sessionId}.tmp
-  → .dumbledoer/archive/memory-{sessionId}-{ISO8601}.md
+.yani/tmp/memory-archive-{sessionId}.tmp
+  → .yani/archive/memory-{sessionId}-{ISO8601}.md
 ```
 
 `{ISO8601}` is the current date-time in the format `YYYY-MM-DDTHH-MM-SS`
@@ -97,17 +97,17 @@ and stop.
 
 ### Step 4 — Reinitialize memory.md
 
-4a. Locate `dumbledoer/templates/memory-template.md`. If not found: output exactly
-`Error: memory template not found at dumbledoer/templates/memory-template.md. memory.md was not modified. Archive record saved at {path}.`
+4a. Locate `yani-engine/templates/memory-template.md`. If not found: output exactly
+`Error: memory template not found at yani-engine/templates/memory-template.md. memory.md was not modified. Archive record saved at {path}.`
 (substitute `{path}` with the archive record path from step 3) and stop.
 
-4b. Write the template contents to `.dumbledoer/tmp/memory.md.tmp`, substituting:
+4b. Write the template contents to `.yani/tmp/memory.md.tmp`, substituting:
 - `{{DATE}}` → today's date in `YYYY-MM-DD` format
 - `{{COMPRESSION_ENABLED}}` → the session's resolved compression state (`true` or `false`)
 - `{{PROJECT_GOAL}}` → leave as placeholder `{{PROJECT_GOAL}}`
 - `{{SCOPE_ITEMS}}` → leave as placeholder `{{SCOPE_ITEMS}}`
 
-4c. Atomic rename `.dumbledoer/tmp/memory.md.tmp` → `memory.md`.
+4c. Atomic rename `.yani/tmp/memory.md.tmp` → `memory.md`.
 
 On rename failure: output exactly
 `Error: archive saved but memory.md reset failed. Restore from archive at {path} if needed. Session closed.`
@@ -117,8 +117,8 @@ On rename failure: output exactly
 
 Output exactly:
 ```
-memory.md archived → .dumbledoer/archive/memory-{sessionId}-{ISO8601}.md
-memory.md reset to blank state. Next /dumbledoer:start will begin fresh.
+memory.md archived → .yani/archive/memory-{sessionId}-{ISO8601}.md
+memory.md reset to blank state. Next /yani-engine:start will begin fresh.
 Session closed.
 ```
 
@@ -130,7 +130,7 @@ Session closed.
 |---|---|
 | Step 2 verification fails | `Archive verification failed. memory.md was not modified. Session closed.` |
 | Step 3 rename fails | `Error: could not write archive record. memory.md was not modified. Session closed.` |
-| Step 4 template not found | `Error: memory template not found at dumbledoer/templates/memory-template.md. memory.md was not modified. Archive record saved at {path}.` |
+| Step 4 template not found | `Error: memory template not found at yani-engine/templates/memory-template.md. memory.md was not modified. Archive record saved at {path}.` |
 | Step 4 rename fails | `Error: archive saved but memory.md reset failed. Restore from archive at {path} if needed. Session closed.` |
 
 ---
@@ -138,12 +138,12 @@ Session closed.
 ## Post-Condition Assertions
 
 After a successful archive (step 5 reached):
-- `.dumbledoer/archive/memory-{sessionId}-{ISO8601}.md` EXISTS and is non-empty
+- `.yani/archive/memory-{sessionId}-{ISO8601}.md` EXISTS and is non-empty
 - `memory.md` EXISTS and contains `## Config` and `## Task Registry` sections
 - `memory.md` does NOT contain Session Log rows from the archived session
-- `.dumbledoer/tmp/memory-archive-{sessionId}.tmp` does NOT exist
+- `.yani/tmp/memory-archive-{sessionId}.tmp` does NOT exist
 
 After a skip:
 - `memory.md` is byte-identical to its state before the prompt was shown
-- No files created under `.dumbledoer/archive/` or `.dumbledoer/tmp/` by this operation
+- No files created under `.yani/archive/` or `.yani/tmp/` by this operation
 

@@ -1,9 +1,9 @@
 # Session Workflow
 
-DumbleDoer operates via a structured, heavily guarded workflow ensuring safe execution, clear state tracking, and token efficiency.
+yani-engine operates via a structured, heavily guarded workflow ensuring safe execution, clear state tracking, and token efficiency.
 
 ## 1. Initialization
-Navigate to the project you wish to improve and run `/dumbledoer start`. DumbleDoer maps its CodeGraph context and `memory.md` tracking directly to this active directory.
+Navigate to the project you wish to improve and run `/yani-engine start`. yani-engine maps its CodeGraph context and `memory.md` tracking directly to this active directory.
 
 ## 2. Planning (10-Step CodeGraph Impact Analysis)
 During the planning phase, changes undergo a rigorous 10-step CodeGraph Impact Analysis Data Flow:
@@ -19,9 +19,9 @@ During the planning phase, changes undergo a rigorous 10-step CodeGraph Impact A
 10. **State Registration**: Logs the blast radius data into the Task Registry field.
 
 ## 3. Execution (6-Step Checkpoint & Rollback Protocol)
-When running `/dumbledoer execute`, the central DumbleDoer logic executes tasks using its isolated `.venv`. Each file modification strictly adheres to the 6-Step Checkpoint & Rollback Protocol:
+When running `/yani-engine execute`, the central yani-engine logic executes tasks using its isolated `.venv`. Each file modification strictly adheres to the 6-Step Checkpoint & Rollback Protocol:
 1. **Pre-Write Snapshot**: `CheckpointManager` logs the current state of the file before any modification.
-2. **Rollback Backup Generation**: A `.bak` file is safely stored in `.dumbledoer/rollbacks/{task_id}/`.
+2. **Rollback Backup Generation**: A `.bak` file is safely stored in `.yani/rollbacks/{task_id}/`.
 3. **Registry Update**: A `planned` entry is created in the `Change Log` of `memory.md`.
 4. **Shadow File Creation**: The new code is written to a `.tmp` file for Diff-Gate review.
 5. **Diff-Gate Review**: VS Code (or Terminal) presents the diff against the rollback backup.
@@ -29,13 +29,13 @@ When running `/dumbledoer execute`, the central DumbleDoer logic executes tasks 
 
 ## 4. Communication & Optimization
 ### Caveman Integration (Dynamic Output Compression)
-To maximize token savings during execution, DumbleDoer leverages the **Caveman** skill. This enforces an ultra-compressed communication mode, aggressively filtering out pleasantries and redundant markdown formatting from the LLM’s output. It operates at multiple intensity levels to cut token usage by up to 75% while retaining full technical accuracy during heavy multi-turn loops.
+To maximize token savings during execution, yani-engine leverages the **Caveman** skill. This enforces an ultra-compressed communication mode, aggressively filtering out pleasantries and redundant markdown formatting from the LLM’s output. It operates at multiple intensity levels to cut token usage by up to 75% while retaining full technical accuracy during heavy multi-turn loops.
 
 ### Knowledge Registry Vault Operations
-At the completion of complex tasks, DumbleDoer logs durable learnings to the Knowledge Vault (`knowledge/`):
+At the completion of complex tasks, yani-engine logs durable learnings to the Knowledge Vault (`knowledge/`):
 - Records critical insights, architectural constraints, and failure modes.
 - Saves findings in structured markdown entries (`knowledge/entries/`).
 - Synchronizes with `knowledge/index.md` via `sync_knowledge.py` (OP-9 protocol) for automatic re-ingestion in future sessions, enabling bridging of decisions across multiple project instances.
 
 ## 5. Completion
-DumbleDoer generates the `/report` locally and synchronizes `memory.md`. Your project is updated, while DumbleDoer safely returns to idle in its centralized location.
+yani-engine generates the `/report` locally and synchronizes `memory.md`. Your project is updated, while yani-engine safely returns to idle in its centralized location.

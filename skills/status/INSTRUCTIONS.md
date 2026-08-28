@@ -1,20 +1,20 @@
 ---
 name: status
-description: Show the dumbledoer Task Registry, session summary, budget usage, and CodeGraph health for the current improvement session.
+description: Show the yani-engine Task Registry, session summary, budget usage, and CodeGraph health for the current improvement session.
 ---
 
-Base directory for this skill: (project root where dumbledoer is installed)
+Base directory for this skill: (project root where yani-engine is installed)
 
-# /dumbledoer:status — Show Task Registry and Session Summary
+# /yani-engine:status — Show Task Registry and Session Summary
 
-**References** (read before Section 1): `dumbledoer/lib/common-preamble.md`
+**References** (read before Section 1): `yani-engine/lib/common-preamble.md`
 
-**Lazy references**: `dumbledoer/lib/memory-schema.md` (load only if the repair flow triggers), `dumbledoer/lib/archive-protocol.md` (load only for `--verbose` with archived tasks)
+**Lazy references**: `yani-engine/lib/memory-schema.md` (load only if the repair flow triggers), `yani-engine/lib/archive-protocol.md` (load only for `--verbose` with archived tasks)
 
 ## Parameters
 
 ```
-/dumbledoer:status
+/yani-engine:status
   --verbose    Optional. Show full Task Details for each task.
 ```
 
@@ -22,7 +22,7 @@ Base directory for this skill: (project root where dumbledoer is installed)
 
 ## Section 1 — Validate memory.md
 
-1. Check for `memory.md`. If missing: `Error: memory.md not found. Run /dumbledoer:start to begin.` and stop.
+1. Check for `memory.md`. If missing: `Error: memory.md not found. Run /yani-engine:start to begin.` and stop.
 2. Run the validation checklist from `lib/common-preamble.md`. If malformed: load `lib/memory-schema.md` and trigger the FR-016 repair flow.
 
 ---
@@ -65,7 +65,7 @@ verbatim at every level.
 ### Output Format
 
 ```
-dumbledoer — Session {last sessionId} | Budget: {pct}% used ({tokens_estimated}/{budget_limit} est. tokens)
+yani-engine — Session {last sessionId} | Budget: {pct}% used ({tokens_estimated}/{budget_limit} est. tokens)
 
 Project Goal: {first sentence of Project Goal from memory.md}
 
@@ -78,7 +78,7 @@ Knowledge: {N} entries ({d} decisions, {s} successes, {f} failures, {c} constrai
 ```
 
 If the registry is absent, the Knowledge line reads:
-`Knowledge: no registry — /dumbledoer:start creates it`
+`Knowledge: no registry — /yani-engine:start creates it`
 
 If `--verbose`: after the Task Registry table, append the full Task Details block for each task (copy from memory.md Task Details subsections). For archived tasks (Checkpoint column = `archived`), print a one-line summary with a pointer to the archive file from the Archive Index instead — never inline archived details (`lib/archive-protocol.md`).
 
@@ -88,7 +88,7 @@ If `--verbose`: after the Task Registry table, append the full Task Details bloc
 
 | Condition | Output |
 |-----------|--------|
-| `memory.md` missing | `Error: memory.md not found. Run /dumbledoer:start to begin.` |
+| `memory.md` missing | `Error: memory.md not found. Run /yani-engine:start to begin.` |
 | `memory.md` malformed | FR-016 repair flow |
 | CodeGraph not initialized | `CodeGraph: ⚠ not initialized — run codegraph init -i` |
 

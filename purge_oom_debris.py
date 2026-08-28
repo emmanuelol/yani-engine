@@ -10,7 +10,7 @@ def purge_system():
     print("🐳 Scanning for dangling Docker containers...")
     try:
         res = subprocess.run(
-            ["docker", "ps", "-a", "-q", "-f", "name=dumbledoer-sandbox-"], 
+            ["docker", "ps", "-a", "-q", "-f", "name=yani_engine-sandbox-"], 
             capture_output=True, text=True
         )
         container_ids = res.stdout.strip().splitlines()
@@ -27,7 +27,7 @@ def purge_system():
 
     # 2. Eradicate Shadow Clones
     print("📁 Scanning for bloated shadow directories...")
-    shadow_dirs = glob.glob(".dumbledoer/shadow_*")
+    shadow_dirs = glob.glob(".yani_engine/shadow_*")
     if shadow_dirs:
         print(f"   Found {len(shadow_dirs)} shadow clones. Deleting...")
         for shadow_dir in shadow_dirs:
@@ -41,7 +41,7 @@ def purge_system():
 
     # 3. Sweep Stale Tmp Files
     print("📄 Sweeping stale .tmp files...")
-    tmp_files = glob.glob(".dumbledoer/tmp/*.tmp")
+    tmp_files = glob.glob(".yani_engine/tmp/*.tmp")
     if tmp_files:
         for tmp in tmp_files:
             try:

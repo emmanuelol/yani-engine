@@ -3,8 +3,8 @@ import os
 import pytest
 import shutil
 from unittest.mock import patch
-from dumbledoer.core.state import write_file_with_review
-from dumbledoer.core.state import ASTMemoryMapper
+from yani_engine.core.state import write_file_with_review
+from yani_engine.core.state import ASTMemoryMapper
 
 @pytest.mark.asyncio
 async def test_update_memory_registry_concurrency(tmp_path):
@@ -16,9 +16,9 @@ async def test_update_memory_registry_concurrency(tmp_path):
             f.write("- sandbox_mode: true\n\n## TARGET_BLOCK\n")
             
         async def worker(i):
-            import dumbledoer.core.state
-            async with dumbledoer.core.state._MEMORY_MUTEX:
-                async with dumbledoer.core.state.get_registry_lock():
+            import yani_engine.core.state
+            async with yani_engine.core.state._MEMORY_MUTEX:
+                async with yani_engine.core.state.get_registry_lock():
                     with open("memory.md", "a") as f:
                         f.write(f"\n{i}")
             return "Successfully updated"
@@ -37,8 +37,8 @@ async def test_update_memory_registry_concurrency(tmp_path):
         os.chdir(original_cwd)
 
 @pytest.mark.asyncio
-@patch('dumbledoer.core.state.subprocess.run')
-@patch('dumbledoer.core.state.CheckpointManager')
+@patch('yani_engine.core.state.subprocess.run')
+@patch('yani_engine.core.state.CheckpointManager')
 @patch('rich.prompt.Confirm.ask', return_value=False)
 async def test_temp_file_collision(mock_confirm, mock_checkpoint, mock_subprocess, tmp_path):
     """Test that concurrent write_file_with_review calls for same basename don't collide."""
@@ -60,8 +60,8 @@ async def test_temp_file_collision(mock_confirm, mock_checkpoint, mock_subproces
         # Run simultaneously
         await asyncio.gather(run_write("api/utils.py"), run_write("db/utils.py"))
         
-        # Verify two tmp files exist in .dumbledoer/tmp
-        tmp_dir = ".dumbledoer/tmp"
+        # Verify two tmp files exist in .yani_engine/tmp
+        tmp_dir = ".yani_engine/tmp"
         assert os.path.exists(tmp_dir)
         tmp_files = os.listdir(tmp_dir)
         assert len(tmp_files) == 2

@@ -17,7 +17,7 @@ MUST read this file before reading or writing `memory.md`.
 8. `## Session Log` — Markdown table
 9. `## Checkpoint Registry` — Markdown table
 10. `## Open Questions` — bullet list or empty
-11. `## Edge Case Coverage` — Markdown table (created by `/dumbledoer:start` edge case Q&A; optional on first session start, required after any edge case Q&A completes)
+11. `## Edge Case Coverage` — Markdown table (created by `/yani-engine:start` edge case Q&A; optional on first session start, required after any edge case Q&A completes)
 12. `## Archive Index` — Markdown table (optional until the first archive run completes; required after — see `lib/archive-protocol.md`)
 
 ---
@@ -32,12 +32,12 @@ MUST read this file before reading or writing `memory.md`.
 | `budget_threshold_pct` | integer (1–99) | Trigger graceful shutdown at this % of budget_limit | 80 |
 | `session_count` | integer | Total sessions run; increment on each session start | 0 |
 | `created` | YYYY-MM-DD | Date memory.md was first created | (set at init) |
-| `docs_path` | string | Relative path to the documentation directory supplied via `--docs` at start; reused by `/dumbledoer:update-docs` when `--docs` is not passed explicitly | (set by `/dumbledoer:start`) |
-| `last_docs_update` | ISO 8601 \| null | Timestamp of the most recent successful `/dumbledoer:update-docs` run; null until the first run completes; used by delta analysis to scope git log queries | null |
-| `last_docs_update_session` | Session ID \| null | Session ID of the session that last ran `/dumbledoer:update-docs` successfully; null until first run | null |
+| `docs_path` | string | Relative path to the documentation directory supplied via `--docs` at start; reused by `/yani-engine:update-docs` when `--docs` is not passed explicitly | (set by `/yani-engine:start`) |
+| `last_docs_update` | ISO 8601 \| null | Timestamp of the most recent successful `/yani-engine:update-docs` run; null until the first run completes; used by delta analysis to scope git log queries | null |
+| `last_docs_update_session` | Session ID \| null | Session ID of the session that last ran `/yani-engine:update-docs` successfully; null until first run | null |
 | `archive_keep_sessions` | integer ≥ 1 (optional) | How many most-recent terminal sessions stay in memory.md in full detail; older terminal sessions are archived (`lib/archive-protocol.md`) | 1 |
-| `knowledge_path` | string | Relative path to the cross-session knowledge registry directory; created by `/dumbledoer:start` on first run; all registry operations resolve against it (`lib/knowledge-protocol.md`) | `knowledge/` |
-| `last_knowledge_docs_sync` | ISO 8601 \| `never` | Timestamp of the last successful registry-informed `/dumbledoer:update-docs` run; `never` until the first run completes; OP-9 docs-sync reads only entries newer than this value and updates it on success only | `never` |
+| `knowledge_path` | string | Relative path to the cross-session knowledge registry directory; created by `/yani-engine:start` on first run; all registry operations resolve against it (`lib/knowledge-protocol.md`) | `knowledge/` |
+| `last_knowledge_docs_sync` | ISO 8601 \| `never` | Timestamp of the last successful registry-informed `/yani-engine:update-docs` run; `never` until the first run completes; OP-9 docs-sync reads only entries newer than this value and updates it on success only | `never` |
 
 ### Task Registry Columns
 
@@ -259,7 +259,7 @@ Format: `{taskId}-step{N}-{sessionId}` (e.g., `T-001-step2-S-20260521-093045`)
 |--------|-------------|
 | Session ID | `S-…` of the archived session |
 | Archived At | ISO 8601 timestamp of the archive run |
-| Archive File | Relative path, `.dumbledoer/archive/{sessionId}.md` |
+| Archive File | Relative path, `.yani/archive/{sessionId}.md` |
 | Tasks Archived | Comma-separated `T-NNN` whose Task Details moved to the record; `—` if none |
 | Outcome | The session's original outcome enum value |
 

@@ -1,0 +1,5 @@
+{
+  "name": "yani-skill",
+  "description": "Ejecutor determinista y estricto para yani-engine.",
+  "execute": "skills/yani-skill/SKILL.md"
+}

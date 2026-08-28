@@ -1,24 +1,24 @@
 ---
 name: resume
-description: Resume an interrupted dumbledoer session from the last checkpoint. Use when a previous session was stopped by budget exhaustion, user interruption, or Gemini Code restart.
+description: Resume an interrupted yani-engine session from the last checkpoint. Use when a previous session was stopped by budget exhaustion, user interruption, or Gemini Code restart.
 ---
 
-Base directory for this skill: (project root where dumbledoer is installed)
+Base directory for this skill: (project root where yani-engine is installed)
 
-# /dumbledoer:resume — Resume an Interrupted Session
+# /yani-engine:resume — Resume an Interrupted Session
 
-**References** (read before Section 1): `dumbledoer/lib/common-preamble.md`, `dumbledoer/lib/memory-schema.md`, `dumbledoer/lib/checkpoint-protocol.md`, `dumbledoer/lib/budget-detection.md`, `dumbledoer/lib/compression-policy.md`
+**References** (read before Section 1): `yani-engine/lib/common-preamble.md`, `yani-engine/lib/memory-schema.md`, `yani-engine/lib/checkpoint-protocol.md`, `yani-engine/lib/budget-detection.md`, `yani-engine/lib/compression-policy.md`
 
 **Lazy references**:
-- `dumbledoer/lib/knowledge-protocol.md` (load at Section 2c — knowledge registry)
-- `dumbledoer/lib/archive-protocol.md` (load at Section 8 — session close)
+- `yani-engine/lib/knowledge-protocol.md` (load at Section 2c — knowledge registry)
+- `yani-engine/lib/archive-protocol.md` (load at Section 8 — session close)
 
 (Task execution in Section 7 delegates to `skills/start/SKILL.md` Section 8, which loads its own references.)
 
 ## Parameters
 
 ```
-/dumbledoer:resume
+/yani-engine:resume
   --budget-threshold <pct>   Optional. Override default shutdown threshold for this session.
 ```
 
@@ -27,7 +27,7 @@ Base directory for this skill: (project root where dumbledoer is installed)
 ## Section 1 — Verify memory.md Exists
 
 1. Check for `memory.md` at project root.
-2. If absent: output exactly `Error: memory.md not found. Run /dumbledoer:start to begin a new session.` and stop.
+2. If absent: output exactly `Error: memory.md not found. Run /yani-engine:start to begin a new session.` and stop.
 
 ---
 
@@ -54,7 +54,7 @@ Base directory for this skill: (project root where dumbledoer is installed)
 Run the Orphan Recovery Scan from `lib/checkpoint-protocol.md` BEFORE stale-lock
 handling:
 
-1. Scan `.dumbledoer/tmp/`, `.dumbledoer/checkpoints/`, `.dumbledoer/rollbacks/`,
+1. Scan `.yani/tmp/`, `.yani/checkpoints/`, `.yani/rollbacks/`,
    and the Change Log for orphan classes O1–O5.
 2. Auto-resolve O2, O3, O4, and O5 per the protocol table. Prompt the user only for O1
    (complete `.tmp` with a registered checkpoint — apply or discard).
@@ -67,14 +67,14 @@ handling:
 
 ## Section 2c — Load Knowledge Registry
 
-**Load `dumbledoer/lib/knowledge-protocol.md` now** (lazy reference).
+**Load `yani-engine/lib/knowledge-protocol.md` now** (lazy reference).
 
 1. Resolve `{knowledge_path}` from memory.md Config (default `knowledge/`).
 2. If the registry exists: run OP-2 selective-load and output the load-summary line.
    Apply the protocol's tolerance rules (malformed entries skipped with a warning,
    never fatal).
 3. If the registry is absent: print a one-line note that it is missing and that
-   `/dumbledoer:start` creates it; continue without knowledge context (resume
+   `/yani-engine:start` creates it; continue without knowledge context (resume
    never initializes the registry — protocol invariant 3).
 4. Carry the loaded knowledge into Sections 5–7.
 
@@ -128,8 +128,8 @@ Apply each selection:
 5. Continue execution from stepIndex + 1.
 
 ### (b) Rollback
-1. Read files from `.dumbledoer/rollbacks/{taskId}/`.
-2. For each file: write current to `.dumbledoer/tmp/` (safety), then rename rollback → target.
+1. Read files from `.yani/rollbacks/{taskId}/`.
+2. For each file: write current to `.yani/tmp/` (safety), then rename rollback → target.
 3. Update Change Log: append rolled-back entries.
 4. Set task status to `pending`, clear Owner and Checkpoint in memory.md.
 5. Run `codegraph sync` to refresh index.
@@ -162,15 +162,15 @@ Wait for user confirmation. Proceed only with confirmed tasks.
 1. Generate a new session ID (format and collision rules: `lib/common-preamble.md`).
 2. Append Session Log entry: start time, tasks claimed, outcome=`active`.
 3. Increment `session_count` in Config.
-4. For each confirmed task: execute following Section 8 of `dumbledoer/skills/start/SKILL.md`
+4. For each confirmed task: execute following Section 8 of `yani-engine/skills/start/SKILL.md`
    (same execution loop — sub-agent spawning, checkpoint protocol, CodeGraph rules).
 5. Apply budget detection throughout using `lib/budget-detection.md`.
-6. On budget threshold: apply Section 9 of `dumbledoer/skills/start/SKILL.md` (graceful shutdown).
+6. On budget threshold: apply Section 9 of `yani-engine/skills/start/SKILL.md` (graceful shutdown).
 
 ---
 
 ## Section 8 — Normal Session Close
 
-Same as Section 10 of `dumbledoer/skills/start/SKILL.md` — including the archive
-check (load `dumbledoer/lib/archive-protocol.md` lazily and run the trigger).
+Same as Section 10 of `yani-engine/skills/start/SKILL.md` — including the archive
+check (load `yani-engine/lib/archive-protocol.md` lazily and run the trigger).
 

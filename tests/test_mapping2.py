@@ -1,11 +1,11 @@
 import os
 from unittest.mock import patch, MagicMock
 
-from dumbledoer.core.orchestrator import LLMOrchestrator as DumbleDoerCLI
+from yani_engine.core.orchestrator import LLMOrchestrator as YaniEngineCLI
 
 @patch.dict(os.environ, {"GEMINI_API_KEY": "dummy_key"})
 def test_mcp_wrapper_sanitizes_dashes():
-    cli = DumbleDoerCLI()
+    cli = yani_engineCLI()
     cli.mcp_sessions = {"codegraph": MagicMock()}
     
     dummy_tool = MagicMock()

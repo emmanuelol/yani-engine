@@ -2,9 +2,9 @@ import pytest
 import json
 import os
 from unittest.mock import patch, AsyncMock, MagicMock
-from dumbledoer.core.orchestrator import LLMOrchestrator
-from dumbledoer.core.config import config
-from dumbledoer.core.state import register_task_batch
+from yani_engine.core.orchestrator import LLMOrchestrator
+from yani_engine.core.config import config
+from yani_engine.core.state import register_task_batch
 
 @pytest.mark.asyncio
 async def test_iterate_tool_whitelist():
@@ -31,7 +31,7 @@ async def test_iterate_manifest_options():
     assert "enrich" in option_names, "Enrich parameter is missing from the manifest."
 
 @pytest.mark.asyncio
-@patch("dumbledoer.core.orchestrator.LLMOrchestrator._get_sliced_memory", new_callable=AsyncMock)
+@patch("yani_engine.core.orchestrator.LLMOrchestrator._get_sliced_memory", new_callable=AsyncMock)
 async def test_iterate_memory_slicing_token_clamp(mock_sliced_memory):
     """Verify that iterate does NOT request the token-heavy 'Task Details' section."""
     orch = LLMOrchestrator()
@@ -53,7 +53,7 @@ async def test_iterate_memory_slicing_token_clamp(mock_sliced_memory):
     assert "Task Registry" in requested_sections, "Task Registry must be included for context."
 
 @pytest.mark.asyncio
-@patch("dumbledoer.core.state.ASTMemoryMapper")
+@patch("yani_engine.core.state.ASTMemoryMapper")
 @patch("builtins.open", new_callable=MagicMock)
 async def test_register_task_batch_soft_warnings(mock_open, mock_mapper):
     """Verify that poorly formatted tasks trigger soft warnings and auto-patching rather than hard failures."""

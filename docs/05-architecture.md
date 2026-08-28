@@ -1,6 +1,6 @@
 # Architecture and Diagrams
 
-This document visually outlines the core structural components and protocols of the DumbleDoer architecture.
+This document visually outlines the core structural components and protocols of the yani-engine architecture.
 
 ## 1. Core Decoupled Architecture
 
@@ -23,7 +23,7 @@ graph TD
 
 ## 2. Dynamic Vendor Tiering
 
-DumbleDoer natively supports routing tasks to different LLM providers based on estimated effort. 
+yani-engine natively supports routing tasks to different LLM providers based on estimated effort. 
 
 ```mermaid
 flowchart TD
@@ -45,7 +45,7 @@ stateDiagram-v2
     
     Initialization --> Discovery
     note right of Initialization
-        Loads /dumbledoer start
+        Loads /yani-engine start
         Initializes CodeGraph & Context7
     end note
     

@@ -1,6 +1,6 @@
 import asyncio
-from dumbledoer.core.orchestrator import LLMOrchestrator
-from dumbledoer.core.locks import _MEMORY_MUTEX
+from yani_engine.core.orchestrator import LLMOrchestrator
+from yani_engine.core.locks import _MEMORY_MUTEX
 import os
 
 async def run_stress_test():

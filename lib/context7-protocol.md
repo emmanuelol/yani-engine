@@ -1,11 +1,11 @@
 # context7-protocol: Current Documentation Lookup for External Dependencies
 
-Single authoritative statement of when and how dumbledoer consults current library
+Single authoritative statement of when and how yani-engine consults current library
 documentation. Applied via the reference in `lib/common-preamble.md`. Command
 files MUST NOT restate these rules.
 
 The lookup uses the **Context7** MCP server, bundled with the plugin via
-`dumbledoer/.mcp.json` (`npx -y @upstash/context7-mcp`). The protocol references the
+`yani-engine/.mcp.json` (`npx -y @upstash/context7-mcp`). The protocol references the
 tools by capability — a "resolve library id" tool and a "query docs" tool — so a
 globally-configured Context7 instance (whatever its tool prefix) satisfies it
 equally.

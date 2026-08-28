@@ -1,8 +1,8 @@
 import pytest
-from dumbledoer.core.state import ASTMemoryMapper
+from yani_engine.core.state import ASTMemoryMapper
 
 def test_locate_heading_block_irregular_whitespace():
-    mock_memory = """# DumbleDoer Memory
+    mock_memory = """# yani-engine Memory
 
 ##   TASK rEgistry   
 

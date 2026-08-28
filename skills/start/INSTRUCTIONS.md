@@ -1,17 +1,17 @@
 ---
 name: start
-description: Start a new agent improvement session with discovery Q&A, CodeGraph analysis, and task execution. Use when beginning a new dumbledoer improvement project.
+description: Start a new agent improvement session with discovery Q&A, CodeGraph analysis, and task execution. Use when beginning a new yani-engine improvement project.
 ---
 
-Base directory for this skill: (project root where dumbledoer is installed)
+Base directory for this skill: (project root where yani-engine is installed)
 
 ## Mission
 You are the Principal Systems Architect. Your job is strictly planning and initialization.
-**CRITICAL LATCH DIRECTIVE:** You are strictly forbidden from generating large blocks of functional code in your response. Your sole responsibility during `/dumbledoer:start` is to map out the architecture, update `memory.md`, and securely register the task plan.
+**CRITICAL LATCH DIRECTIVE:** You are strictly forbidden from generating large blocks of functional code in your response. Your sole responsibility during `/yani-engine:start` is to map out the architecture, update `memory.md`, and securely register the task plan.
 
-# /dumbledoer:start — Start an Agent Improvement Session
+# /yani-engine:start — Start an Agent Improvement Session
 
-**References**: `dumbledoer/lib/common-preamble.md`, `dumbledoer/lib/memory-schema.md`, `dumbledoer/lib/codegraph-integration.md`, `dumbledoer/lib/budget-detection.md`, `dumbledoer/lib/compression-policy.md`
+**References**: `yani-engine/lib/common-preamble.md`, `yani-engine/lib/memory-schema.md`, `yani-engine/lib/codegraph-integration.md`, `yani-engine/lib/budget-detection.md`, `yani-engine/lib/compression-policy.md`
 
 ## Section 1 — Project Discovery
 1. The `memory.md` file has already been natively bootstrapped for you by the Orchestrator. 
@@ -44,5 +44,5 @@ Prioritize using targeted tools (`read_code_block`, `codegraph_search`) over bro
 ## Section 4 — The Latch & Termination
 1. Print the full registered plan in a markdown table.
 2. End your response with exactly this strict, unalterable text constraint:
-   > *"The task plan has been proposed and safely registered as `pending`. Please review the tasks above. If you approve this architecture, run `/dumbledoer:execute` to authorize the work. If you require changes, run `/dumbledoer:iterate` with your adjustments."*
+   > *"The task plan has been proposed and safely registered as `pending`. Please review the tasks above. If you approve this architecture, run `/yani-engine:execute` to authorize the work. If you require changes, run `/yani-engine:iterate` with your adjustments."*
 3. HALT EXECUTION. Do NOT execute the tasks.

@@ -1,22 +1,22 @@
 ---
 name: rollback
-description: Roll back dumbledoer task changes to restore files to their pre-task state. Supports per-task, full, or session-boundary rollback.
+description: Roll back yani-engine task changes to restore files to their pre-task state. Supports per-task, full, or session-boundary rollback.
 ---
 
-Base directory for this skill: (project root where dumbledoer is installed)
+Base directory for this skill: (project root where yani-engine is installed)
 
-# /dumbledoer:rollback — Roll Back Changes
+# /yani-engine:rollback — Roll Back Changes
 
-**References** (read before Section 1): `dumbledoer/lib/common-preamble.md`, `dumbledoer/lib/checkpoint-protocol.md`
+**References** (read before Section 1): `yani-engine/lib/common-preamble.md`, `yani-engine/lib/checkpoint-protocol.md`
 
-**Lazy references**: `dumbledoer/lib/memory-schema.md` (load only if the repair flow triggers), `dumbledoer/lib/archive-protocol.md` (load at archived-task retrieval), `dumbledoer/lib/knowledge-protocol.md` (load at Section 3a step 7 — knowledge capture)
+**Lazy references**: `yani-engine/lib/memory-schema.md` (load only if the repair flow triggers), `yani-engine/lib/archive-protocol.md` (load at archived-task retrieval), `yani-engine/lib/knowledge-protocol.md` (load at Section 3a step 7 — knowledge capture)
 
 ## Usage
 
 ```
-/dumbledoer:rollback T-NNN              # Roll back a specific completed task
-/dumbledoer:rollback --all              # Roll back all completed tasks (reverse order)
-/dumbledoer:rollback --to S-YYYYMMDD-HHmmss  # Roll back to session boundary
+/yani-engine:rollback T-NNN              # Roll back a specific completed task
+/yani-engine:rollback --all              # Roll back all completed tasks (reverse order)
+/yani-engine:rollback --to S-YYYYMMDD-HHmmss  # Roll back to session boundary
 ```
 
 ---
@@ -33,14 +33,14 @@ Base directory for this skill: (project root where dumbledoer is installed)
    Index `Tasks Archived` cell. Then continue below. If the archive file is missing:
    output the missing-archive error from `lib/archive-protocol.md` and stop.
 5. Verify preconditions:
-   - **T-NNN form**: task exists in Task Registry AND status=`completed`. Rollback dir `.dumbledoer/rollbacks/T-NNN/` exists.
+   - **T-NNN form**: task exists in Task Registry AND status=`completed`. Rollback dir `.yani/rollbacks/T-NNN/` exists.
    - **--all form**: at least one `completed` task exists.
    - **--to S-XXX form**: S-XXX exists in Session Log.
 
 Errors:
 - Task not found: `Error: task T-NNN not found in Task Registry.`
-- Task not completed: `Error: T-NNN has status '{status}' — only completed tasks can be rolled back. Use /dumbledoer:status to inspect.`
-- Rollback files missing: `Error: rollback files for T-NNN not found in .dumbledoer/rollbacks/. Manual recovery required — see memory.md Change Log for the original content.`
+- Task not completed: `Error: T-NNN has status '{status}' — only completed tasks can be rolled back. Use /yani-engine:status to inspect.`
+- Rollback files missing: `Error: rollback files for T-NNN not found in .yani/rollbacks/. Manual recovery required — see memory.md Change Log for the original content.`
 - Session not found: `Error: session S-XXX not found in Session Log.`
 
 ---
@@ -69,10 +69,10 @@ If user says no or cancel: exit with no changes.
 
 ## Section 3a — Per-Task Rollback (T-NNN form)
 
-1. Read all files in `.dumbledoer/rollbacks/{taskId}/`.
+1. Read all files in `.yani/rollbacks/{taskId}/`.
 2. Decode filename: replace `__` → `/` and `__colon__` → `:` to get original path.
 3. For each file in reverse modification order (newest first):
-   a. Write current file to `.dumbledoer/tmp/{filename}.tmp` as safety copy.
+   a. Write current file to `.yani/tmp/{filename}.tmp` as safety copy.
    b. Copy rollback file to target path via atomic rename.
    c. Append to Change Log: `| {now} | {taskId} | {path} | Rolled back to pre-task state | rolled-back | User-requested rollback |`
 4. Update memory.md task entry:

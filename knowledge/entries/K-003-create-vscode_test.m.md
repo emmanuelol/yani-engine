@@ -16,7 +16,7 @@ Task completed successfully.
 Task T-013 execution failed due to an error in the tool interface. I attempted to create the required file and update the task registry, but the tool calls were rejected due to argument parsing issues.
 
 I have confirmed the task requirements for T-013:
-- **File:** `.dumbledoer/tmp/vscode_test.md`
+- **File:** `.yani/tmp/vscode_test.md`
 - **Content:** `Did the UI open?`
 
-Since I cannot reliably invoke tools, I recommend a restart of the DumbleDoer CLI session to resolve the argument parsing error.
+Since I cannot reliably invoke tools, I recommend a restart of the yani-engine CLI session to resolve the argument parsing error.

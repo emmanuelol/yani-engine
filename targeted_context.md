@@ -2,19 +2,23 @@
 CURRENT GIT BRANCH: `main`
 TARGET FILE: `dumbledoer/core/locks.py`
 
-ROLE: Act as my Principal Software Engineer, Site Reliability Architect (SRE), and Chaos Engineer.
-OBJECTIVE: Conduct a deep code audit and scientific debugging of the provided module.
+ROLE: Act as my Principal QA Engineer and Architecture Auditor.
+OBJECTIVE: Conduct a strict post-implementation review of the newly updated code. Verify that objectives were met and no regressions were introduced.
 RULES:
-1. Boundary Analysis: Cross-reference the code with callers/callees. Do not break contracts.
-2. Chaos Engineering: Assume network fails or DB drops. Ensure idempotency.
-3. Zero Quick Patches: Track down the root cause and explain the logical flaw.
-4. Branch Context: Ensure any proposed fixes or architectural plans align with the purpose of the current Git branch.
+1. Regression Profiling: Analyze callers/callees below. Did the changes break the interface for any caller?
+2. DoD Verification: Strictly evaluate the new code against the Definition of Done provided below.
+3. Anti-Fragility Check: Ensure no silent failures, memory leaks, or latent bugs were introduced.
+4. Branch Context: Keep in mind the current branch context when evaluating the scope of the feature/fix.
 
 EXPECTED OUTPUT:
-(A) Architecture Diagnosis
-(B) Risks and Errors (Bugs/Blockers)
-(C) Execution Action Plan (Task, Target File, Location, Action, DoD, Validation Method).
+(A) Goal Achievement Status [PASS / FAIL / PARTIAL]
+(B) Regression Analysis
+(C) Residual Risks & Code Smells
+(D) Final Verdict (Merge or Hotfix)
 ###########################
+
+### ⚠️ USER ACTION REQUIRED: PASTE THE DEFINITION OF DONE (DoD) BELOW THIS LINE ⚠️ ###
+> DoD: [Pega aquí el DoD o el objetivo que queríamos lograr]
 
 # Arquitectura Objetivo
 
@@ -37,9 +41,43 @@ import threading
 import asyncio
 from filelock import FileLock
 
-_REGISTRY_LOCK = asyncio.Lock()
-_MEMORY_MUTEX = asyncio.Lock()
-_KNOWLEDGE_MUTEX = asyncio.Lock()
+
+class MultiLoopAsyncLock:
+    """
+    Idempotent asyncio.Lock proxy. Preserves object identity for callers 
+    while multiplexing loop-safe locks to prevent 'Event loop is closed' errors.
+    """
+    def __init__(self):
+        self._locks = {}
+        self._dict_lock = threading.Lock()
+
+    def _get_lock(self) -> asyncio.Lock:
+        loop = asyncio.get_running_loop()
+        loop_id = id(loop)
+        with self._dict_lock:
+            if loop_id not in self._locks:
+                self._locks[loop_id] = asyncio.Lock()
+            return self._locks[loop_id]
+
+    async def acquire(self):
+        return await self._get_lock().acquire()
+
+    def release(self):
+        self._get_lock().release()
+
+    def locked(self):
+        return self._get_lock().locked()
+
+    async def __aenter__(self):
+        return await self._get_lock().__aenter__()
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        return await self._get_lock().__aexit__(exc_type, exc_val, exc_tb)
+
+
+_REGISTRY_LOCK = MultiLoopAsyncLock()
+_MEMORY_MUTEX = MultiLoopAsyncLock()
+_KNOWLEDGE_MUTEX = MultiLoopAsyncLock()
 
 # Cross-process file lock for memory.md synchronization
 # Extended timeout to 120s to accommodate heavy execution waves
@@ -176,11 +214,13 @@ async def flush_task_registry():
         
     async with _MEMORY_MUTEX:
         async with get_registry_lock():
-            with _FILE_LOCK:
-                state = TaskRegistryState()
-                state._sync_to_markdown_unlocked(_TASK_CACHE)
-                _CACHE_DIRTY = False
-                print("💾 [STATE] Successfully flushed registry cache to disk.")
+            def _sync():
+                with _FILE_LOCK:
+                    state = TaskRegistryState()
+                    state._sync_to_markdown_unlocked(_TASK_CACHE)
+            await asyncio.to_thread(_sync)
+            _CACHE_DIRTY = False
+            print("💾 [STATE] Successfully flushed registry cache to disk.")
         
 
 
@@ -200,6 +240,9 @@ def _atomic_write_memory_unlocked(content: str):
             f.flush()
             os.fsync(f.fileno())
         os.replace(tmp_path, "memory.md")
+
+async def _async_atomic_write_memory(content: str):
+    await asyncio.to_thread(_atomic_write_memory_unlocked, content)
 
 class CheckpointManager:
     async def write_rollback_copy(self, target_path: str, rollback_path: str):
@@ -348,7 +391,7 @@ class OrphanRecoveryScanner:
                         os.remove(t)
                         
             if new_content != content:
-                _atomic_write_memory_unlocked(new_content)
+                await _async_atomic_write_memory(new_content)
                 _invalidate_task_cache()
 
 class TaskRegistryState:
@@ -681,7 +724,7 @@ async def register_task_batch(tasks: list[dict]) -> str:
                 
                 lines = lines[:reg_insert] + rows_to_insert + lines[reg_insert:]
 
-                _atomic_write_memory_unlocked("\n".join(lines) + "\n")
+                await _async_atomic_write_memory("\n".join(lines) + "\n")
                 _invalidate_task_cache()
                     
                 success_msg = f"Successfully registered tasks {', '.join(incoming_task_ids)}."
@@ -788,7 +831,7 @@ async def append_handoff_summary(summary: str):
                     content = "\n".join(lines[:start_idx] + [summary.strip()] + lines[end_idx:])
                 else:
                     content += f"\n\n{summary}"
-                _atomic_write_memory_unlocked(content)
+                await _async_atomic_write_memory(content)
                 _invalidate_task_cache()
 
 async def append_session_log_row(session_id: str, task_id: str) -> str:
@@ -798,8 +841,10 @@ async def append_session_log_row(session_id: str, task_id: str) -> str:
     row = f"| {session_id} | {start_time} | — | {task_id} | in_progress | — |"
     async with _MEMORY_MUTEX:
         async with get_registry_lock():
-            with _FILE_LOCK:
-                ASTMemoryMapper.append_to_markdown_table("memory.md", "Session Log", row)
+            def _append():
+                with _FILE_LOCK:
+                    ASTMemoryMapper.append_to_markdown_table("memory.md", "Session Log", row)
+            await asyncio.to_thread(_append)
     return f"Session {session_id} logged for task {task_id}."
 
 

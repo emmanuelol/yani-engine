@@ -3,11 +3,11 @@ name: audit
 description: QA Harness Loop. Evaluates completed tasks against their success criteria and autonomously generates fix tasks if bugs are found.
 ---
 
-Base directory for this skill: (project root where dumbledoer is installed)
+Base directory for this skill: (project root where yani-engine is installed)
 
-# /dumbledoer:audit — Autonomous Self-Evaluation Loop
+# /yani-engine:audit — Autonomous Self-Evaluation Loop
 
-**References** (read before Section 1): `dumbledoer/lib/common-preamble.md`, `dumbledoer/lib/memory-schema.md`
+**References** (read before Section 1): `yani-engine/lib/common-preamble.md`, `yani-engine/lib/memory-schema.md`
 
 ## Mission
 You are acting as the QA Supervisor. Your job is to evaluate the tasks recently marked as `completed` in the current session. You must aggressively attempt to break the newly implemented features, verify they meet their `Success Criteria`, and autonomously generate new tasks if you find regressions or missing logic.

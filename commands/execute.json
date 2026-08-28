@@ -2,7 +2,7 @@
   "name": "execute",
   "description": "Dispatches the task plan in strict dependency order through the secure Docker execution sandbox.",
   "execute": {
-    "command": "./run_dumbledoer.sh",
+    "command": "./run_yani.sh",
     "args": ["execute"]
   }
 }

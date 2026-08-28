@@ -2,8 +2,8 @@ import pytest
 import os
 import subprocess
 from unittest.mock import patch, MagicMock
-from dumbledoer.core.sandbox import execute_bash
-from dumbledoer.core.orchestrator import LLMOrchestrator
+from yani_engine.core.sandbox import execute_bash
+from yani_engine.core.orchestrator import LLMOrchestrator
 
 @pytest.mark.asyncio
 @patch("subprocess.run")
@@ -52,7 +52,7 @@ async def test_ephemeral_artifact_purge(mock_run, tmp_path):
             post_untracked = set(mock_git_ls.stdout.splitlines())
             
             for garbage_file in post_untracked - pre_untracked:
-                if os.path.exists(garbage_file) and not garbage_file.startswith(".dumbledoer/"):
+                if os.path.exists(garbage_file) and not garbage_file.startswith(".yani_engine/"):
                     os.remove(garbage_file)
                     
         assert not os.path.exists(leaked_file), "Leaked artifact was not successfully purged from the workspace."

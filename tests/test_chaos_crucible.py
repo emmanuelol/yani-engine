@@ -6,23 +6,23 @@ import asyncio
 from unittest.mock import patch, MagicMock
 
 # Import the modules we need to test
-from dumbledoer.core.sandbox import _ensure_warm_sandbox, _teardown_warm_sandbox, execute_bash
-from dumbledoer.core.orchestrator import LLMOrchestrator as DumbleDoerCLI
-from dumbledoer.core.state import OrphanRecoveryScanner
+from yani_engine.core.sandbox import _ensure_warm_sandbox, _teardown_warm_sandbox, execute_bash
+from yani_engine.core.orchestrator import LLMOrchestrator as YaniEngineCLI
+from yani_engine.core.state import OrphanRecoveryScanner
 @pytest.fixture
 def setup_test_env(tmp_path):
     """Sets up a clean testing directory with a fake memory.md."""
     original_cwd = os.getcwd()
     os.chdir(tmp_path)
     
-    # Setup .dumbledoer directories
-    os.makedirs(".dumbledoer/tmp", exist_ok=True)
-    os.makedirs(".dumbledoer/checkpoints", exist_ok=True)
-    os.makedirs(".dumbledoer/rollbacks", exist_ok=True)
+    # Setup .yani_engine directories
+    os.makedirs(".yani_engine/tmp", exist_ok=True)
+    os.makedirs(".yani_engine/checkpoints", exist_ok=True)
+    os.makedirs(".yani_engine/rollbacks", exist_ok=True)
     
     # Initialize basic memory.md
     with open("memory.md", "w") as f:
-        f.write("# DumbleDoer Memory\n\n")
+        f.write("# yani_engine Memory\n\n")
         f.write("## Config\n- max_parallel_tasks: 3\n\n")
         f.write("## Task Registry\n")
         f.write("| Task ID | Title | Type | Status | Depends On |\n")
@@ -68,7 +68,7 @@ async def test_parallel_sandbox_isolation(mock_run, setup_test_env):
 async def test_unattended_orphan_recovery_deadlock(mock_confirm, setup_test_env):
     """Asserts that unattended scanner deletes orphaned .tmp files and never prompts."""
     
-    tmp_file_path = ".dumbledoer/tmp/T-999_fake__file.py.tmp"
+    tmp_file_path = ".yani_engine/tmp/T-999_fake__file.py.tmp"
     with open(tmp_file_path, "w") as f:
         f.write("broken code")
         
@@ -124,7 +124,7 @@ async def test_native_qa_intercept_syntax_error(setup_test_env):
         
     # Initialize CLI with a fake API key
     with patch.dict(os.environ, {"GEMINI_API_KEY": "fake_key"}):
-        cli = DumbleDoerCLI()
+        cli = yani_engineCLI()
     
     # We must patch the client so it doesn't crash on None
     mock_chat_session = MagicMock()

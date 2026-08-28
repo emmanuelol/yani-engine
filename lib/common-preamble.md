@@ -1,6 +1,6 @@
-# common-preamble: Shared Rules for All dumbledoer Commands
+# common-preamble: Shared Rules for All yani-engine Commands
 
-Every dumbledoer command MUST read this file before Section 1 of its SKILL.md.
+Every yani-engine command MUST read this file before Section 1 of its SKILL.md.
 This file is the single authoritative statement of the rules below. Command files
 MUST NOT restate them; if a command file ever conflicts with this preamble, the
 preamble wins.

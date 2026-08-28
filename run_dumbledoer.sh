@@ -1,4 +1,4 @@
 #!/usr/bin/env bash
-PLUGIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-export PYTHONPATH="$PLUGIN_DIR"
-exec "$PLUGIN_DIR/.venv/bin/python" "$PLUGIN_DIR/dumbledoer/cli/main.py" "$@"
+# run_dumbledoer.sh - Backward compatibility wrapper forwarding to run_yani.sh
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec "$SCRIPT_DIR/run_yani.sh" "$@"

@@ -6,13 +6,13 @@ import os
 import shutil
 from unittest.mock import patch
 
-from dumbledoer.core.state import TaskRegistryState
-from dumbledoer.core.sandbox import execute_bash
-from dumbledoer.core.orchestrator import LLMOrchestrator as DumbleDoerCLI
+from yani_engine.core.state import TaskRegistryState
+from yani_engine.core.sandbox import execute_bash
+from yani_engine.core.orchestrator import LLMOrchestrator as YaniEngineCLI
 
 @pytest.fixture(autouse=True)
 def setup_memory_md():
-    initial_content = """# DumbleDoer Memory
+    initial_content = """# yani_engine Memory
 ## Config
 - sandbox_mode: native
 
@@ -31,15 +31,15 @@ def setup_memory_md():
     with open("memory.md", "w", encoding="utf-8") as f:
         f.write(initial_content)
     
-    os.makedirs(".dumbledoer/tmp", exist_ok=True)
-    os.makedirs(".dumbledoer/rollbacks", exist_ok=True)
+    os.makedirs(".yani_engine/tmp", exist_ok=True)
+    os.makedirs(".yani_engine/rollbacks", exist_ok=True)
     
     yield
     
     if os.path.exists("memory.md"):
         os.remove("memory.md")
-    if os.path.exists(".dumbledoer"):
-        shutil.rmtree(".dumbledoer")
+    if os.path.exists(".yani_engine"):
+        shutil.rmtree(".yani_engine")
     for f in ["file1.txt", "file2.txt", "file3.txt"]:
         if os.path.exists(f):
             os.remove(f)
@@ -73,23 +73,23 @@ async def test_suite_1_ledger_sync_lock():
 async def test_suite_2_orphan_recovery():
     uuid_base = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d"
     for i in range(1, 4):
-        with open(f".dumbledoer/tmp/{uuid_base}{i}_file{i}.txt.tmp", "w") as f:
+        with open(f".yani_engine/tmp/{uuid_base}{i}_file{i}.txt.tmp", "w") as f:
             f.write("new content")
             with open(f"file{i}.txt", "w") as f:
                 f.write("new content")
-        with open(f".dumbledoer/rollbacks/{uuid_base}{i}_file{i}.txt.bak", "w") as f:
+        with open(f".yani_engine/rollbacks/{uuid_base}{i}_file{i}.txt.bak", "w") as f:
             f.write("old content")
 
-    cli = DumbleDoerCLI()
+    cli = yani_engineCLI()
     
     with patch("subprocess.run"):
         with patch("rich.prompt.Prompt.ask", side_effect=["S", "file2.txt"]):
-            with patch("dumbledoer.core.orchestrator.config.verbose", True):
-                with patch("dumbledoer.cli.main.GUI_DIFF_ENABLED", True, create=True):
+            with patch("yani_engine.core.orchestrator.config.verbose", True):
+                with patch("yani_engine.cli.main.GUI_DIFF_ENABLED", True, create=True):
                     await cli.batch_diff_review([
-                    f".dumbledoer/tmp/{uuid_base}1_file1.txt.tmp",
-                    f".dumbledoer/tmp/{uuid_base}2_file2.txt.tmp",
-                    f".dumbledoer/tmp/{uuid_base}3_file3.txt.tmp"
+                    f".yani_engine/tmp/{uuid_base}1_file1.txt.tmp",
+                    f".yani_engine/tmp/{uuid_base}2_file2.txt.tmp",
+                    f".yani_engine/tmp/{uuid_base}3_file3.txt.tmp"
                 ])
                 with open("memory.md", "r", encoding="utf-8") as f:
                     content = f.read()

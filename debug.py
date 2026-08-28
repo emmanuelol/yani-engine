@@ -1,5 +1,5 @@
 import asyncio
-from dumbledoer.core.orchestrator import LLMOrchestrator
+from yani_engine.core.orchestrator import LLMOrchestrator
 async def main():
     orch = LLMOrchestrator(budget_limit=1000)
     try:

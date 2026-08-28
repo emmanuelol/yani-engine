@@ -1,9 +1,9 @@
 import asyncio
 import os
 import pytest
-from dumbledoer.core.state import TaskRegistryState, update_task_registry_row
-from dumbledoer.core.orchestrator import LLMOrchestrator, BudgetExhaustedException
-from dumbledoer.core.llm_provider import AbstractLLMProvider
+from yani_engine.core.state import TaskRegistryState, update_task_registry_row
+from yani_engine.core.orchestrator import LLMOrchestrator, BudgetExhaustedException
+from yani_engine.core.llm_provider import AbstractLLMProvider
 from google.genai.types import Part
 
 class MockLLMProvider(AbstractLLMProvider):
@@ -77,7 +77,7 @@ async def test_mock_llm_provider():
 
 @pytest.mark.asyncio
 async def test_wave_planner():
-    from dumbledoer.core.planner import WavePlanner
+    from yani_engine.core.planner import WavePlanner
     
     with open("memory.md", "w") as f:
         f.write("## Task Registry\n")

@@ -10,7 +10,7 @@
     }
   ],
   "execute": {
-    "command": "./run_dumbledoer.sh",
+    "command": "./run_yani.sh",
     "args": ["rollback", "{{task}}"]
   }
 }

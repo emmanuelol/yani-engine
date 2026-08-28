@@ -3,7 +3,7 @@ import re
 
 def test_token_bleed():
     """Verify that agent loops are strictly clamped to avoid token bleeds."""
-    with open('dumbledoer/core/orchestrator.py', 'r') as f:
+    with open('yani_engine/core/orchestrator.py', 'r') as f:
         content = f.read()
     
     # Verify the clamp fix

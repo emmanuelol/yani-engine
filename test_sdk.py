@@ -3,7 +3,7 @@ sys.path.append('.')
 import asyncio
 import os
 from google import genai
-from dumbledoer.core.sandbox import execute_bash
+from yani_engine.core.sandbox import execute_bash
 
 async def test():
     client = genai.Client()

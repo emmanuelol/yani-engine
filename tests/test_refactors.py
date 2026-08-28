@@ -1,7 +1,7 @@
 import pytest
 import asyncio
 from unittest.mock import patch, MagicMock
-from dumbledoer.core.sandbox import execute_bash
+from yani_engine.core.sandbox import execute_bash
 
 @pytest.mark.asyncio
 async def test_native_sandbox_execution():

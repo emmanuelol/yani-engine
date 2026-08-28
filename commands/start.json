@@ -2,7 +2,7 @@
   "name": "start",
   "description": "Ingests documentation, conducts a discovery phase, and maps out an atomic task plan in memory.md.",
   "execute": {
-    "command": "./run_dumbledoer.sh",
+    "command": "./run_yani.sh",
     "args": ["start"]
   }
 }

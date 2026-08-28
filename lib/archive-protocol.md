@@ -1,7 +1,7 @@
 # archive-protocol: Session Archiving and Retrieval
 
 Bounds `memory.md` growth by moving completed sessions' detailed history into
-per-session archive records under `.dumbledoer/archive/`. Loaded lazily:
+per-session archive records under `.yani/archive/`. Loaded lazily:
 at session close (start/execute/resume/iterate) and at archived-record
 retrieval (report/rollback/status).
 
@@ -19,7 +19,7 @@ retrieval (report/rollback/status).
      (`completed`/`deferred`).
 3. Archive the remaining sessions, **oldest first**, one at a time using the
    interruption-safety protocol below. If none remain, do nothing (silent).
-4. After archiving, report: `Archived {N} session(s) → .dumbledoer/archive/ ({M} lines trimmed from memory.md)`.
+4. After archiving, report: `Archived {N} session(s) → .yani/archive/ ({M} lines trimmed from memory.md)`.
 
 **Task-archival rule**: a task is archived with session S iff its status is
 terminal AND S is the most recent session in its Owner / Assigned Session
@@ -27,7 +27,7 @@ history. Non-terminal tasks always stay in `memory.md` in full.
 
 ---
 
-## Archive record format (`.dumbledoer/archive/{sessionId}.md`)
+## Archive record format (`.yani/archive/{sessionId}.md`)
 
 ```markdown
 # Archived Session: {sessionId}
@@ -58,11 +58,11 @@ subsection may live in exactly one archive record.
 ## Interruption-safety protocol (4 steps, mandatory order)
 
 ```
-1. Write the archive record to .dumbledoer/tmp/{sessionId}.archive.tmp
+1. Write the archive record to .yani/tmp/{sessionId}.archive.tmp
 2. Verify it: parses as Markdown, contains all five sections, task subsection
    count matches the task-archival rule's selection
-3. Atomic rename → .dumbledoer/archive/{sessionId}.md
-4. Rewrite memory.md via .dumbledoer/tmp/memory.md.tmp + atomic rename:
+3. Atomic rename → .yani/archive/{sessionId}.md
+4. Rewrite memory.md via .yani/tmp/memory.md.tmp + atomic rename:
    remove archived Change Log / Checkpoint Registry rows and Task Details
    subsections; add the Archive Index row; reduce the Session Log row to
    summary form; set archived tasks' Checkpoint column to `archived`

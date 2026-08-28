@@ -9,8 +9,8 @@ description: >
 ---
 
 <!-- Vendored from https://github.com/JuliusBrussee/caveman (MIT License,
-     plugins/caveman/skills/caveman/SKILL.md). Bundled with DumbleDoer so users
-     install nothing. DumbleDoer integration: dumbledoer/lib/compression-policy.md
+     plugins/caveman/skills/caveman/SKILL.md). Bundled with yani-engine so users
+     install nothing. yani-engine integration: yani-engine/lib/compression-policy.md
      governs WHEN this mode applies and at WHICH level (per work category,
      compression_enabled in memory.md Config); this file defines HOW each level
      reads. Persisted artifacts are always full prose (policy artifact override).

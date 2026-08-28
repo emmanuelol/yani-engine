@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# DumbleDoer Automated Global Installer 🧙♂️
+# yani-engine Automated Global Installer 🐩
 
 set -e
 
-echo "🪄 Preparing the DumbleDoer global environment..."
+echo "🐩 Preparing the yani-engine global environment..."
 
-PLUGIN_DIR="$HOME/.gemini/config/plugins/dumbledoer"
+PLUGIN_DIR="$HOME/.gemini/config/plugins/yani-engine"
 
 # 1. Clean previous installation
 if [ -d "$PLUGIN_DIR" ]; then
@@ -18,7 +18,7 @@ mkdir -p "$PLUGIN_DIR"
 
 # 2. Copy source files (excluding unwanted directories)
 echo "📦 Copying files to global plugin directory..."
-rsync -av --exclude='.git' --exclude='.venv' --exclude='.dumbledoer' --exclude='__pycache__' ./ "$PLUGIN_DIR/"
+rsync -av --exclude='.git' --exclude='.venv' --exclude='.yani' --exclude='.dumbledoer' --exclude='__pycache__' ./ "$PLUGIN_DIR/"
 
 # 3. Create the Virtual Environment natively in the global directory using uv
 echo "⚡ Creating virtual environment using uv..."
@@ -34,26 +34,26 @@ source .venv/bin/activate
 echo "📜 Installing dependencies using uv..."
 uv pip install -r requirements.txt
 
-# 5. Make sub-tools executable (e.g., RTK and run_dumbledoer.sh)
+# 5. Make sub-tools executable (e.g., RTK and run_yani.sh)
 if [ -f "bin/rtk" ]; then
     echo "⚙️ Granting execution permissions to RTK..."
     chmod +x bin/rtk
 fi
-chmod +x run_dumbledoer.sh
+chmod +x run_yani.sh run_dumbledoer.sh
 
 # 6. Initialize the Agent Workspace locally (for the repo we ran this from, optional)
 cd - > /dev/null
-if [ ! -d ".dumbledoer" ]; then
-    echo "🏗️ Initializing local .dumbledoer workspace directories..."
-    mkdir -p .dumbledoer/tmp
-    mkdir -p .dumbledoer/checkpoints
-    mkdir -p .dumbledoer/rollbacks
+if [ ! -d ".yani" ]; then
+    echo "🏗️ Initializing local .yani workspace directories..."
+    mkdir -p .yani/tmp
+    mkdir -p .yani/checkpoints
+    mkdir -p .yani/rollbacks
 fi
 
 echo ""
 echo "🐳 Building Docker Base Image..."
-docker build -t dumbledoer-base:latest .
+docker build -t yani-base:latest .
 
 echo ""
-echo "✨ DumbleDoer global installation complete! ✨"
+echo "✨ yani-engine global installation complete! 🐩"
 echo "The plugin is now globally available to Antigravity."

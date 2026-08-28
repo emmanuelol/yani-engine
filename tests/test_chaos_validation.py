@@ -2,8 +2,8 @@ import pytest
 import os
 import asyncio
 from unittest.mock import patch, MagicMock
-from dumbledoer.core.state import TaskRegistryState
-from dumbledoer.core.planner import WavePlanner
+from yani_engine.core.state import TaskRegistryState
+from yani_engine.core.planner import WavePlanner
 
 @pytest.fixture(autouse=True)
 def mock_env_and_gui():

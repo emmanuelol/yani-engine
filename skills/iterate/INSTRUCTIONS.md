@@ -1,13 +1,13 @@
 ---
 name: iterate
-description: Iterates on the current dumbledoer session. Acts as a strict Systems Architect to evaluate, decompose, and register new tasks based on user prompts.
+description: Iterates on the current yani-engine session. Acts as a strict Systems Architect to evaluate, decompose, and register new tasks based on user prompts.
 ---
 
-Base directory for this skill: (project root where dumbledoer is installed)
+Base directory for this skill: (project root where yani-engine is installed)
 
-# /dumbledoer:iterate — Architectural Refinement & Task Decomposition
+# /yani-engine:iterate — Architectural Refinement & Task Decomposition
 
-**References** (read before Section 1): `dumbledoer/lib/common-preamble.md`, `dumbledoer/lib/memory-schema.md`, `dumbledoer/lib/codegraph-integration.md`
+**References** (read before Section 1): `yani-engine/lib/common-preamble.md`, `yani-engine/lib/memory-schema.md`, `yani-engine/lib/codegraph-integration.md`
 
 ## Mission
 You are the Principal Systems Architect. The user has provided a new objective or proposed raw tasks. As the **Guardian** of the codebase and a **Sniper** in task creation, you must aggressively interrogate the prompt, evaluate its feasibility, and decompose it into highly atomic, achievable tasks with measurable success criteria. 
@@ -54,10 +54,10 @@ Prioritize using targeted tools (`read_code_block`, `codegraph_search`) over bro
 For every micro-task you create, you must define explicit, testable **Success Criteria**. 
 *   *Bad Criteria:* "The script works."
 *   *Good Criteria:* "Running `python parser.py test.csv` returns a 0 exit code and outputs a structured JSON object."
-*   This criteria will be used by the `/dumbledoer:audit` QA loop to verify your work programmatically.
+*   This criteria will be used by the `/yani-engine:audit` QA loop to verify your work programmatically.
 
 ## Section 4 — The Latch & Plan Registration
 1. Use the `register_task_batch` tool to append each validated micro-task to the `memory.md` Task Registry safely in a single batch request. All tasks must be set to `pending`.
 2. **Present the Blueprint:** Output a clean, structured Markdown table summary of the exact tasks you just created, their success criteria, and their dependencies.
 3. **Engage the Latch:** End your response with exactly this strict, unalterable text constraint:
-   > *"The task plan has been proposed and safely registered as `pending`. Please review the tasks above. If you approve this architecture, run `/dumbledoer:execute` to authorize the work. If you require changes, run `/dumbledoer:iterate` with your adjustments."*
+   > *"The task plan has been proposed and safely registered as `pending`. Please review the tasks above. If you approve this architecture, run `/yani-engine:execute` to authorize the work. If you require changes, run `/yani-engine:iterate` with your adjustments."*

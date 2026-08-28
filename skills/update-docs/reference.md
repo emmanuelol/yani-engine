@@ -106,10 +106,10 @@ For each ChangeCandidate in the task's DocFile, execute the **10-step CodeGraph 
 - Log impact summary to memory.md Task Details
 
 **Steps 4–10: Checkpoint protocol** (`lib/checkpoint-protocol.md`, 6 steps)
-- Step 4 (= checkpoint 1): copy original to `.dumbledoer/rollbacks/{taskId}/{encodedPath}`
+- Step 4 (= checkpoint 1): copy original to `.yani/rollbacks/{taskId}/{encodedPath}`
 - Step 5 (= checkpoint 2): append `planned` entry to Change Log
-- Step 6 (= checkpoint 3): write checkpoint JSON to `.dumbledoer/checkpoints/{checkpointId}.json`
-- Step 7 (= checkpoint 4): write new content to `.dumbledoer/tmp/{filename}.tmp`
+- Step 6 (= checkpoint 3): write checkpoint JSON to `.yani/checkpoints/{checkpointId}.json`
+- Step 7 (= checkpoint 4): write new content to `.yani/tmp/{filename}.tmp`
 - Step 8 (= checkpoint 5): atomic rename `.tmp` → target path
 - Steps 9–10 (= checkpoint 6): update Change Log to `applied`; run `codegraph_affected([modified doc file])` and log affected test files in task Notes
 

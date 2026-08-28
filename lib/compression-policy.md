@@ -1,14 +1,14 @@
 # compression-policy: Dynamic Output Compression (caveman)
 
-Single authoritative statement of how dumbledoer compresses conversational
+Single authoritative statement of how yani-engine compresses conversational
 output. Every command applies this policy via the reference in
 `lib/common-preamble.md`. Command files MUST NOT restate these rules.
 
 Compression uses the **caveman** ruleset, which ships WITH the plugin at
-`dumbledoer/skills/caveman/SKILL.md` (vendored from github.com/JuliusBrussee/caveman,
+`yani-engine/skills/caveman/SKILL.md` (vendored from github.com/JuliusBrussee/caveman,
 MIT) — nothing to install. That file defines HOW each level reads (rules,
 intensity table, auto-clarity exceptions); this policy defines WHEN it applies
-and at WHICH level. DumbleDoer auto-applies only `lite` (drop filler, keep all
+and at WHICH level. yani-engine auto-applies only `lite` (drop filler, keep all
 nuance) and `full` (default caveman terseness); `ultra` and `wenyan` are NEVER
 applied automatically — the user may request them manually.
 
@@ -45,7 +45,7 @@ level and may locally suspend compression without changing session state.
 
 ### Classification rules
 
-1. **Command identity**: `/dumbledoer:status` and `/dumbledoer:rollback`
+1. **Command identity**: `/yani-engine:status` and `/yani-engine:rollback`
    output → `simple`. Report and update-docs COMPOSITION dialogue → `planning`.
 2. **Task metadata** (from Task Registry): type `change` OR effort
    `medium`/`large` → `complex`. Type `analysis`/`validation` AND effort `small`

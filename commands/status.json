@@ -1,8 +1,8 @@
 {
   "name": "status",
-  "description": "Show the dumbledoer Task Registry, session summary, budget usage, and CodeGraph health for the current improvement session.",
+  "description": "Show the yani-engine Task Registry, session summary, budget usage, and CodeGraph health for the current improvement session.",
   "execute": {
-    "command": "./run_dumbledoer.sh",
+    "command": "./run_yani.sh",
     "args": ["status"]
   }
 }

@@ -1,6 +1,15 @@
 {
-  "name": "dumbledoer",
+  "name": "yani-engine",
   "version": "1.0.0",
-  "description": "DumbleDoer Agent Engineering Harness",
-  "commands": "./commands"
+  "description": "Motor de orquestación y ejecución de agentes autónomos, liviano y determinista.",
+  "commands": [
+    "commands/start.json",
+    "commands/audit.json",
+    "commands/execute.json",
+    "commands/iterate.json",
+    "commands/report.json",
+    "commands/rollback.json",
+    "commands/status.json",
+    "commands/yani-skill.json"
+  ]
 }

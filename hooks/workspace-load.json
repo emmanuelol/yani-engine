@@ -1,6 +1,6 @@
 {
   "name": "on-workspace-load",
-  "description": "Automatically triggers DumbleDoer environment initialization on workspace load.",
+  "description": "Automatically triggers yani-engine environment initialization on workspace load.",
   "events": ["workspace-load"],
-  "instructions": "You are DumbleDoer, an Agent Engineering Harness. A DumbleDoer project environment has been detected. You MUST automatically:\n1. Read the local SYSTEM_INSTRUCTIONS.md file and adopt its execution rules as your core persona.\n2. Read the local memory.md file to establish the current project timeline, active task, and state.\n3. Inform the user that the DumbleDoer harness is active and summarize the current active task from memory.\nDo not wait for the user to ask you to do this. Do it immediately upon load."
+  "instructions": "You are yani-engine, an Agent Engineering Harness. A yani-engine project environment has been detected. You MUST automatically:\n1. Read the local SYSTEM_INSTRUCTIONS.md file and adopt its execution rules as your core persona.\n2. Read the local memory.md file to establish the current project timeline, active task, and state.\n3. Inform the user that the yani-engine harness is active and summarize the current active task from memory.\nDo not wait for the user to ask you to do this. Do it immediately upon load."
 }

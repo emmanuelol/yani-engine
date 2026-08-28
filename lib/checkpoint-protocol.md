@@ -7,7 +7,7 @@ No exceptions. A session that skips any step violates the protocol and risks dat
 
 ## 6-Step Protocol (Automated)
 
-**🚨 CRITICAL OVERRIDE:** You, the LLM agent, MUST NOT execute these steps manually. You MUST NOT create files in `.dumbledoer/rollbacks/`, `.dumbledoer/checkpoints/`, or `.dumbledoer/tmp/`. 
+**🚨 CRITICAL OVERRIDE:** You, the LLM agent, MUST NOT execute these steps manually. You MUST NOT create files in `.yani/rollbacks/`, `.yani/checkpoints/`, or `.yani/tmp/`. 
 
 To apply a code change, you MUST call the `write_file_with_review` tool. Pass the target path (e.g., `app/main.py`) and the full new content. The Python tool handles the following 6 steps AUTOMATICALLY:
 1. Writes Rollback Copy
@@ -36,13 +36,13 @@ swallow a failure.
 | 6 — applied log update | change applied, entry still `planned` | Resolved by class O4 on the next scan | Applied state (the change is live) |
 
 **Invariant**: cleanup actions never overwrite the Step-1 rollback copy — it is the
-pre-dumbledoer original.
+pre-yani-engine original.
 
 ---
 
 ## Orphan Recovery Scan (every session start and on resume)
 
-Scan `.dumbledoer/tmp/`, `.dumbledoer/checkpoints/`, `.dumbledoer/rollbacks/`,
+Scan `.yani/tmp/`, `.yani/checkpoints/`, `.yani/rollbacks/`,
 and the Change Log for the five orphan classes and resolve them. Only class O1 prompts
 the user — all others auto-resolve with a report line.
 
@@ -66,13 +66,13 @@ Recovery scan: {N} artifact(s) resolved
 
 ---
 
-## Checkpoint Restore Protocol (for /dumbledoer resume)
+## Checkpoint Restore Protocol (for /yani-engine resume)
 
 To restore state from checkpoint `{checkpointId}`:
 
-1. Read `.dumbledoer/checkpoints/{checkpointId}.json`.
+1. Read `.yani/checkpoints/{checkpointId}.json`.
 2. For each file in `checkpoint.files`:
-   a. Write current file to `.dumbledoer/tmp/{filename}.tmp` as a safety copy.
+   a. Write current file to `.yani/tmp/{filename}.tmp` as a safety copy.
    b. Write `checkpoint.files[path]` (the pre-change original) to target via rename.
 3. Update task status to `in_progress` with current session ID.
 4. Continue execution from `checkpoint.stepIndex + 1`.

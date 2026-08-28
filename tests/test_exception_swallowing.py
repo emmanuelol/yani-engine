@@ -3,7 +3,7 @@ import ast
 
 def test_exception_swallowing():
     """Verify that the worker loop safely calls queue.task_done() even during crashes."""
-    with open('dumbledoer/core/orchestrator.py', 'r') as f:
+    with open('yani_engine/core/orchestrator.py', 'r') as f:
         tree = ast.parse(f.read())
         
     found_worker = False

@@ -1,6 +1,6 @@
 # codegraph-integration: Mandatory CodeGraph Usage Rules for Sub-Agents
 
-Every sub-agent spawned by dumbledoer MUST follow these rules. No code change or
+Every sub-agent spawned by yani-engine MUST follow these rules. No code change or
 file modification may proceed without first querying CodeGraph.
 
 ---
@@ -110,7 +110,7 @@ Affected: {symbol1} ({file1.ext}), {symbol2} ({file2.ext}), ...
 Test files to run: {test1.ext}, {test2.ext}
 ```
 
-This log is used by `/dumbledoer report` to generate quantitative justification
+This log is used by `/yani-engine report` to generate quantitative justification
 for each change.
 
 ---

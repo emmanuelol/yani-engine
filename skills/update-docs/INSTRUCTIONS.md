@@ -3,23 +3,23 @@ name: update-docs
 description: Update existing project documentation using CodeGraph structural analysis. Detects outdated sections, rewrites them to match current code, and optionally enriches sparse sections. Use when documentation has drifted from the codebase or when you want to fill in missing content.
 ---
 
-Base directory for this skill: (project root where dumbledoer is installed)
+Base directory for this skill: (project root where yani-engine is installed)
 
-# /dumbledoer:update-docs — Smart Documentation Updater
+# /yani-engine:update-docs — Smart Documentation Updater
 
-**References** (read before Section 1): `dumbledoer/lib/common-preamble.md`, `dumbledoer/lib/codegraph-integration.md`
+**References** (read before Section 1): `yani-engine/lib/common-preamble.md`, `yani-engine/lib/codegraph-integration.md`
 
 **Lazy references** (load only at the noted point):
-- `dumbledoer/lib/memory-schema.md` (load at Section 3 — task registration; or if the repair flow triggers)
-- `dumbledoer/lib/checkpoint-protocol.md` (load at Section 5 — task execution)
-- `dumbledoer/lib/budget-detection.md` (load at Section 5 — task execution)
-- `dumbledoer/skills/update-docs/reference.md` (load at Section 3 — analysis phase)
-- `dumbledoer/lib/knowledge-protocol.md` (load at Section 3 — knowledge docs-sync)
+- `yani-engine/lib/memory-schema.md` (load at Section 3 — task registration; or if the repair flow triggers)
+- `yani-engine/lib/checkpoint-protocol.md` (load at Section 5 — task execution)
+- `yani-engine/lib/budget-detection.md` (load at Section 5 — task execution)
+- `yani-engine/skills/update-docs/reference.md` (load at Section 3 — analysis phase)
+- `yani-engine/lib/knowledge-protocol.md` (load at Section 3 — knowledge docs-sync)
 
 ## Parameters
 
 ```
-/dumbledoer:update-docs
+/yani-engine:update-docs
   --docs <path>          Optional. Override the docs directory. Defaults to docs_path in memory.md Config.
   --enrich               Optional flag. Enable enrichment of stub/empty sections (≤ 3 lines of body).
   --dry-run              Optional flag. Show planned changes without writing any files.
@@ -32,13 +32,13 @@ Base directory for this skill: (project root where dumbledoer is installed)
 1. Parse parameters: `DOCS_PATH` (from `--docs` or memory.md Config `docs_path`), `ENRICH_MODE`, `DRY_RUN`.
 
 2. **Precondition P1**: Check for `memory.md` at project root.
-   - If absent: output exactly `Error: memory.md not found. Run /dumbledoer:start to initialize.` and stop.
+   - If absent: output exactly `Error: memory.md not found. Run /yani-engine:start to initialize.` and stop.
 
 3. **Precondition P2**: Read `memory.md` in full. Run the validation checklist from `lib/common-preamble.md`.
    - If ANY rule fails: output `memory.md validation failed: Rule N — <specific description>.` and offer the FR-016 repair flow from the preamble. Execute the chosen option, then stop — let the user re-invoke.
 
 4. **Precondition P3**: Resolve `DOCS_PATH`.
-   - If `--docs` was not provided AND `docs_path` is absent or empty in memory.md Config: output exactly `Error: docs path not found. Provide --docs <path> or run /dumbledoer:start first.` and stop.
+   - If `--docs` was not provided AND `docs_path` is absent or empty in memory.md Config: output exactly `Error: docs path not found. Provide --docs <path> or run /yani-engine:start first.` and stop.
    - If `--docs` was provided but the path does not exist or is not a directory: output exactly `Error: documentation directory not found at '<path>'. Provide a valid --docs path.` and stop.
 
 5. **Precondition P4**: Scan `DOCS_PATH` recursively for `.md` files.
@@ -61,7 +61,7 @@ Base directory for this skill: (project root where dumbledoer is installed)
 
 ## Section 3 — Analysis and Proposal
 
-**Read `dumbledoer/skills/update-docs/reference.md` and `dumbledoer/lib/memory-schema.md` now** (lazy references). Execute, in order:
+**Read `yani-engine/skills/update-docs/reference.md` and `yani-engine/lib/memory-schema.md` now** (lazy references). Execute, in order:
 
 1. **Part A** — parse `DOC_FILES` into DocSection records with `symbols_referenced` and enrichment-candidate flags.
 2. **Part B** — delta analysis: derive `CHANGED_SYMBOLS` and set `update_required` per section.
@@ -115,7 +115,7 @@ and stop (do NOT register tasks, do NOT update `last_docs_update`).
 
 ## Section 5 — Task Execution
 
-**Load `dumbledoer/lib/checkpoint-protocol.md` and `dumbledoer/lib/budget-detection.md` now** (lazy references).
+**Load `yani-engine/lib/checkpoint-protocol.md` and `yani-engine/lib/budget-detection.md` now** (lazy references).
 
 **Output style** (`lib/compression-policy.md`): all documentation content written
 to disk is a persisted artifact — ALWAYS normal full prose, never compressed.
@@ -146,7 +146,7 @@ Execute ONLY when ALL tasks have completed. (If interrupted, the session handoff
    run timestamp in memory.md Config — only here, after full completion. An
    interrupted run leaves it untouched so the next run re-reads the same window.
 4. Update Session Log: End Time, Outcome = `completed`.
-5. Write `.dumbledoer/sessions/{sessionId}.json` with execution trace.
+5. Write `.yani/sessions/{sessionId}.json` with execution trace.
 6. Run `codegraph status` and note final symbol count vs the Section 2 baseline.
 7. Output the success summary:
    ```
@@ -158,7 +158,7 @@ Execute ONLY when ALL tasks have completed. (If interrupted, the session handoff
      Sections flagged for review: {count of remove-stale sections}
      Files modified: {list of relative paths}
 
-   Run /dumbledoer:status to see the full task log.
-   Run /dumbledoer:rollback to undo changes.
+   Run /yani-engine:status to see the full task log.
+   Run /yani-engine:rollback to undo changes.
    ```
 

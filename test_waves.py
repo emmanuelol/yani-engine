@@ -1,6 +1,6 @@
 import asyncio
-from dumbledoer.core.config import config
-from dumbledoer.core.planner import WavePlanner
+from yani_engine.core.config import config
+from yani_engine.core.planner import WavePlanner
 
 async def test():
     config.start_at_index = 2

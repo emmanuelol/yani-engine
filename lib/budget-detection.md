@@ -1,6 +1,6 @@
 # budget-detection: Token Budget Estimation and Graceful Shutdown Algorithm
 
-dumbledoer does not have privileged access to the Gemini API token counter.
+yani-engine does not have privileged access to the Gemini API token counter.
 Budget is estimated via a running context-size tracker.
 
 ---
@@ -11,7 +11,7 @@ Budget settings live in `memory.md` Config section:
 
 | Field | Default | Override |
 |-------|---------|---------|
-| `budget_limit` | 5000000 | Set during `/dumbledoer start` discovery or via `--budget-limit` |
+| `budget_limit` | 5000000 | Set during `/yani-engine start` discovery or via `--budget-limit` |
 | `budget_threshold_pct` | 80 | Per-session via `--budget-threshold <pct>` flag or by editing `memory.md` Config |
 
 **Threshold computation**: `shutdown_threshold = budget_limit × (budget_threshold_pct / 100)`
@@ -102,7 +102,7 @@ When threshold is crossed OR approaching:
 7. **Append Session Handoff Summary to `memory.md`** — append after the Open Questions
    section. This makes it visible in the next session's memory read.
 
-8. **Write session JSON** — write `.dumbledoer/sessions/{sessionId}.json` with full
+8. **Write session JSON** — write `.yani/sessions/{sessionId}.json` with full
    execution trace.
 
 9. **Output the Session Handoff Summary** — print it as the final output before ending.

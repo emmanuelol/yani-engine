@@ -1,31 +1,31 @@
 # Use Guide
 
-DumbleDoer operates dynamically. Whenever you invoke the `dumbledoer` command, it targets the **current working directory**. Because DumbleDoer runs its core runtime from its central installation, your target repository remains clean. Only `memory.md` and `.dumbledoer/` rollback directories are created inside your active project.
+yani-engine operates dynamically. Whenever you invoke the `yani-engine` command, it targets the **current working directory**. Because yani-engine runs its core runtime from its central installation, your target repository remains clean. Only `memory.md` and `.yani/` rollback directories are created inside your active project.
 
 ## CLI Commands and Flags
 
-DumbleDoer commands accept several granular flags to control behavior:
+yani-engine commands accept several granular flags to control behavior:
 
-- `dumbledoer start`: Ingests documentation and registers an atomic task plan for the current project.
-  - `--docs <path>`: (Default: `./docs`) Explicitly point DumbleDoer to a documentation directory for discovery.
-- `dumbledoer execute`: Runs the registered tasks in dependency order.
+- `yani-engine start`: Ingests documentation and registers an atomic task plan for the current project.
+  - `--docs <path>`: (Default: `./docs`) Explicitly point yani-engine to a documentation directory for discovery.
+- `yani-engine execute`: Runs the registered tasks in dependency order.
   - `--dry-run`: (Type: `bool`, Default: `false`) Execute tasks but don't apply changes to disk, useful for validating task dependencies.
   - `-v`: (Type: `bool`, Default: `false`) Verbose mode; enables the manual Diff-Gate review process via VS Code.
-- `dumbledoer iterate`: Evaluates a user prompt against the current project state and decomposes it into atomic tasks.
+- `yani-engine iterate`: Evaluates a user prompt against the current project state and decomposes it into atomic tasks.
   - `--enrich`: (Type: `bool`, Default: `false`) Automatically pulls extra context from Context7 before planning.
-- `dumbledoer audit`: Runs the QA Harness Loop against completed tasks to autonomously generate fixes.
+- `yani-engine audit`: Runs the QA Harness Loop against completed tasks to autonomously generate fixes.
   - `--budget-threshold <pct>`: (Type: `integer`, Default: `80`) Specify the threshold percentage for token budget exhaustion before triggering a graceful shutdown.
-- `dumbledoer resume`: Detects stale locks and offers options to resume, rollback, or skip.
-- `dumbledoer report`: Generates an improvement report using CodeGraph metrics.
+- `yani-engine resume`: Detects stale locks and offers options to resume, rollback, or skip.
+- `yani-engine report`: Generates an improvement report using CodeGraph metrics.
 
 ## `memory.md` Configuration and Tracking
 
-The `memory.md` file acts as the state machine and working memory for the DumbleDoer session. It tracks configuration, task registries, and logs.
+The `memory.md` file acts as the state machine and working memory for the yani-engine session. It tracks configuration, task registries, and logs.
 
 ### Configuration Fields (Config block)
 - **`budget_limit`**: (Type: `integer`, Default: `100000`) The absolute token limit for the session.
-- **`budget_threshold_pct`**: (Type: `integer`, Default: `80`) The percentage of `budget_limit` at which DumbleDoer will perform a graceful shutdown.
-- **`sandbox_mode`**: (Type: `string`, Default: `dumbledoer-base`) The execution environment. Can be `native`, `docker:<image>`, or `compose:<service>`.
+- **`budget_threshold_pct`**: (Type: `integer`, Default: `80`) The percentage of `budget_limit` at which yani-engine will perform a graceful shutdown.
+- **`sandbox_mode`**: (Type: `string`, Default: `yani-base`) The execution environment. Can be `native`, `docker:<image>`, or `compose:<service>`.
 - **`max_parallel_tasks`**: (Type: `integer`, Default: `0` [unlimited]) Maximum concurrent tasks to execute in a parallel wave.
 - **`archive_keep_sessions`**: (Type: `integer`, Default: `1`) Number of historical sessions to retain in the Session Log.
 

@@ -4,7 +4,7 @@ description: Create and edit Obsidian Flavored Markdown with wikilinks, embeds, 
 ---
 
 <!-- Vendored from https://github.com/kepano/obsidian-skills (MIT License,
-     skills/obsidian-markdown/). Bundled with DumbleDoer so users install nothing —
+     skills/obsidian-markdown/). Bundled with yani-engine so users install nothing —
      the knowledge registry (lib/knowledge-protocol.md) writes Obsidian-compatible
      notes using these conventions. To update: re-copy SKILL.md and references/
      from upstream, keep this block. -->
