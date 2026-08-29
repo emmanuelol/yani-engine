@@ -16,7 +16,8 @@ ALLOWED_EXTENSIONS = {
 EXCLUDE_DIRS = {
     '.git', '.pytest_cache', '__pycache__', 'venv', 'env', '.venv',
     'openclaw_data/credentials', 'openclaw_data/sessions',
-    'openclaw_data/workspace/.openclaw', 'node_modules', 'dist', 'build'
+    'openclaw_data/workspace/.openclaw', 'node_modules', 'dist', 'build','.codegraph','.venv2',
+    '.ruff_cache','.yani','test.lock','install.log',
 }
 
 EXCLUDE_EXTENSIONS = {

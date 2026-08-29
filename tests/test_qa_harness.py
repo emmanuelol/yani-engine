@@ -9,6 +9,7 @@ from unittest.mock import patch
 from yani_engine.core.state import TaskRegistryState
 from yani_engine.core.sandbox import execute_bash
 from yani_engine.core.orchestrator import LLMOrchestrator as YaniEngineCLI
+from yani_engine.core.review_ui import batch_diff_review
 
 @pytest.fixture(autouse=True)
 def setup_memory_md():
@@ -85,15 +86,15 @@ async def test_suite_2_orphan_recovery():
     
     with patch("subprocess.run"):
         with patch("rich.prompt.Prompt.ask", side_effect=["S", "file2.txt"]):
-            with patch("yani_engine.core.orchestrator.config.verbose", True):
-                with patch("yani_engine.cli.main.GUI_DIFF_ENABLED", True, create=True):
-                    await cli.batch_diff_review([
-                    f".yani/tmp/{uuid_base}1_file1.txt.tmp",
-                    f".yani/tmp/{uuid_base}2_file2.txt.tmp",
-                    f".yani/tmp/{uuid_base}3_file3.txt.tmp"
-                ])
-                with open("memory.md", "r", encoding="utf-8") as f:
-                    content = f.read()
+                with patch("yani_engine.core.orchestrator.config.verbose", True):
+                    with patch("yani_engine.cli.main.GUI_DIFF_ENABLED", True, create=True):
+                        await batch_diff_review([
+                        f".yani/tmp/{uuid_base}1_file1.txt.tmp",
+                        f".yani/tmp/{uuid_base}2_file2.txt.tmp",
+                        f".yani/tmp/{uuid_base}3_file3.txt.tmp"
+                    ])
+                    with open("memory.md", "r", encoding="utf-8") as f:
+                        content = f.read()
 
     assert "file2.txt" in content and "rolled-back" in content
     assert "file1.txt" in content and "applied" in content
