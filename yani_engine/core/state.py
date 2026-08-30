@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from typing import Optional, Literal, List, Dict, Any
+from pydantic import BaseModel, Field, ValidationError
+
 from yani_engine.core.locks import _MEMORY_MUTEX, _KNOWLEDGE_MUTEX, _REGISTRY_LOCK, get_registry_lock, _FILE_LOCK
 from markdown_it import MarkdownIt
 import sys
@@ -7,14 +10,87 @@ import os
 import subprocess
 import asyncio
 
-
-
 import re
 import glob
 import shutil
 import filecmp
 from filelock import FileLock
 import filelock
+
+
+class UpdateTaskStatusPayload(BaseModel):
+    task_id: str = Field(
+        ...,
+        pattern=r"^T-\d{3,4}$",
+        description="Unique task identifier, e.g., T-001",
+    )
+    new_status: Literal[
+        "pending",
+        "in_progress",
+        "interrupted",
+        "blocked",
+        "completed",
+        "deferred",
+        "awaiting-review",
+        "error",
+        "abandoned",
+    ] = Field(..., description="The new execution state of the task.")
+    new_owner: str = Field(
+        default="—",
+        description="Session ID claiming the task, or '—' if unassigned.",
+    )
+    checkpoint_id: Optional[str] = Field(
+        default=None,
+        description="Optional Checkpoint ID to save the resume point.",
+    )
+
+
+class TaskBatchItem(BaseModel):
+    id: Optional[str] = Field(
+        default=None,
+        pattern=r"^T-\d{3,4}$",
+        description="Optional explicit task ID",
+    )
+    title: str = Field(..., min_length=5, description="Task title including [Category] tag")
+    task_type: Literal["change", "analysis", "validation", "report"] = Field(
+        default="change", description="Task category"
+    )
+    deps: Optional[str] = Field(
+        default="none",
+        description="Comma-separated prerequisite task IDs or 'none'",
+    )
+    description: Optional[str] = Field(
+        default="", description="Detailed explanation of the task"
+    )
+    outputs: Optional[str] = Field(
+        default="none", description="Comma-separated output file paths"
+    )
+    success_criteria: Optional[str] = Field(
+        default="TBD", description="Concrete evaluation metric"
+    )
+    estimated_effort: Optional[Literal["small", "medium", "large"]] = Field(
+        default="small", description="Effort tier"
+    )
+    codegraph_impact: Optional[str] = Field(
+        default="—", description="Blast radius summary"
+    )
+
+
+class TaskBatchPayload(BaseModel):
+    tasks: list[TaskBatchItem] = Field(
+        ..., min_length=1, description="Batch of tasks to register"
+    )
+
+
+def _format_validation_error(e: ValidationError, max_len: int = 1400) -> str:
+    """Formats Pydantic validation error with a strict character boundary to prevent context-window token bleed."""
+    err_json = e.json()
+    if len(err_json) > max_len:
+        err_json = err_json[:max_len] + "\n... [TRUNCATED: Payload too large. Ensure descriptions and code blocks are concise.]"
+    return f"State mutation rejected: Invalid arguments. Please fix and retry:\n{err_json}"
+
+
+
 
 
 def split_markdown_cells(line: str) -> list[str]:
@@ -285,11 +361,27 @@ _REGISTRY_CACHE = TaskRegistryCache()
 
 async def update_task_registry_row(task_id: str, new_status: str, new_owner: str = "—", checkpoint_id: str = None) -> str:
     """Surgically updates a task's status in memory, deferred disk flush."""
+    try:
+        validated = UpdateTaskStatusPayload(
+            task_id=task_id,
+            new_status=new_status,
+            new_owner=new_owner,
+            checkpoint_id=checkpoint_id,
+        )
+    except ValidationError as e:
+        return _format_validation_error(e)
+
     async with _MEMORY_MUTEX:
         async with get_registry_lock():
             try:
                 state = TaskRegistryState()
-                return await _REGISTRY_CACHE.update_task(task_id, new_status, new_owner, checkpoint_id, state)
+                return await _REGISTRY_CACHE.update_task(
+                    validated.task_id,
+                    validated.new_status,
+                    validated.new_owner,
+                    validated.checkpoint_id,
+                    state,
+                )
             except Exception as e:
                 return f"Error updating registry: {e}"
 
@@ -737,6 +829,18 @@ async def register_task_batch(tasks: list[dict]) -> str:
     - 'estimated_effort' (str: 'small', 'medium', 'large')
     - 'codegraph_impact' (str: blast radius summary)
     """
+    # 1. Strict Pydantic Validation Boundary
+    try:
+        if isinstance(tasks, dict) and "tasks" in tasks:
+            payload = TaskBatchPayload.model_validate(tasks)
+        elif isinstance(tasks, list):
+            payload = TaskBatchPayload(tasks=tasks)
+        else:
+            return "State mutation rejected: Invalid arguments. 'tasks' must be a non-empty list of task objects."
+        validated_items = [t.model_dump() for t in payload.tasks]
+    except ValidationError as e:
+        return _format_validation_error(e)
+
     async with _MEMORY_MUTEX:
         async with get_registry_lock():
             try:
@@ -758,7 +862,7 @@ async def register_task_batch(tasks: list[dict]) -> str:
                 existing_task_ids = set([f"T-{int(x):03d}" for x in existing_ids])
 
                 incoming_task_ids = []
-                for i, task in enumerate(tasks):
+                for i, task in enumerate(validated_items):
                     custom_id = task.get("id")
                     if custom_id:
                         if custom_id in existing_task_ids:
@@ -782,7 +886,7 @@ async def register_task_batch(tasks: list[dict]) -> str:
                 rows_to_insert = []
                 details_to_insert = []
                 
-                for i, task in enumerate(tasks):
+                for i, task in enumerate(validated_items):
                     task_id = incoming_task_ids[i]
                     title = task.get("title", "Untitled")
                     outputs = task.get("outputs", "none")
@@ -792,6 +896,8 @@ async def register_task_batch(tasks: list[dict]) -> str:
                         print(f"⚠️ [ARCHITECT WARNING] Task '{title}' missing [Category] tag. Auto-patching to conserve tokens.")
                         title = f"[Uncategorized] {title}"
                         task["title"] = title
+                        if isinstance(tasks, list) and i < len(tasks) and isinstance(tasks[i], dict):
+                            tasks[i]["title"] = title
 
                     # ENFORCE ATOMICITY (SOFT WARNING)
                     if outputs.lower() not in ["none", "—", "-", ""]:
