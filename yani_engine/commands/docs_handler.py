@@ -241,7 +241,8 @@ async def handle_update_docs(orchestrator: "LLMOrchestrator", args: list) -> Non
     # ------------------------------------------------------------------
     # 12. Stamp last_docs_update in memory.md Config block (atomic write)
     # ------------------------------------------------------------------
-    now_iso = datetime.utcnow().isoformat() + "Z"
+    from datetime import timezone
+    now_iso = datetime.now(timezone.utc).isoformat()
     async with _MEMORY_MUTEX:
         async with get_registry_lock():
             with open("memory.md", "r", encoding="utf-8") as f:

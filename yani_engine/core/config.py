@@ -28,7 +28,12 @@ class AppConfig(BaseSettings):
     # Budget Defaults
     budget_limit: int = 50000000
     budget_threshold_pct: int = 80
-    
+
+    # Telemetry & Observability
+    enable_telemetry: bool = False
+    otlp_endpoint: str = "http://localhost:4318/v1/traces"
+    log_format: str = "console"  # "console" or "json"
+
     class Config:
         env_file = (os.path.expanduser("~/.gemini/config/plugins/yani-engine/.env"), ".env")
         env_file_encoding = "utf-8"

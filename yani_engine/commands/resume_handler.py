@@ -130,6 +130,8 @@ async def handle_resume(
 
         await update_task_registry_row(t_id, "pending", "—")
 
+    await flush_task_registry()
+
     console.print(
         "[green]Locks cleared and checkpoints restored. "
         "Handing off to execution engine...[/green]"

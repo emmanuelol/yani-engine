@@ -195,21 +195,32 @@ class WaveExecutor:
             safe_parallel = 3 if max_parallel <= 0 else max_parallel
             num_workers = min(safe_parallel, len(wave))
 
-            workers = [
-                asyncio.create_task(
-                    self._worker(f"w{i}", queue, progress, wave_task)
-                )
-                for i in range(num_workers)
-            ]
-            done, pending = await asyncio.wait(workers, return_when=asyncio.FIRST_EXCEPTION)
+            from yani_engine.core.telemetry import trace_span
 
-            for p in pending:
-                p.cancel()
+            async with trace_span(
+                "wave.execute",
+                {
+                    "wave.index": wave_i + 1,
+                    "wave.total": total_waves,
+                    "wave.task_count": len(wave),
+                    "wave.workers": num_workers,
+                },
+            ):
+                workers = [
+                    asyncio.create_task(
+                        self._worker(f"w{i}", queue, progress, wave_task)
+                    )
+                    for i in range(num_workers)
+                ]
+                done, pending = await asyncio.wait(workers, return_when=asyncio.FIRST_EXCEPTION)
 
-            for d in done:
-                exc = d.exception()
-                if exc is not None:
-                    raise exc
+                for p in pending:
+                    p.cancel()
+
+                for d in done:
+                    exc = d.exception()
+                    if exc is not None:
+                        raise exc
 
     # ------------------------------------------------------------------
     # Internal: single worker coroutine (previously a closure)
@@ -229,6 +240,7 @@ class WaveExecutor:
         via asyncio.wait(FIRST_EXCEPTION).
         """
         from yani_engine.core.orchestrator import BudgetExhaustedException
+        from yani_engine.core.telemetry import trace_span
 
         orch = self._orch
 
@@ -256,32 +268,48 @@ class WaveExecutor:
                 f"[cyan]{task_id}[/cyan]: {task_title}"
             )
 
-            try:
-                from yani_engine.core.task_executor import TaskExecutor
-                await TaskExecutor(orch).execute_task(task_id, task_title, worker_id=worker_id)
-                progress.console.print(
-                    f"  [bold green]✅ [AWAITING_REVIEW][/bold green] "
-                    f"[cyan]{task_id}[/cyan]: {task_title}"
-                )
-            except BudgetExhaustedException:
-                progress.console.print(
-                    f"  [bold magenta]⏸ [INTERRUPTED][/bold magenta] "
-                    f"[cyan]{task_id}[/cyan]: Budget exhausted"
-                )
-                while not queue.empty():
-                    queue.get_nowait()
+            async with trace_span(
+                "wave.worker_task",
+                {
+                    "worker.id": worker_id,
+                    "task.id": task_id,
+                    "task.title": task_title,
+                    "sandbox.mode": getattr(orch, "sandbox_mode", "native"),
+                },
+            ) as task_span:
+                try:
+                    from yani_engine.core.task_executor import TaskExecutor
+
+                    await TaskExecutor(orch).execute_task(task_id, task_title, worker_id=worker_id)
+                    if task_span.is_recording():
+                        task_span.set_attribute("task.status", "awaiting_review")
+                    progress.console.print(
+                        f"  [bold green]✅ [AWAITING_REVIEW][/bold green] "
+                        f"[cyan]{task_id}[/cyan]: {task_title}"
+                    )
+                except BudgetExhaustedException:
+                    if task_span.is_recording():
+                        task_span.set_attribute("task.status", "interrupted")
+                    progress.console.print(
+                        f"  [bold magenta]⏸ [INTERRUPTED][/bold magenta] "
+                        f"[cyan]{task_id}[/cyan]: Budget exhausted"
+                    )
+                    while not queue.empty():
+                        queue.get_nowait()
+                        queue.task_done()
+                    raise
+                except Exception as e:
+                    if task_span.is_recording():
+                        task_span.set_attribute("task.status", "error")
+                    progress.console.print(
+                        f"  [bold red]❌ [ERROR][/bold red] [cyan]{task_id}[/cyan]: {e}"
+                    )
+                    await update_task_registry_row(task_id, "error")
+                    await flush_task_registry()
+                finally:
+                    progress.advance(wave_task)
                     queue.task_done()
-                raise
-            except Exception as e:
-                progress.console.print(
-                    f"  [bold red]❌ [ERROR][/bold red] [cyan]{task_id}[/cyan]: {e}"
-                )
-                await update_task_registry_row(task_id, "error")
-                await flush_task_registry()
-            finally:
-                progress.advance(wave_task)
-                queue.task_done()
-                await flush_task_registry()
+                    await flush_task_registry()
 
         # Per-worker sandbox teardown (runs once after the task loop exits)
         sandbox_mode = getattr(orch, "sandbox_mode", "native")

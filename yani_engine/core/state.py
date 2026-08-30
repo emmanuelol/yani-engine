@@ -753,9 +753,21 @@ async def register_task_batch(tasks: list[dict]) -> str:
                 import re
                 existing_ids = re.findall(r'T-(\d{3,4})', search_blocks)
                 next_num = max([int(x) for x in existing_ids]) + 1 if existing_ids else 1
-                
                 existing_task_ids = set([f"T-{int(x):03d}" for x in existing_ids])
-                incoming_task_ids = [f"T-{next_num + i:03d}" for i in range(len(tasks))]
+
+                incoming_task_ids = []
+                for i, task in enumerate(tasks):
+                    custom_id = task.get("id")
+                    if custom_id:
+                        if custom_id in existing_task_ids:
+                            return f"Error: Duplicate task ID {custom_id} already exists in registry. Task batch creation rejected."
+                        if custom_id in incoming_task_ids:
+                            return f"Error: Duplicate task ID {custom_id} in incoming batch. Task batch creation rejected."
+                        incoming_task_ids.append(custom_id)
+                    else:
+                        auto_id = f"T-{next_num + i:03d}"
+                        incoming_task_ids.append(auto_id)
+
                 union_task_ids = existing_task_ids.union(incoming_task_ids)
                 
                 det_start, det_end = ASTMemoryMapper.locate_heading_block(content, "##", "Task Details")
