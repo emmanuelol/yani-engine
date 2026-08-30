@@ -79,25 +79,39 @@ class PersistentCircuitBreaker:
         state = self._read_state()
         if state.get("failures", 0) >= self.threshold:
             if time.time() - state.get("last_failure", 0.0) < self.recovery_window:
+                from yani_engine.core.telemetry import record_circuit_breaker_event
+
+                record_circuit_breaker_event(self.name, "open")
                 return True
             else:
                 # Half-open: reset to threshold - 1 so single failure trips again
                 self._write_state(
                     {"failures": self.threshold - 1, "last_failure": time.time()}
                 )
+                from yani_engine.core.telemetry import record_circuit_breaker_event
+
+                record_circuit_breaker_event(self.name, "half_open")
                 return False
         return False
 
-    def record_failure(self) -> None:
+    def record_failure(self, reason: str = None) -> None:
         state = self._read_state()
-        state["failures"] = state.get("failures", 0) + 1
+        new_failures = state.get("failures", 0) + 1
+        state["failures"] = new_failures
         state["last_failure"] = time.time()
         self._write_state(state)
+        from yani_engine.core.telemetry import record_circuit_breaker_event
+
+        event_type = "tripped" if new_failures >= self.threshold else "failure"
+        record_circuit_breaker_event(self.name, event_type, reason=reason)
 
     def record_success(self) -> None:
         try:
             if self.state_file.exists():
                 self.state_file.unlink()
+                from yani_engine.core.telemetry import record_circuit_breaker_event
+
+                record_circuit_breaker_event(self.name, "reset")
         except Exception:
             pass
 
@@ -128,18 +142,42 @@ def create_mcp_wrapper(server_name: str, tool, mcp_sessions: dict, mcp_locks: di
             server_name,
             asyncio.Semaphore(getattr(config, "max_parallel_tasks", 3) or 3),
         )
+        from yani_engine.core.telemetry import record_mcp_duration, trace_span
+
         async with sem:
             session = mcp_sessions[server_name]
-            try:
-                result = await asyncio.wait_for(
-                    session.call_tool(tool.name, arguments=kwargs), timeout=45.0
-                )
-                return "\n".join([x.text for x in result.content if hasattr(x, "text")])
-            except asyncio.TimeoutError:
-                return (
-                    f"Error: Tool '{tool.name}' timed out after 45 seconds. "
-                    "The query was too broad or the server hung. Narrow your target symbol."
-                )
+            async with trace_span(
+                "mcp.call_tool",
+                {"mcp.server": server_name, "mcp.tool": tool.name},
+            ) as span:
+                t0 = time.time()
+                try:
+                    result = await asyncio.wait_for(
+                        session.call_tool(tool.name, arguments=kwargs), timeout=45.0
+                    )
+                    dur = time.time() - t0
+                    if span.is_recording():
+                        span.set_attribute("mcp.duration_seconds", dur)
+                        span.set_attribute("mcp.status", "success")
+                    record_mcp_duration(server_name, tool.name, dur, status="success")
+                    return "\n".join([x.text for x in result.content if hasattr(x, "text")])
+                except asyncio.TimeoutError:
+                    dur = time.time() - t0
+                    if span.is_recording():
+                        span.set_attribute("mcp.duration_seconds", dur)
+                        span.set_attribute("mcp.status", "timeout")
+                    record_mcp_duration(server_name, tool.name, dur, status="timeout")
+                    return (
+                        f"Error: Tool '{tool.name}' timed out after 45 seconds. "
+                        "The query was too broad or the server hung. Narrow your target symbol."
+                    )
+                except Exception as e:
+                    dur = time.time() - t0
+                    if span.is_recording():
+                        span.set_attribute("mcp.duration_seconds", dur)
+                        span.set_attribute("mcp.status", "error")
+                    record_mcp_duration(server_name, tool.name, dur, status="error")
+                    raise
 
     # 1. Strip slashes and hyphens for Gemini compatibility
     safe_name = tool.name.replace("-", "_").replace("/", "_")

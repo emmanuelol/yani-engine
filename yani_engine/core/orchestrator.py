@@ -173,14 +173,22 @@ class LLMOrchestrator:
             print("Graceful Shutdown Sequence Complete. State preserved in memory.md.")
 
     async def run(self, command: str, args: list):
-        # Restored baseline routing: 'execute' defaults to fast tier.
-        # execute_task() will dynamically elevate tasks to heavy tier based on effort.
-        # Only force the heavy model if the user didn't explicitly override it via CLI/env
         if command in ["iterate", "audit", "start"] and not getattr(config, "model_overridden", False):
             self.model = config.model_heavy
         elif not getattr(config, "model_overridden", False):
             self.model = config.model_fast
         print(f"yani-engine running command: {command}")
+
+        from yani_engine.core.telemetry import init_telemetry, shutdown_telemetry, trace_span
+
+        init_telemetry(
+            service_name="yani-engine",
+            enable_telemetry=getattr(config, "enable_telemetry", False),
+            otlp_endpoint=getattr(config, "otlp_endpoint", None),
+            log_format=getattr(config, "log_format", "console"),
+            debug=getattr(config, "verbose", False),
+        )
+
         if command == "resume":
             from yani_engine.commands.resume_handler import handle_resume
             result = await handle_resume(self, args)
@@ -188,101 +196,51 @@ class LLMOrchestrator:
                 return
             command = "execute"
 
-        
         # Skip MCP initialization for commands that do not need structural code analysis or semantic search
         if command not in ("status", "rollback", "report"):
             from yani_engine.core.mcp_manager import connect_mcp
             await connect_mcp(self)
+
         try:
-            if command == "rollback":
-                from yani_engine.commands.handlers import handle_rollback
-                await handle_rollback(self, args)
-                return
-
-            if command == "execute":
-                from yani_engine.core.executor import WaveExecutor
-                await WaveExecutor(self).execute_pending_waves(args)
-
-            elif command == "report":
-                from yani_engine.commands.handlers import handle_report
-                await handle_report(self, args)
-                return
-
-            elif command == "audit":
-                from yani_engine.commands.audit_handler import handle_audit
-                await handle_audit(self, args)
-                return
-
-            elif command == "status":
-                from yani_engine.commands.handlers import handle_status
-                await handle_status(self, args)
-                return
-
-            elif command == "update-docs":
-                from yani_engine.commands.docs_handler import handle_update_docs
-                await handle_update_docs(self, args)
-                return
-
-            elif command == "start":
-                from yani_engine.commands.llm_handlers import handle_start
-                await handle_start(self, args)
-
-            elif command == "iterate":
-                from yani_engine.commands.llm_handlers import handle_iterate
-                await handle_iterate(self, args)
-
-            else:
-                # FIX: Use the decoupled provider interface
-                self.chat_session = await self.provider.create_chat_session(
-                    model_name=getattr(self, "model", config.model),
-                    tools=self._get_tools_for_command(command)
-                )
-
-                sys_inst = await self.prompt_builder._get_system_instructions(command)
-                payload = f"{sys_inst}\n\nUSER DIRECTIVE: Execute the `{command}` command with arguments {args}. Follow your COMMAND SPECIFIC INSTRUCTIONS strictly. Do not ask for user input if a tool can accomplish the task."
-                from rich.console import Console
-                console = Console()
-                with console.status(f"[bold cyan]Running {command} agent...", spinner="dots") as status:
-                    try:
-                        max_iters = 30 if command in ("start", "iterate") else 15
-                        response = await self.agent_runner._run_with_tools(self.chat_session, payload, self.provider, status=status, max_iterations=max_iters)
-                    except RuntimeError as e:
-                        # FIX: Catch max iterations gracefully to prevent stack trace crash
-                        print(f"\n[bold red]Agent execution aborted: {e}[/bold red]")
-                        return
-                    except BudgetExhaustedException:
-                        print(f"\n[bold red]Budget threshold reached during {command}. Attempting token clearance...[/bold red]")
-                        rtk_out = await run_rtk("gain")
-                        import re
-                        match = re.search(r"(\d+)", rtk_out)
-                        rtk_savings = int(match.group(1)) if match else 50000
-                        self.budget_manager.estimated_tokens = max(0, self.budget_manager.estimated_tokens - rtk_savings)
-                        try:
-                            response = await self.agent_runner._run_with_tools(self.chat_session, payload, self.provider, status=status)
-                        except (BudgetExhaustedException, RuntimeError) as e:
-                            print(f"Task failed or budget threshold blocked retry: {e}")
-                            await self._graceful_shutdown()
-                            return
-
-                # FIX: Use provider parser instead of raw Gemini properties
-                unhandled_calls = self.provider.parse_tool_calls(response)
-                if unhandled_calls:
-                    print("Function Calls that were not handled:", unhandled_calls)
-
-                # Safely extract text depending on provider response structure
-                final_text = getattr(response, 'text', '') if hasattr(response, 'text') else str(response)
-                print(final_text)
-
+            async with trace_span("command.execute", {"command.name": command}):
+                if command == "rollback":
+                    from yani_engine.commands.handlers import handle_rollback
+                    await handle_rollback(self, args)
+                elif command == "execute":
+                    from yani_engine.core.executor import WaveExecutor
+                    await WaveExecutor(self).execute_pending_waves(args)
+                elif command == "report":
+                    from yani_engine.commands.handlers import handle_report
+                    await handle_report(self, args)
+                elif command == "audit":
+                    from yani_engine.commands.audit_handler import handle_audit
+                    await handle_audit(self, args)
+                elif command == "update-docs":
+                    from yani_engine.commands.docs_handler import handle_update_docs
+                    await handle_update_docs(self, args)
+                elif command == "iterate":
+                    from yani_engine.commands.llm_handlers import handle_iterate
+                    await handle_iterate(self, args)
+                elif command == "status":
+                    from yani_engine.commands.handlers import handle_status
+                    await handle_status(self, args)
+                elif command == "start":
+                    from yani_engine.commands.llm_handlers import handle_start
+                    await handle_start(self, args)
+                else:
+                    print(f"Error: Unknown command '{command}'")
         finally:
+            from yani_engine.core.sandbox import _teardown_warm_sandbox
+            from yani_engine.core.archiver import archive_stale_sessions
+
             await _teardown_warm_sandbox()
             if command not in ["status", "report"]:
                 await archive_stale_sessions()
-            
-            # [FIX]: Drain and close all async HTTP client sessions to prevent OS-level file descriptor leaks
+
             if hasattr(self, "providers"):
                 for provider in self.providers.values():
                     if hasattr(provider, "aclose"):
                         await provider.aclose()
-                        
-            await self.exit_stack.aclose()
 
+            await self.exit_stack.aclose()
+            shutdown_telemetry()

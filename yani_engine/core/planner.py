@@ -114,9 +114,12 @@ class WavePlanner:
                     for t_id, t in pending_tasks.items():
                         unfulfilled = [d for d in t['deps'] if d not in completed_task_ids]
                         blocked.append(f"{t_id} (missing: {', '.join(unfulfilled)})")
-                    print(f"Warning: Cannot schedule remaining pending tasks. They are blocked by uncompleted dependencies: {'; '.join(blocked)}")
-                    break
-                
+                    err_msg = f"Dependency cycle or unresolvable dependencies detected: {'; '.join(blocked)}"
+                    print(f"Warning: Cannot schedule remaining pending tasks. {err_msg}")
+                    from yani_engine.core.orchestrator import DependencyGraphError
+
+                    raise DependencyGraphError(err_msg)
+
             waves.append(current_wave)
             for t in current_wave:
                 del pending_tasks[t['id']]

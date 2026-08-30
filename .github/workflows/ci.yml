@@ -1,0 +1,83 @@
+name: CI/CD Pipeline
+
+permissions:
+  contents: write
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+
+jobs:
+  test:
+    name: Run Automated Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+      
+      - name: Setup Node.js (For MCP Servers)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20' # Required for codegraph and context7 npx execution
+          
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: "latest"
+          
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          
+      - name: Install Dependencies
+        run: |
+          uv venv .venv
+          source .venv/bin/activate
+          uv pip install -r requirements.txt
+          
+      - name: Run Pytest Suite
+        env:
+          GEMINI_API_KEY: "mock_key_for_testing"
+          AGY_MODEL: "gemini-3.6-flash"
+        run: |
+          source .venv/bin/activate
+          pytest tests/ -v
+
+  release:
+    name: Create GitHub Release
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        
+      - name: Create Clean Release Tag
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const date = new Date().toISOString().split('T')[0];
+            const shortSha = context.sha.substring(0, 7);
+            const tagName = `release-${date}-run${context.runNumber}`;
+            
+            // 1. Create the lightweight tag ref
+            await github.rest.git.createRef({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: `refs/tags/${tagName}`,
+              sha: context.sha
+            });
+            
+            // 2. Publish a rich GitHub Release
+            await github.rest.repos.createRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              tag_name: tagName,
+              name: `🚀 Release: ${date} (Run #${context.runNumber})`,
+              body: `Automated stable release triggered by \`${context.eventName}\`.\n\n- **Commit:** \`${shortSha}\`\n- **Action Log:** [View Run Details](https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})`,
+              draft: false,
+              prerelease: false
+            });
