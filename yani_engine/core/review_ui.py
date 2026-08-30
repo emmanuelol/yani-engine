@@ -29,6 +29,7 @@ from yani_engine.core.state import (
     OrphanRecoveryScanner,
     update_task_registry_row,
     flush_task_registry,
+    split_markdown_cells,
 )
 
 
@@ -62,10 +63,11 @@ async def batch_diff_review(wave_tmp_files: list):
                 async with get_registry_lock():
                     with open("memory.md", "r", encoding="utf-8") as f:
                         for line in f:
-                            parts = [p.strip() for p in line.split("|")]
-                            if len(parts) >= 6 and parts[5] == "planned":
-                                task_id, target = parts[2], parts[3]
-                                task_mapping[target] = task_id
+                            if line.strip().startswith("|") and "---" not in line and "Timestamp" not in line:
+                                parts = split_markdown_cells(line)
+                                if len(parts) >= 5 and parts[4] == "planned":
+                                    task_id, target = parts[1], parts[2]
+                                    task_mapping[target] = task_id
 
         for tmp_path in wave_tmp_files:
             basename = os.path.basename(tmp_path)
@@ -111,14 +113,15 @@ async def batch_diff_review(wave_tmp_files: list):
                 async with get_registry_lock():
                     with open("memory.md", "r", encoding="utf-8") as mem:
                         for line in mem:
-                            parts = [p.strip() for p in line.split("|")]
-                            if (
-                                len(parts) >= 6
-                                and parts[5] == "planned"
-                                and parts[3] == actual_filename
-                            ):
-                                task_id = parts[2]
-                                break
+                            if line.strip().startswith("|") and "---" not in line and "Timestamp" not in line:
+                                parts = split_markdown_cells(line)
+                                if (
+                                    len(parts) >= 5
+                                    and parts[4] == "planned"
+                                    and parts[2] == actual_filename
+                                ):
+                                    task_id = parts[1]
+                                    break
 
         if task_id:
             encoded_path = actual_filename.replace("/", "__").replace(":", "__colon__")
@@ -195,15 +198,16 @@ async def batch_diff_review(wave_tmp_files: list):
             )
             if start_idx != -1:
                 for line in content.splitlines()[start_idx + 1 : end_idx]:
-                    parts = [p.strip() for p in line.split("|")]
-                    if (
-                        len(parts) >= 6
-                        and parts[5].strip() == "planned"
-                        and parts[3].strip() == actual_filename
-                    ):
-                        target_path = parts[3].strip()
-                        task_id = parts[2].strip()
-                        break
+                    if line.strip().startswith("|") and "---" not in line and "Timestamp" not in line:
+                        parts = split_markdown_cells(line)
+                        if (
+                            len(parts) >= 5
+                            and parts[4].strip() == "planned"
+                            and parts[2].strip() == actual_filename
+                        ):
+                            target_path = parts[2].strip()
+                            task_id = parts[1].strip()
+                            break
         except Exception:
             pass
 

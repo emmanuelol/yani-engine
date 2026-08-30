@@ -28,6 +28,7 @@ from yani_engine.core.state import (
     OrphanRecoveryScanner,
     update_task_registry_row,
     flush_task_registry,
+    split_markdown_cells,
 )
 from yani_engine.core.config import config
 
@@ -76,9 +77,11 @@ async def handle_status(orchestrator: "LLMOrchestrator", args: list) -> None:
             if l.startswith("|") and "---" not in l and "Session ID" not in l
         ]
         if sess_lines:
-            parts = [p.strip() for p in sess_lines[-1].split("|")]
-            if len(parts) >= 6:
-                last_session_id, last_end, last_outcome = parts[1], parts[3], parts[5]
+            parts = split_markdown_cells(sess_lines[-1])
+            if len(parts) >= 5:
+                last_session_id = parts[0]
+                last_end = parts[2] if len(parts) > 2 else "None"
+                last_outcome = parts[4] if len(parts) > 4 else "None"
 
     tokens = orchestrator.budget_manager.estimated_tokens
     limit = orchestrator.budget_manager.budget_limit
@@ -109,23 +112,25 @@ async def handle_status(orchestrator: "LLMOrchestrator", args: list) -> None:
         ai_start, ai_end = ASTMemoryMapper.locate_heading_block(content, "##", "Archive Index")
         if ai_start != -1:
             for line in content.splitlines()[ai_start + 1 : ai_end]:
-                if line.strip().startswith("|") and "---" not in line and "Session ID" not in line:
-                    ai_parts = [p.strip() for p in line.split("|")]
-                    if len(ai_parts) > 4:
-                        archive_index[ai_parts[1]] = ai_parts[3]
+                if line.strip().startswith("|") and "---" not in line and "Session ID" not in line and "Task ID" not in line:
+                    ai_parts = split_markdown_cells(line)
+                    if len(ai_parts) >= 6:
+                        archive_index[ai_parts[0]] = ai_parts[5]
+                    elif len(ai_parts) >= 3:
+                        archive_index[ai_parts[0]] = ai_parts[2]
 
     for t_id, t in tasks.items():
-        parts = [p.strip() for p in t.get("original_line", "").split("|")]
-        t_type = parts[3] if len(parts) > 3 else "unknown"
-        t_status = parts[4] if len(parts) > 4 else t["status"]
-        owner = parts[5] if len(parts) > 5 else "—"
+        parts = split_markdown_cells(t.get("original_line", ""))
+        t_type = t.get("type") or (parts[2] if len(parts) > 2 else "unknown")
+        t_status = t.get("status") or (parts[3] if len(parts) > 3 else "pending")
+        owner = t.get("owner") or (parts[4] if len(parts) > 4 else "—")
+        chk_id = t.get("checkpoint") or (parts[7] if len(parts) > 7 else "none")
 
         icon = icons.get(t_status.lower(), "⬜")
         title = (t["title"][:47] + "...") if len(t["title"]) > 50 else t["title"]
 
         step_note = ""
-        if ("in_progress" in t_status.lower() or "interrupted" in t_status.lower()) and len(parts) > 8:
-            chk_id = parts[8].strip()
+        if ("in_progress" in t_status.lower() or "interrupted" in t_status.lower()) and chk_id and chk_id != "none":
             if "step" in chk_id:
                 step_parts = chk_id.split("step")
                 if len(step_parts) > 1:
@@ -137,8 +142,9 @@ async def handle_status(orchestrator: "LLMOrchestrator", args: list) -> None:
         print(f"  {icon} {t_id}  {title:<50} [{t_type}]  {owner}  {step_note}")
 
         if is_verbose:
-            if len(parts) > 8 and "archived" in parts[8].lower():
-                archive_file = archive_index.get(owner, f".yani/archive/{owner}.md")
+            if "archived" in chk_id.lower():
+                session_val = t.get("session") or owner
+                archive_file = archive_index.get(t_id) or archive_index.get(session_val) or archive_index.get(owner, f".yani/archive/{owner}.md")
                 print(f"\n    [Archived] Task details moved to {archive_file}\n")
             else:
                 t_start, t_end = ASTMemoryMapper.locate_heading_block(content, "###", t_id)
@@ -525,9 +531,9 @@ async def handle_rollback(orchestrator: "LLMOrchestrator", args: list) -> None:
                     )
                     if chg_start != -1:
                         for i in range(chg_start + 1, chg_end):
-                            parts = [p.strip() for p in mem_lines[i].split("|")]
-                            if len(parts) >= 6 and parts[2] == task_id:
-                                touched_files.append(parts[3])
+                            parts = split_markdown_cells(mem_lines[i])
+                            if len(parts) >= 5 and parts[1] == task_id:
+                                touched_files.append(parts[2])
                                 mem_lines[i] = mem_lines[i].replace(
                                     "| applied |", "| rolled-back |"
                                 )

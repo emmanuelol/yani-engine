@@ -20,10 +20,10 @@ introducing new deadlock surfaces.
 import os
 import re
 import asyncio
-from datetime import datetime
+from datetime import datetime, timezone
 
 from yani_engine.core.locks import _MEMORY_MUTEX, get_registry_lock
-from yani_engine.core.state import ASTMemoryMapper
+from yani_engine.core.state import ASTMemoryMapper, split_markdown_cells, format_markdown_row
 
 
 async def archive_stale_sessions() -> None:
@@ -58,11 +58,12 @@ async def archive_stale_sessions() -> None:
                 except Exception:
                     pass
 
-    # --- Phase 3: Locate Session Log and collect terminal sessions ---
+    # --- Phase 3: Locate Section Boundaries ---
     sess_start, sess_end = ASTMemoryMapper.locate_heading_block(content, "##", "Session Log")
     if sess_start == -1:
         return
 
+    # --- Phase 4: Identify Terminal Sessions ---
     lines = content.splitlines()
     session_log_lines = lines[sess_start + 1 : sess_end]
 
@@ -74,10 +75,10 @@ async def archive_stale_sessions() -> None:
             and "Timestamp" not in line
             and "Session ID" not in line
         ):
-            parts = [p.strip() for p in line.split("|")]
-            if len(parts) >= 6:
-                sid = parts[1]
-                outcome = parts[5].lower()
+            parts = split_markdown_cells(line)
+            if len(parts) >= 5:
+                sid = parts[0]
+                outcome = parts[4].lower()
                 if outcome in ("completed", "error") or (
                     outcome.startswith("interrupted-") and not outcome.endswith("(archived)")
                 ):
@@ -141,12 +142,14 @@ async def archive_stale_sessions() -> None:
     new_lines = list(lines)
 
     for sid, sess_line, _ in to_archive:
+        sess_cells = split_markdown_cells(sess_line)
+        sess_outcome = sess_cells[4] if len(sess_cells) > 4 else "unknown"
         record_lines = [
             f"# Archived Session: {sid}",
             "",
             f"session_id: {sid}",
-            f"archived_at: {datetime.utcnow().isoformat()}Z",
-            f"outcome: {sess_line.split('|')[5].strip()}",
+            f"archived_at: {datetime.now(timezone.utc).isoformat()}",
+            f"outcome: {sess_outcome}",
             "source: memory.md",
             "",
             "## Session Log Entry",
@@ -167,9 +170,9 @@ async def archive_stale_sessions() -> None:
                     and "---" not in lines[j]
                     and "Timestamp" not in lines[j]
                 ):
-                    parts = [p.strip() for p in lines[j].split("|")]
-                    if len(parts) >= 6:
-                        tid = parts[2]
+                    parts = split_markdown_cells(lines[j])
+                    if len(parts) >= 5:
+                        tid = parts[1]
                         if tid in archived_tasks_per_session[sid] or tid == sid:
                             record_lines.append(lines[j])
                             new_lines[j] = ""
@@ -191,9 +194,9 @@ async def archive_stale_sessions() -> None:
                     and "---" not in lines[j]
                     and "Checkpoint ID" not in lines[j]
                 ):
-                    parts = [p.strip() for p in lines[j].split("|")]
-                    if len(parts) >= 6:
-                        csid = parts[4]
+                    parts = split_markdown_cells(lines[j])
+                    if len(parts) >= 4:
+                        csid = parts[3]
                         if csid == sid:
                             record_lines.append(lines[j])
                             new_lines[j] = ""
@@ -228,12 +231,13 @@ async def archive_stale_sessions() -> None:
 
         # Update or create Archive Index in new_lines
         idx_start, idx_end = ASTMemoryMapper.locate_heading_block(content, "##", "Archive Index")
-        archive_row = (
-            f"| {sid} | {datetime.utcnow().isoformat()}Z "
-            f"| .yani/archive/{sid}.md "
-            f"| {len(archived_tasks_per_session[sid])} "
-            f"| {sess_line.split('|')[5].strip()} |"
-        )
+        archive_row = format_markdown_row([
+            sid,
+            datetime.now(timezone.utc).isoformat(),
+            f".yani/archive/{sid}.md",
+            len(archived_tasks_per_session[sid]),
+            sess_outcome,
+        ])
         if idx_start == -1:
             new_lines.append("")
             new_lines.append("## Archive Index")
@@ -245,10 +249,11 @@ async def archive_stale_sessions() -> None:
 
         # Mark session row as archived in the Session Log
         for j in range(sess_start + 1, sess_end):
-            if new_lines[j].strip().startswith(f"| {sid} |"):
-                parts = new_lines[j].split("|")
-                parts[5] = f" {parts[5].strip()} (archived) "
-                new_lines[j] = "|".join(parts)
+            cells = split_markdown_cells(new_lines[j])
+            if cells and cells[0] == sid:
+                if len(cells) > 4:
+                    cells[4] = f"{cells[4]} (archived)"
+                new_lines[j] = format_markdown_row(cells)
                 break
 
     # --- Phase 8: Atomic write of pruned memory.md ---
