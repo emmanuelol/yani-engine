@@ -18,9 +18,9 @@ Dependency injection:
   All state access (providers, budget_manager, plugin_root, etc.) is via
   the orchestrator reference — no state is copied or held locally.
 
-Backwards-compatibility shim:
-  LLMOrchestrator.execute_task() delegates here. All existing call sites
-  (test_refactoring.py, executor.py _worker) work without modification.
+Usage:
+  WaveExecutor and test callers instantiate TaskExecutor(orchestrator)
+  and call execute_task(...) directly.
 """
 
 from __future__ import annotations
@@ -165,7 +165,7 @@ class TaskExecutor:
             model_name=target_model,
             tools=o._get_tools_for_command("execute"),
         )
-        system_instructions = await o._get_system_instructions(command="execute", task_id=task_id)
+        system_instructions = await o.prompt_builder._get_system_instructions(command="execute", task_id=task_id)
 
         # ------------------------------------------------------------------
         # 6. Assemble prompt payload with CodeGraph/checkpoint protocols
@@ -285,7 +285,7 @@ Mandatory rules:
                     pre_untracked = set()
 
                 # Standard LLM tool loop
-                response = await o._run_with_tools(
+                response = await o.agent_runner._run_with_tools(
                     chat_session,
                     prompt_payload,
                     active_provider,

@@ -5,10 +5,8 @@ Extracted from LLMOrchestrator.connect_mcp() to decouple process
 spawning and RPC bridging from the core orchestration engine.
 
 Design decision:
-  _create_mcp_wrapper() remains on LLMOrchestrator to preserve the
-  contract tested by test_mapping.py (cli._create_mcp_wrapper(...)).
-  A shim on LLMOrchestrator delegates to this module's standalone
-  function, keeping the public API stable while isolating the logic.
+  create_mcp_wrapper() is a standalone pure function in this module.
+  LLMOrchestrator no longer maintains legacy shims for tool wrapping.
 
 Circuit-breaking:
   Each server connection is independently try/except-guarded. A hung

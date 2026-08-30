@@ -74,7 +74,7 @@ async def handle_start(orchestrator: "LLMOrchestrator", args: list) -> None:
         tools=orchestrator._get_tools_for_command("start"),
     )
 
-    sys_inst = await orchestrator._get_system_instructions("start")
+    sys_inst = await orchestrator.prompt_builder._get_system_instructions("start")
     payload = (
         f"{sys_inst}\n\nUSER DIRECTIVE: Execute the `start` command with arguments {args}. "
         "Follow your COMMAND SPECIFIC INSTRUCTIONS strictly."
@@ -83,7 +83,7 @@ async def handle_start(orchestrator: "LLMOrchestrator", args: list) -> None:
     console = Console()
     with console.status("[bold cyan]Running start agent...", spinner="dots") as status:
         try:
-            response = await orchestrator._run_with_tools(
+            response = await orchestrator.agent_runner._run_with_tools(
                 orchestrator.chat_session, payload, orchestrator.provider, status=status
             )
         except Exception as e:
@@ -129,7 +129,7 @@ async def handle_iterate(orchestrator: "LLMOrchestrator", args: list) -> None:
         tools=orchestrator._get_tools_for_command("iterate"),
     )
 
-    sys_inst = await orchestrator._get_system_instructions("iterate")
+    sys_inst = await orchestrator.prompt_builder._get_system_instructions("iterate")
 
     enrich_context = ""
     if enrich_flag and "context7" in orchestrator.mcp_sessions:
@@ -151,7 +151,7 @@ async def handle_iterate(orchestrator: "LLMOrchestrator", args: list) -> None:
     console = Console()
     with console.status("[bold cyan]Running iterate agent...", spinner="dots") as status:
         try:
-            response = await orchestrator._run_with_tools(
+            response = await orchestrator.agent_runner._run_with_tools(
                 orchestrator.chat_session,
                 payload,
                 orchestrator.provider,

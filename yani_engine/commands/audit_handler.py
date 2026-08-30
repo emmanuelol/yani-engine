@@ -217,7 +217,7 @@ Success Criteria: {success_criteria}
 
         with console.status(f"[cyan]LLM Evaluator analyzing {t_id}...[/cyan]", spinner="dots") as status:
             try:
-                response = await orchestrator._run_with_tools(
+                response = await orchestrator.agent_runner._run_with_tools(
                     chat_session,
                     prompt_payload,
                     orchestrator.provider,
