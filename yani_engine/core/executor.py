@@ -257,7 +257,8 @@ class WaveExecutor:
             )
 
             try:
-                await orch.execute_task(task_id, task_title, worker_id=worker_id)
+                from yani_engine.core.task_executor import TaskExecutor
+                await TaskExecutor(orch).execute_task(task_id, task_title, worker_id=worker_id)
                 progress.console.print(
                     f"  [bold green]✅ [AWAITING_REVIEW][/bold green] "
                     f"[cyan]{task_id}[/cyan]: {task_title}"
