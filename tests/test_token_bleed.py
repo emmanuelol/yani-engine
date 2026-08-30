@@ -23,3 +23,30 @@ def test_token_bleed():
 
     assert "max_iterations=15" in loop_content, "Per-command agent loop iteration clamping is missing from agent_loop!"
     assert '"medium": 25' in exec_content, "Fallback effort→iteration limits are missing from task_executor!"
+
+
+@pytest.mark.asyncio
+async def test_pydantic_validation_error_truncation():
+    """Verify that massive invalid payloads are strictly truncated to prevent token window explosion."""
+    from yani_engine.core.state import register_task_batch, update_task_registry_row
+
+    # 1. Massive invalid field in register_task_batch payload (e.g. 50,000 characters)
+    huge_invalid_tasks = [
+        {
+            "id": "INVALID_" + ("X" * 50000),
+            "title": "[Core] Valid Title",
+            "task_type": "change",
+        }
+    ]
+    res_batch = await register_task_batch(huge_invalid_tasks)
+    assert "State mutation rejected: Invalid arguments" in res_batch
+    assert "[TRUNCATED: Payload too large" in res_batch
+    assert len(res_batch) <= 1600
+
+    # 2. Massive invalid status in update_task_registry_row
+    res_status = await update_task_registry_row("T-001", "INVALID_" + ("X" * 10000))
+    assert "State mutation rejected: Invalid arguments" in res_status
+    assert "[TRUNCATED: Payload too large" in res_status
+    assert len(res_status) <= 1600
+
+

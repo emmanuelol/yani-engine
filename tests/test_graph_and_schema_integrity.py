@@ -79,3 +79,32 @@ async def test_cyclic_dependency_deadlock_detection(tmp_path):
             await planner.get_pending_waves()
     finally:
         os.chdir(original_cwd)
+
+
+@pytest.mark.asyncio
+async def test_pydantic_tool_bouncers_rejection(tmp_path):
+    """Verify that Pydantic validation bouncers catch malformed arguments before mutating state."""
+    from yani_engine.core.state import update_task_registry_row
+
+    # 1. Invalid Task ID pattern in update_task_registry_row
+    res_id = await update_task_registry_row("Task-1", "completed")
+    assert "State mutation rejected: Invalid arguments" in res_id
+    assert "string_pattern_mismatch" in res_id or "pattern" in res_id
+
+    # 2. Invalid Status enum in update_task_registry_row
+    res_status = await update_task_registry_row("T-001", "finished")
+    assert "State mutation rejected: Invalid arguments" in res_status
+    assert "literal_error" in res_status or "input_value" in res_status
+
+    # 3. Non-list payload in register_task_batch
+    res_batch_type = await register_task_batch("invalid_payload_string")
+    assert "State mutation rejected: Invalid arguments" in res_batch_type
+
+    # 4. Missing required title or empty batch in register_task_batch
+    res_batch_empty = await register_task_batch([])
+    assert "State mutation rejected: Invalid arguments" in res_batch_empty
+
+    res_batch_missing_title = await register_task_batch([{"deps": "none"}])
+    assert "State mutation rejected: Invalid arguments" in res_batch_missing_title
+    assert "missing" in res_batch_missing_title
+
