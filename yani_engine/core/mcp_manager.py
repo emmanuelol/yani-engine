@@ -9,10 +9,12 @@ Design decision:
   LLMOrchestrator no longer maintains legacy shims for tool wrapping.
 
 Circuit-breaking:
-  Each server connection is independently try/except-guarded. A hung
-  npx process is handled by the underlying stdio_client timeout; the
-  orchestrator boot sequence continues in degraded mode rather than
-  stalling entirely.
+  Each server connection is independently guarded by a file-backed
+  PersistentCircuitBreaker and strict timeout boundaries on both
+  subprocess execution (15s) and JSON-RPC handshakes (10s).
+  If a server repeatedly fails or times out, the circuit trips to OPEN,
+  allowing subsequent CLI runs to boot instantly in degraded mode
+  without suffering repeated connection penalties.
 
 Ownership:
   The exit_stack passed in is owned by LLMOrchestrator. MCP transports
@@ -24,8 +26,12 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import json
 import os
+from pathlib import Path
+import subprocess
 import sys
+import time
 from typing import TYPE_CHECKING
 
 from mcp.client.session import ClientSession
@@ -35,6 +41,65 @@ if TYPE_CHECKING:
     from asyncio import AbstractEventLoop
     from contextlib import AsyncExitStack
     from yani_engine.core.orchestrator import LLMOrchestrator
+
+
+class PersistentCircuitBreaker:
+    """File-backed circuit breaker for ephemeral CLI runs."""
+
+    def __init__(
+        self,
+        name: str,
+        threshold: int = 2,
+        recovery_window: int = 300,
+        state_dir: str = ".yani",
+    ) -> None:
+        self.name = name
+        self.threshold = threshold
+        self.recovery_window = recovery_window
+        self.state_file = Path(state_dir) / f"mcp_cb_{name}.json"
+
+    def _read_state(self) -> dict:
+        if not self.state_file.exists():
+            return {"failures": 0, "last_failure": 0.0}
+        try:
+            return json.loads(self.state_file.read_text(encoding="utf-8"))
+        except Exception:
+            return {"failures": 0, "last_failure": 0.0}
+
+    def _write_state(self, state: dict) -> None:
+        try:
+            self.state_file.parent.mkdir(parents=True, exist_ok=True)
+            temp_file = self.state_file.with_suffix(f".tmp.{os.getpid()}")
+            temp_file.write_text(json.dumps(state), encoding="utf-8")
+            os.replace(temp_file, self.state_file)
+        except Exception:
+            pass
+
+    def is_open(self) -> bool:
+        state = self._read_state()
+        if state.get("failures", 0) >= self.threshold:
+            if time.time() - state.get("last_failure", 0.0) < self.recovery_window:
+                return True
+            else:
+                # Half-open: reset to threshold - 1 so single failure trips again
+                self._write_state(
+                    {"failures": self.threshold - 1, "last_failure": time.time()}
+                )
+                return False
+        return False
+
+    def record_failure(self) -> None:
+        state = self._read_state()
+        state["failures"] = state.get("failures", 0) + 1
+        state["last_failure"] = time.time()
+        self._write_state(state)
+
+    def record_success(self) -> None:
+        try:
+            if self.state_file.exists():
+                self.state_file.unlink()
+        except Exception:
+            pass
 
 
 def create_mcp_wrapper(server_name: str, tool, mcp_sessions: dict, mcp_locks: dict, config):
@@ -132,9 +197,13 @@ async def connect_mcp(
     Initialise all MCP server connections and register wrappers on
     orchestrator.gemini_tools and orchestrator.mcp_sessions.
 
-    Each server is independently guarded: failure to connect one does
-    not abort the others. The orchestrator continues in degraded mode
-    with the surviving servers.
+    Each server is independently circuit-breaker protected and timeout-bounded:
+    - Subprocess initialization: timeout=15.0s
+    - stdio transport and session initialization: timeout=10.0s
+    - list_tools RPC: timeout=10.0s
+
+    Failures trip the PersistentCircuitBreaker to prevent repeated stalls
+    across ephemeral CLI runs.
 
     Args:
         orchestrator: The active LLMOrchestrator. Its exit_stack,
@@ -154,58 +223,81 @@ async def connect_mcp(
     # ------------------------------------------------------------------
     # 1. CodeGraph MCP
     # ------------------------------------------------------------------
-    try:
-        if not os.path.exists(".codegraph"):
-            os.makedirs(".codegraph", exist_ok=True)
-            print("Initializing CodeGraph index...", file=sys.stderr)
-            import subprocess
-            await asyncio.to_thread(
-                subprocess.run,
-                ["npx", "--yes", "--package=@colbymchenry/codegraph", "codegraph", "init"],
-                check=True,
+    cg_cb = PersistentCircuitBreaker("codegraph")
+    if not cg_cb.is_open():
+        try:
+            if not os.path.exists(".codegraph/codegraph.json"):
+                os.makedirs(".codegraph", exist_ok=True)
+                print("Initializing CodeGraph index...", file=sys.stderr)
+                await asyncio.to_thread(
+                    subprocess.run,
+                    ["npx", "--yes", "--package=@colbymchenry/codegraph", "codegraph", "init"],
+                    check=True,
+                    timeout=15.0,
+                )
+
+            codegraph_params = StdioServerParameters(
+                command="npx",
+                args=["--yes", "--quiet", "--package=@colbymchenry/codegraph", "codegraph", "serve", "--mcp"],
             )
+            codegraph_transport, codegraph_stream = await asyncio.wait_for(
+                exit_stack.enter_async_context(stdio_client(codegraph_params)),
+                timeout=10.0,
+            )
+            codegraph_session = await exit_stack.enter_async_context(
+                ClientSession(codegraph_transport, codegraph_stream)
+            )
+            await asyncio.wait_for(codegraph_session.initialize(), timeout=10.0)
+            cg_tools = await asyncio.wait_for(codegraph_session.list_tools(), timeout=10.0)
 
-        codegraph_params = StdioServerParameters(
-            command="npx",
-            args=["--yes", "--quiet", "--package=@colbymchenry/codegraph", "codegraph", "serve", "--mcp"],
-        )
-        codegraph_transport, codegraph_stream = await exit_stack.enter_async_context(
-            stdio_client(codegraph_params)
-        )
-        codegraph_session = await exit_stack.enter_async_context(
-            ClientSession(codegraph_transport, codegraph_stream)
-        )
-        await codegraph_session.initialize()
-        cg_tools = await codegraph_session.list_tools()
-
-        for tool in cg_tools.tools:
-            gemini_tools.append(_make_wrapper("codegraph", tool))
-        mcp_sessions["codegraph"] = codegraph_session
-    except Exception as e:
-        print(f"CodeGraph MCP degraded: {e}", file=sys.stderr)
+            for tool in cg_tools.tools:
+                gemini_tools.append(_make_wrapper("codegraph", tool))
+            mcp_sessions["codegraph"] = codegraph_session
+            cg_cb.record_success()
+        except subprocess.TimeoutExpired:
+            print("CodeGraph init timed out (npx stalled).", file=sys.stderr)
+            cg_cb.record_failure()
+        except asyncio.TimeoutError:
+            print("CodeGraph RPC handshake timed out.", file=sys.stderr)
+            cg_cb.record_failure()
+        except Exception as e:
+            print(f"CodeGraph MCP degraded: {e}", file=sys.stderr)
+            cg_cb.record_failure()
+    else:
+        print("CodeGraph MCP Circuit Breaker OPEN: Skipping connection.", file=sys.stderr)
 
     # ------------------------------------------------------------------
     # 2. Context7 MCP
     # ------------------------------------------------------------------
-    try:
-        context7_params = StdioServerParameters(
-            command="npx",
-            args=["--yes", "--quiet", "@upstash/context7-mcp"],
-        )
-        context7_transport, context7_stream = await exit_stack.enter_async_context(
-            stdio_client(context7_params)
-        )
-        context7_session = await exit_stack.enter_async_context(
-            ClientSession(context7_transport, context7_stream)
-        )
-        await context7_session.initialize()
-        c7_tools = await context7_session.list_tools()
+    c7_cb = PersistentCircuitBreaker("context7")
+    if not c7_cb.is_open():
+        try:
+            context7_params = StdioServerParameters(
+                command="npx",
+                args=["--yes", "--quiet", "@upstash/context7-mcp"],
+            )
+            context7_transport, context7_stream = await asyncio.wait_for(
+                exit_stack.enter_async_context(stdio_client(context7_params)),
+                timeout=10.0,
+            )
+            context7_session = await exit_stack.enter_async_context(
+                ClientSession(context7_transport, context7_stream)
+            )
+            await asyncio.wait_for(context7_session.initialize(), timeout=10.0)
+            c7_tools = await asyncio.wait_for(context7_session.list_tools(), timeout=10.0)
 
-        for tool in c7_tools.tools:
-            gemini_tools.append(_make_wrapper("context7", tool))
-        mcp_sessions["context7"] = context7_session
-    except Exception as e:
-        print(f"Context7 MCP degraded: {e}", file=sys.stderr)
+            for tool in c7_tools.tools:
+                gemini_tools.append(_make_wrapper("context7", tool))
+            mcp_sessions["context7"] = context7_session
+            c7_cb.record_success()
+        except asyncio.TimeoutError:
+            print("Context7 RPC handshake timed out.", file=sys.stderr)
+            c7_cb.record_failure()
+        except Exception as e:
+            print(f"Context7 MCP degraded: {e}", file=sys.stderr)
+            c7_cb.record_failure()
+    else:
+        print("Context7 MCP Circuit Breaker OPEN: Skipping connection.", file=sys.stderr)
 
     # 3. Set codegraph health flag for tool filtering
     existing_names = [getattr(t, "__name__", "") for t in gemini_tools]
