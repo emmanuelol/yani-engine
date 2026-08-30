@@ -239,3 +239,56 @@ stateDiagram-v2
 * **Storage**: Serialized JSON state saved at `.yani/cache/circuit_breaker_{server_name}.json`.
 * **Cross-Execution Resilience**: Circuit trip state survives engine reboots, preventing cascading boot-loops on unresponsive local services.
 
+---
+
+## 10. Ephemeral Worker Sandbox (Git Worktree Isolation)
+
+Parallel worker tasks requiring Docker test execution are provisioned using isolated Git Worktrees rather than physical directory copies:
+
+```mermaid
+flowchart TD
+    A["Task Dispatch (worker_id)"] --> B{"Is Git Repository?"}
+    B -- Yes --> C["git worktree add -b yani-worker-{id} .yani/shadow_{id} HEAD"]
+    B -- No / No HEAD --> D["Atomic copytree with ignore patterns"]
+    
+    C --> E["Mount .yani/shadow_{id} to /workspace in Docker (yani-base)"]
+    D --> E
+    
+    E --> F["Execute Sub-Agent Test Loop"]
+    F --> G["_teardown_warm_sandbox / atexit hooks"]
+    
+    G --> H["git worktree remove --force + git branch -D"]
+    G --> I["git worktree prune"]
+```
+
+### Key Sandbox Invariants:
+1. **Zero-Copy Performance**: Instantaneous filesystem mount creation by linking into Git's internal object store without duplication overhead.
+2. **Crash & Orphan Recovery**: Running `_cleanup_all_sandboxes` on `atexit` ensures unpruned worktrees and stale container instances are reliably recycled after interrupts.
+3. **Fail-Safe Fallback**: If running inside non-git environments or unit test fixtures without an initial commit, the system automatically falls back to atomic directory copying.
+
+---
+
+## 11. Pydantic Tool Validation Boundary & Token-Bleed Envelope
+
+To protect `memory.md` from state corruption and prevent context-window explosion during tool execution turns:
+
+```mermaid
+flowchart LR
+    A["LLM Tool Call"] --> B{"Pydantic Model Validation"}
+    B -- Valid Payload --> C["Acquire _MEMORY_MUTEX & _REGISTRY_LOCK"]
+    C --> D["Mutate State Cache & Disk Flush"]
+    
+    B -- ValidationError --> E{"Format Error Message"}
+    E -->|Length > 1400| F["Truncate to 1400 chars + [TRUNCATED] Warning"]
+    E -->|Length <= 1400| G["Raw JSON Error"]
+    
+    F --> H["Return to LLM for Self-Correction (<= 1600 chars total)"]
+    G --> H
+```
+
+### Architectural Guarantees:
+* **Pre-Mutex Boundary**: Input validation occurs before locks are acquired, preventing lock contention or deadlock on hallucinated arguments.
+* **Schema Integrity**: `UpdateTaskStatusPayload` enforces valid status enums (`pending`, `in_progress`, `completed`, `interrupted`, etc.) and regex task ID formats (`^T-\d{3,4}$`).
+* **Strict Character Capping**: `_format_validation_error` bounds return traces to $\le 1600$ characters, giving the LLM actionable error feedback without flooding prompt history on massive hallucinated strings.
+
+
