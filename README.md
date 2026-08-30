@@ -155,7 +155,7 @@ yani-engine also supports **Native Antigravity Integration**. If the plugin dete
 
 yani-engine prioritizes safety during execution with two primary mechanisms:
 * **VS Code Diff-Gate**: File changes are written to a shadow `.tmp` copy while the original is backed up in `.yani/rollbacks/{task_id}/`. If you reject a change during review, yani-engine automatically restores the original file. If VS Code is unavailable, a terminal-native `rich` diff is used.
-* **Zero-Trust Docker Sandbox (Shadow Clone Isolation)**: Sub-agents execute testing within a fully isolated Docker container (`yani-base:latest`) using the "Shadow Clone" pattern. The codebase is safely cloned into `.yani/shadow_{worker_id}`, providing agents with a fully mutable playground that prevents container crashes when installing packages or writing cache files.
+* **Zero-Trust Docker Sandbox (Git Worktree Isolation)**: Sub-agents execute testing and bash operations inside isolated Docker containers (`yani-base:latest`) mounted to ephemeral Git Worktrees (`.yani/shadow_{worker_id}`). By leveraging Git's internal object store rather than physical directory duplication, sandbox provisioning is instantaneous with zero disk bloat. Includes automatic fallback to atomic copies for non-git workspaces, plus crash-resilient branch/worktree pruning hooks.
 
 ---
 
@@ -174,10 +174,10 @@ graph TD
     
     EXE -->|"Agent Loop & Backoff"| AGT["yani_engine/core/agent_loop.py"]
     EXE -->|"Prompt Composition"| PMT["yani_engine/core/prompts.py"]
-    EXE -->|"Process-Isolated Sandbox"| SB["yani_engine/core/sandbox.py"]
+    EXE -->|"Git Worktree Sandbox"| SB["yani_engine/core/sandbox.py"]
     
     ORC -->|"Multi-Loop Async Mutex"| LCK["yani_engine/core/locks.py"]
-    ORC -->|"AST State Machine & Cache"| ST["yani_engine/core/state.py"]
+    ORC -->|"Pydantic Bouncer & AST DOM"| ST["yani_engine/core/state.py"]
     ORC -->|"Semantic Wave Planning"| PL["yani_engine/core/planner.py"]
     
     ORC -->|"Resilient MCP (Circuit Breaker)"| MCP["CodeGraph & Context7"]
@@ -219,10 +219,12 @@ External MCP subprocesses (`npx` codegraph and context7) are protected by a stat
 
 ---
 
-## ⚡ Token Optimization Architecture
+## ⚡ Token Optimization & State Bouncers
 
-yani-engine employs advanced strategies to minimize API token consumption:
+yani-engine employs multi-layered defense to minimize API token consumption and safeguard LLM context windows:
 * **Caveman Integration**: Enforces ultra-compressed communication, cutting token usage by up to 75%.
+* **Pydantic Tool Bouncers**: All state-mutation tools (`update_task_registry_row`, `register_task_batch`) validate inputs against strict Pydantic schemas (`UpdateTaskStatusPayload`, `TaskBatchPayload`) before acquiring memory mutexes.
+* **Token-Bleed Envelope Guardrails**: If an LLM hallucinates a massive malformed payload (e.g. 50k+ characters), the validation error trace is strictly capped at $\le 1600$ characters with a `[TRUNCATED]` warning, preventing catastrophic prompt history bloat while preserving actionable error feedback for self-correction.
 * **Dynamic Tool Filtering**: Commands receive only the exact tools they need.
 * **Sliced Memory Ingestion**: Injects only targeted sections of `memory.md` during loops.
 * **Mid-Loop Budget Enforcement**: Validates token budgets after every tool cycle to prevent unbounded consumption.
