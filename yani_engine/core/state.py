@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from yani_engine.core.locks import _MEMORY_MUTEX, _KNOWLEDGE_MUTEX, _REGISTRY_LOCK, get_registry_lock, _FILE_LOCK
 from markdown_it import MarkdownIt
 import sys
