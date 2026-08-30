@@ -50,6 +50,7 @@ async def test_batch_diff_review_rejection_restores_and_cleans_tmp(tmp_path):
 
         # Prompt user with 'N' (Reject all changes)
         with patch("rich.prompt.Prompt.ask", return_value="N"), \
+             patch("shutil.which", return_value=None), \
              patch("yani_engine.core.config.config.verbose", True):
             await batch_diff_review([tmp_file])
 
@@ -101,6 +102,7 @@ async def test_batch_diff_review_approval_applies_changes(tmp_path):
 
         # Prompt user with 'Y' (Approve all changes)
         with patch("rich.prompt.Prompt.ask", return_value="Y"), \
+             patch("shutil.which", return_value=None), \
              patch("yani_engine.core.config.config.verbose", True):
             await batch_diff_review([tmp_file])
 
