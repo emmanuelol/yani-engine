@@ -1,4 +1,5 @@
 import asyncio
+from contextlib import asynccontextmanager
 import os
 import subprocess
 import time
@@ -7,6 +8,27 @@ import pytest
 
 from yani_engine.core.mcp_manager import PersistentCircuitBreaker, connect_mcp
 from yani_engine.core.orchestrator import LLMOrchestrator
+
+
+class MockSession:
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        pass
+
+    async def initialize(self):
+        pass
+
+    async def list_tools(self):
+        m = MagicMock()
+        m.tools = []
+        return m
+
+
+@asynccontextmanager
+async def mock_stdio_cm(*args, **kwargs):
+    yield (MagicMock(), MagicMock())
 
 
 def test_persistent_circuit_breaker_lifecycle(tmp_path):
@@ -53,6 +75,8 @@ async def test_connect_mcp_subprocess_timeout(tmp_path):
     with patch("os.path.exists", return_value=False), \
          patch("os.makedirs"), \
          patch("asyncio.to_thread", side_effect=subprocess.TimeoutExpired(cmd="npx", timeout=15.0)), \
+         patch("yani_engine.core.mcp_manager.stdio_client", side_effect=mock_stdio_cm), \
+         patch("yani_engine.core.mcp_manager.ClientSession", side_effect=lambda *a, **k: MockSession()), \
          patch("yani_engine.core.mcp_manager.PersistentCircuitBreaker") as mock_cb_cls:
 
         mock_cb = MagicMock()
@@ -75,6 +99,8 @@ async def test_connect_mcp_rpc_timeout(tmp_path):
 
     with patch("os.path.exists", return_value=True), \
          patch("asyncio.wait_for", side_effect=asyncio.TimeoutError()), \
+         patch("yani_engine.core.mcp_manager.stdio_client", side_effect=mock_stdio_cm), \
+         patch("yani_engine.core.mcp_manager.ClientSession", side_effect=lambda *a, **k: MockSession()), \
          patch("yani_engine.core.mcp_manager.PersistentCircuitBreaker") as mock_cb_cls:
 
         mock_cb = MagicMock()
@@ -142,6 +168,8 @@ async def test_connect_mcp_codegraph_empty_dir_triggers_init(tmp_path):
     with patch("os.path.exists", side_effect=exists_side_effect), \
          patch("os.makedirs"), \
          patch("asyncio.to_thread") as mock_to_thread, \
+         patch("yani_engine.core.mcp_manager.stdio_client", side_effect=mock_stdio_cm), \
+         patch("yani_engine.core.mcp_manager.ClientSession", side_effect=lambda *a, **k: MockSession()), \
          patch("yani_engine.core.mcp_manager.PersistentCircuitBreaker") as mock_cb_cls:
 
         mock_to_thread.side_effect = subprocess.TimeoutExpired(cmd="npx", timeout=15.0)
