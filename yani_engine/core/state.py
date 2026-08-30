@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from yani_engine.core.locks import _MEMORY_MUTEX, _KNOWLEDGE_MUTEX, _REGISTRY_LOCK, get_registry_lock, _FILE_LOCK
 from markdown_it import MarkdownIt
 import sys
@@ -13,6 +15,125 @@ import shutil
 import filecmp
 from filelock import FileLock
 import filelock
+
+
+def split_markdown_cells(line: str) -> list[str]:
+    """Splits a markdown table row into cells, respecting escaped pipes (\\|) and inline code spans (`...`)."""
+    stripped = line.strip()
+    if not stripped:
+        return []
+
+    chars = list(stripped)
+    # Strip leading pipe if present
+    if chars and chars[0] == "|":
+        chars = chars[1:]
+    # Strip trailing pipe if present (and not escaped)
+    if chars and chars[-1] == "|" and (len(chars) < 2 or chars[-2] != "\\"):
+        chars = chars[:-1]
+
+    cells = []
+    current = []
+    in_code = False
+    i = 0
+    while i < len(chars):
+        c = chars[i]
+        if c == "`":
+            in_code = not in_code
+            current.append(c)
+            i += 1
+        elif c == "\\" and i + 1 < len(chars) and chars[i + 1] == "|":
+            # Escaped pipe
+            if in_code:
+                current.append("\\|")
+            else:
+                current.append("|")
+            i += 2
+        elif c == "|" and not in_code:
+            cells.append("".join(current).strip())
+            current = []
+            i += 1
+        else:
+            current.append(c)
+            i += 1
+    cells.append("".join(current).strip())
+    return cells
+
+
+def format_markdown_cell(val: any) -> str:
+    """Sanitizes cell value for markdown table formatting, escaping pipes and replacing raw newlines."""
+    if val is None:
+        return "—"
+    s = str(val)
+    # Normalize newlines
+    s = s.replace("\r\n", " ").replace("\n", "<br>")
+    # Escape unescaped pipes outside code spans
+    if "`" not in s:
+        s = s.replace("\\|", "|").replace("|", "\\|")
+    else:
+        res = []
+        in_code = False
+        i = 0
+        while i < len(s):
+            c = s[i]
+            if c == "`":
+                in_code = not in_code
+                res.append(c)
+            elif c == "|" and not in_code:
+                if i > 0 and s[i - 1] == "\\":
+                    res.append("|")
+                else:
+                    res.append("\\|")
+            else:
+                res.append(c)
+            i += 1
+        s = "".join(res)
+    return s.strip()
+
+
+def format_markdown_row(cells: list[any]) -> str:
+    """Renders a list of cell values into a standard markdown table row."""
+    formatted = [format_markdown_cell(c) for c in cells]
+    return "| " + " | ".join(formatted) + " |"
+
+
+class MarkdownTable:
+    """Parser, serializer, and CRUD wrapper for Markdown tables within markdown blocks."""
+
+    def __init__(self, raw_lines: list[str]) -> None:
+        self.header_idx = -1
+        self.delimiter_idx = -1
+        self.headers: list[str] = []
+        self.rows: list[tuple[int, list[str]]] = []  # (original_line_idx, cells)
+        self.raw_lines = list(raw_lines)
+        self._parse()
+
+    def _parse(self) -> None:
+        for idx, line in enumerate(self.raw_lines):
+            stripped = line.strip()
+            if not stripped.startswith("|"):
+                continue
+            cells = split_markdown_cells(stripped)
+            if not cells:
+                continue
+
+            is_delimiter = all(set(c).issubset({"-", ":", " "}) and "-" in c for c in cells)
+
+            if self.header_idx == -1:
+                if not is_delimiter:
+                    self.header_idx = idx
+                    self.headers = cells
+            elif is_delimiter:
+                if self.delimiter_idx == -1:
+                    self.delimiter_idx = idx
+            else:
+                self.rows.append((idx, cells))
+
+    def get_column_index(self, col_name: str) -> int:
+        col_lower = col_name.lower().strip()
+        for i, h in enumerate(self.headers):
+            if col_lower in h.lower().strip():
+                return i
+        return -1
 
 
 class ASTMemoryMapper:
@@ -66,77 +187,124 @@ class ASTMemoryMapper:
             with open(file_path, "r", encoding="utf-8") as f:
                 content = f.read()
             start_idx, end_idx = ASTMemoryMapper.locate_heading_block(content, "##", header_title)
-            if start_idx == -1: return False
+            if start_idx == -1:
+                return False
             lines = content.splitlines()
             block = lines[start_idx:end_idx]
-            insert_idx = end_idx
-            for i in range(len(block)-1, -1, -1):
-                if block[i].strip():
-                    insert_idx = start_idx + i + 1
+
+            # Find the last table row line inside the target heading block
+            last_table_idx = -1
+            for i in range(len(block) - 1, -1, -1):
+                line_str = block[i].strip()
+                if line_str.startswith("|") and not line_str.startswith("|---"):
+                    last_table_idx = start_idx + i
                     break
+
+            if last_table_idx != -1:
+                insert_idx = last_table_idx + 1
+            else:
+                insert_idx = end_idx
+                for i in range(len(block) - 1, -1, -1):
+                    if block[i].strip():
+                        insert_idx = start_idx + i + 1
+                        break
+
             lines.insert(insert_idx, new_row)
-            with open(file_path, "w", encoding="utf-8") as f:
-                f.write("\n".join(lines) + "\n")
+            _atomic_write_memory_unlocked("\n".join(lines) + "\n")
             return True
         except Exception:
             return False
 
-# Deprecate the old block-replace tool
-# async def update_memory_registry(section_header: str, new_content: str) -> str: ...
 
-# Create a surgical row-update tool exposed to the LLM
-_TASK_CACHE = None
-_CACHE_DIRTY = False
+class TaskRegistryCache:
+    """Thread-safe and async-safe deferred cache manager for task registry rows."""
+
+    def __init__(self) -> None:
+        self._cache: dict | None = None
+        self._dirty: bool = False
+        self._lock: asyncio.Lock | None = None
+
+    def _get_lock(self) -> asyncio.Lock:
+        if self._lock is None:
+            self._lock = asyncio.Lock()
+        return self._lock
+
+    async def get_or_load(self, state: TaskRegistryState) -> dict:
+        async with self._get_lock():
+            if self._cache is None:
+                self._cache = state._load_tasks_unlocked()
+            return self._cache
+
+    async def update_task(
+        self,
+        task_id: str,
+        new_status: str,
+        new_owner: str = "—",
+        checkpoint_id: str = None,
+        state: TaskRegistryState | None = None,
+    ) -> str:
+        async with self._get_lock():
+            if self._cache is None:
+                if state is None:
+                    state = TaskRegistryState()
+                self._cache = state._load_tasks_unlocked()
+
+            if task_id not in self._cache:
+                return f"Error: Task {task_id} not found."
+
+            self._cache[task_id]["status"] = new_status
+            self._cache[task_id]["owner"] = new_owner
+            if checkpoint_id:
+                self._cache[task_id]["checkpoint"] = checkpoint_id
+
+            self._dirty = True
+            return f"Successfully updated {task_id} to {new_status} (Cached)."
+
+    async def flush(self, state: TaskRegistryState | None = None) -> None:
+        async with self._get_lock():
+            if not self._dirty or self._cache is None:
+                return
+            if state is None:
+                state = TaskRegistryState()
+
+            def _sync():
+                with _FILE_LOCK:
+                    state._sync_to_markdown_unlocked(self._cache)
+
+            await asyncio.to_thread(_sync)
+            self._dirty = False
+            print("💾 [STATE] Successfully flushed registry cache to disk.")
+
+    def invalidate(self) -> None:
+        self._cache = None
+        self._dirty = False
+
+
+_REGISTRY_CACHE = TaskRegistryCache()
+
 
 async def update_task_registry_row(task_id: str, new_status: str, new_owner: str = "—", checkpoint_id: str = None) -> str:
     """Surgically updates a task's status in memory, deferred disk flush."""
-    global _TASK_CACHE, _CACHE_DIRTY
     async with _MEMORY_MUTEX:
         async with get_registry_lock():
             try:
                 state = TaskRegistryState()
-                
-                # HYBRID OPTIMIZATION: Load once, cache indefinitely during execution
-                if _TASK_CACHE is None:
-                    _TASK_CACHE = state._load_tasks_unlocked()
-                
-                if task_id not in _TASK_CACHE:
-                    return f"Error: Task {task_id} not found."
-                
-                _TASK_CACHE[task_id]["status"] = new_status
-                _TASK_CACHE[task_id]["owner"] = new_owner
-                if checkpoint_id:
-                    _TASK_CACHE[task_id]["checkpoint"] = checkpoint_id
-                
-                _CACHE_DIRTY = True
-                success_msg = f"Successfully updated {task_id} to {new_status} (Cached)."
-                return success_msg
+                return await _REGISTRY_CACHE.update_task(task_id, new_status, new_owner, checkpoint_id, state)
             except Exception as e:
                 return f"Error updating registry: {e}"
 
+
 async def flush_task_registry():
     """Flushes the deferred state cache to disk."""
-    global _TASK_CACHE, _CACHE_DIRTY
-    if not _CACHE_DIRTY or _TASK_CACHE is None:
-        return
-        
     async with _MEMORY_MUTEX:
         async with get_registry_lock():
-            def _sync():
-                with _FILE_LOCK:
-                    state = TaskRegistryState()
-                    state._sync_to_markdown_unlocked(_TASK_CACHE)
-            await asyncio.to_thread(_sync)
-            _CACHE_DIRTY = False
-            print("💾 [STATE] Successfully flushed registry cache to disk.")
-        
-
+            state = TaskRegistryState()
+            await _REGISTRY_CACHE.flush(state)
 
 
 def _invalidate_task_cache():
-    global _TASK_CACHE, _CACHE_DIRTY
-    _TASK_CACHE = None
-    _CACHE_DIRTY = False
+    _REGISTRY_CACHE.invalidate()
+
 
 def _atomic_write_memory_unlocked(content: str):
     import os, uuid
@@ -159,62 +327,63 @@ class CheckpointManager:
         if os.path.exists(target_path):
             os.makedirs(os.path.dirname(rollback_path), exist_ok=True)
             shutil.copy2(target_path, rollback_path)
-            
+
     async def log_planned_change(self, target_path: str, metadata: dict):
         timestamp = metadata.get("Timestamp", "")
         task_id = metadata.get("Task ID", "")
         summary = metadata.get("Change Summary", "")
         rationale = metadata.get("Rationale", "")
-        row = f"| {timestamp} | {task_id} | {target_path} | {summary} | planned | {rationale} |"
+        row = format_markdown_row([timestamp, task_id, target_path, summary, "planned", rationale])
         async with _MEMORY_MUTEX:
             async with get_registry_lock():
                 ASTMemoryMapper.append_to_markdown_table("memory.md", "Change Log", row)
-        
+
     async def write_checkpoint_json(self, checkpoint_path: str, metadata: dict):
         os.makedirs(os.path.dirname(checkpoint_path), exist_ok=True)
         with open(checkpoint_path, "w") as f:
             import json
             json.dump(metadata, f, indent=2)
-            
+
         checkpoint_id = metadata.get("Checkpoint ID", "")
         task_id = metadata.get("Task ID", "")
         step = metadata.get("Step", "")
         session_id = metadata.get("Session ID", "")
         files_snapshotted = metadata.get("Files Snapshotted", "")
-        row = f"| {checkpoint_id} | {task_id} | {step} | {session_id} | {files_snapshotted} |"
+        row = format_markdown_row([checkpoint_id, task_id, step, session_id, files_snapshotted])
         async with _MEMORY_MUTEX:
             async with get_registry_lock():
                 ASTMemoryMapper.append_to_markdown_table("memory.md", "Checkpoint Registry", row)
-            
+
     async def stage_tmp_write(self, tmp_path: str, content: str):
         os.makedirs(os.path.dirname(tmp_path), exist_ok=True)
         with open(tmp_path, "w") as f:
             f.write(content)
-            
+
     async def atomic_rename_to_target(self, tmp_path: str, target_path: str):
         os.replace(tmp_path, target_path)
-        
+
     async def log_applied_change(self, target_path: str, metadata: dict):
         timestamp = metadata.get("Timestamp", "")
         task_id = metadata.get("Task ID", "")
         summary = metadata.get("Change Summary", "")
         rationale = metadata.get("Rationale", "")
-        row = f"| {timestamp} | {task_id} | {target_path} | {summary} | applied | {rationale} |"
+        row = format_markdown_row([timestamp, task_id, target_path, summary, "applied", rationale])
         async with _MEMORY_MUTEX:
             async with get_registry_lock():
                 ASTMemoryMapper.append_to_markdown_table("memory.md", "Change Log", row)
+
 
 class OrphanRecoveryScanner:
     async def run(self, unattended=False):
         tmp_dir = ".yani/tmp"
         chk_dir = ".yani/checkpoints"
         bak_dir = ".yani/rollbacks"
-        
+
         # HYBRID OPTIMIZATION: Fast-Path bypass
         has_tmp = os.path.exists(tmp_dir) and bool(os.listdir(tmp_dir))
         has_chk = os.path.exists(chk_dir) and bool(os.listdir(chk_dir))
         has_bak = os.path.exists(bak_dir) and bool(os.listdir(bak_dir))
-        
+
         if not (has_tmp or has_chk or has_bak):
             from yani_engine.core.config import config
             if unattended and getattr(config, 'verbose', False):
@@ -223,84 +392,82 @@ class OrphanRecoveryScanner:
             return
 
         async with _MEMORY_MUTEX:
-          async with get_registry_lock():
-            
-            if unattended:
+            async with get_registry_lock():
+                if unattended:
+                    from rich.console import Console
+                    Console().print("[yellow]Unattended mode: Auto-resolving safe orphans, skipping interactive prompts.[/yellow]")
+                os.makedirs(tmp_dir, exist_ok=True)
+                os.makedirs(chk_dir, exist_ok=True)
+                os.makedirs(bak_dir, exist_ok=True)
+
+                change_log = []
+                content = ""
+                try:
+                    with open("memory.md", "r", encoding="utf-8") as f:
+                        content = f.read()
+                    start_idx, end_idx = ASTMemoryMapper.locate_heading_block(content, "##", "Change Log")
+                    if start_idx != -1:
+                        lines = content.splitlines()[start_idx + 1 : end_idx]
+                        for line in lines:
+                            if line.strip().startswith("|") and "---" not in line and "Timestamp" not in line:
+                                parts = split_markdown_cells(line)
+                                if len(parts) >= 5:
+                                    change_log.append({
+                                        "chk_id": parts[1],
+                                        "target": parts[2],
+                                        "status": parts[4],
+                                        "line_text": line,
+                                    })
+                except FileNotFoundError:
+                    pass
+
+                from rich.prompt import Confirm
                 from rich.console import Console
-                Console().print("[yellow]Unattended mode: Auto-resolving safe orphans, skipping interactive prompts.[/yellow]")
-            os.makedirs(tmp_dir, exist_ok=True)
-            os.makedirs(chk_dir, exist_ok=True)
-            os.makedirs(bak_dir, exist_ok=True)
-                
-            change_log = []
-            content = ""
-            try:
-                with open("memory.md", "r", encoding="utf-8") as f:
-                    content = f.read()
-                start_idx, end_idx = ASTMemoryMapper.locate_heading_block(content, "##", "Change Log")
-                if start_idx != -1:
-                    lines = content.splitlines()[start_idx+1:end_idx]
-                    for line in lines:
-                        if line.strip().startswith("|") and "---" not in line and "Timestamp" not in line:
-                            parts = [p.strip() for p in line.split("|")]
-                            if len(parts) >= 6:
-                                change_log.append({
-                                    "chk_id": parts[2],
-                                    "target": parts[3],
-                                    "status": parts[5],
-                                    "line_text": line,
-                                })
-            except FileNotFoundError:
-                pass
-    
-            from rich.prompt import Confirm
-            from rich.console import Console
-            console = Console()
-            
-            planned_chks = [c for c in change_log if c["status"].strip() == "planned"]
-            if not planned_chks:
-                return
-                
-            console.print("[yellow]Found unresolved planned changes in ledger. Attempting recovery...[/yellow]")
-            new_content = content
-            for entry in planned_chks:
-                task_id = entry["chk_id"]
-                target = entry["target"]
-                
-                encoded_path = target.replace("/", "__").replace(":", "__colon__")
-                possible_rollback = os.path.join(bak_dir, task_id, encoded_path)
-                
-                bak_file = None
-                if os.path.exists(possible_rollback):
-                    bak_file = possible_rollback
-                else:
-                    bak_files = glob.glob(os.path.join(bak_dir, "*", encoded_path))
-                    if bak_files:
-                        bak_file = bak_files[0]
-                        
-                if bak_file:
-                    if os.path.exists(target) and filecmp.cmp(target, bak_file, shallow=False):
-                        new_status = "rolled-back"
+                console = Console()
+
+                planned_chks = [c for c in change_log if c["status"].strip() == "planned"]
+                if not planned_chks:
+                    return
+
+                console.print("[yellow]Found unresolved planned changes in ledger. Attempting recovery...[/yellow]")
+                new_content = content
+                for entry in planned_chks:
+                    task_id = entry["chk_id"]
+                    target = entry["target"]
+
+                    encoded_path = target.replace("/", "__").replace(":", "__colon__")
+                    possible_rollback = os.path.join(bak_dir, task_id, encoded_path)
+
+                    bak_file = None
+                    if os.path.exists(possible_rollback):
+                        bak_file = possible_rollback
                     else:
-                        # Escalate to user warning instead of auto-promoting
-                        console.print(f"[bold red]WARNING: Task {task_id} modified {target} but was never officially completed. Leaving as 'planned' for manual review.[/bold red]")
-                        new_status = "planned"
-                else:
-                    new_status = "unknown"
-                    
-                console.print(f"O4: Resolved planned change {task_id} as {new_status}")
-                new_line = entry["line_text"].replace("| planned |", f"| {new_status} |")
-                new_content = new_content.replace(entry["line_text"], new_line)
-                
-                # Cleanup shadow tmp
-                tmp_files = glob.glob(os.path.join(tmp_dir, f"*_{encoded_path}.tmp"))
-                for t in tmp_files:
-                    if os.path.exists(t):
-                        os.remove(t)
-                        
-            if new_content != content:
-                await _async_atomic_write_memory(new_content)
-                _invalidate_task_cache()
+                        bak_files = glob.glob(os.path.join(bak_dir, "*", encoded_path))
+                        if bak_files:
+                            bak_file = bak_files[0]
+
+                    if bak_file:
+                        if os.path.exists(target) and filecmp.cmp(target, bak_file, shallow=False):
+                            new_status = "rolled-back"
+                        else:
+                            console.print(f"[bold red]WARNING: Task {task_id} modified {target} but was never officially completed. Leaving as 'planned' for manual review.[/bold red]")
+                            new_status = "planned"
+                    else:
+                        new_status = "unknown"
+
+                    console.print(f"O4: Resolved planned change {task_id} as {new_status}")
+                    new_line = entry["line_text"].replace("| planned |", f"| {new_status} |")
+                    new_content = new_content.replace(entry["line_text"], new_line)
+
+                    # Cleanup shadow tmp
+                    tmp_files = glob.glob(os.path.join(tmp_dir, f"*_{encoded_path}.tmp"))
+                    for t in tmp_files:
+                        if os.path.exists(t):
+                            os.remove(t)
+
+                if new_content != content:
+                    await _async_atomic_write_memory(new_content)
+                    _invalidate_task_cache()
 
 class TaskRegistryState:
     def __init__(self, md_path: str = "memory.md"):
@@ -316,33 +483,51 @@ class TaskRegistryState:
             with open(self.md_path, "r", encoding="utf-8") as f:
                 content = f.read()
             start_idx, end_idx = ASTMemoryMapper.locate_heading_block(content, "##", "Task Registry")
-            if start_idx == -1: return {}
-            lines = content.splitlines()[start_idx+1:end_idx]
+            if start_idx == -1:
+                return {}
+            lines = content.splitlines()[start_idx + 1 : end_idx]
+            table = MarkdownTable(lines)
+            if not table.headers:
+                return {}
+
+            id_idx = table.get_column_index("Task ID")
+            title_idx = table.get_column_index("Title")
+            type_idx = table.get_column_index("Type")
+            status_idx = table.get_column_index("Status")
+            owner_idx = table.get_column_index("Owner")
+            deps_idx = table.get_column_index("Depends") if table.get_column_index("Depends") != -1 else table.get_column_index("Deps")
+            sess_idx = table.get_column_index("Session")
+            chk_idx = table.get_column_index("Checkpoint")
+
             tasks = {}
-            for line in lines:
-                if line.strip().startswith("|") and "Task ID" not in line and "---" not in line:
-                    parts = [p.strip() for p in line.split("|")]
-                    if len(parts) >= 9:
-                        tasks[parts[1]] = {
-                            "id": parts[1],
-                            "title": parts[2],
-                            "type": parts[3],
-                            "status": parts[4],
-                            "owner": parts[5],
-                            "deps": [d.strip() for d in parts[6].split(',')] if parts[6] not in ('none', '—') else [],
-                            "session": parts[7],
-                            "checkpoint": parts[8],
-                            "original_line": line
-                        }
-                    elif len(parts) >= 5:
-                        tasks[parts[1]] = {
-                            "id": parts[1],
-                            "title": parts[2],
-                            "type": parts[3] if len(parts) > 3 else "unknown",
-                            "status": parts[4] if len(parts) > 4 else "unknown",
-                            "deps": [],
-                            "original_line": line
-                        }
+            for line_idx, cells in table.rows:
+                if id_idx == -1 or id_idx >= len(cells):
+                    continue
+                tid = cells[id_idx].strip()
+                if not tid or tid.startswith("---") or "Task ID" in tid:
+                    continue
+
+                title = cells[title_idx].strip() if title_idx != -1 and title_idx < len(cells) else ""
+                t_type = cells[type_idx].strip() if type_idx != -1 and type_idx < len(cells) else "unknown"
+                status = cells[status_idx].strip() if status_idx != -1 and status_idx < len(cells) else "unknown"
+                owner = cells[owner_idx].strip() if owner_idx != -1 and owner_idx < len(cells) else "—"
+                deps_raw = cells[deps_idx].strip() if deps_idx != -1 and deps_idx < len(cells) else "none"
+                session = cells[sess_idx].strip() if sess_idx != -1 and sess_idx < len(cells) else "—"
+                checkpoint = cells[chk_idx].strip() if chk_idx != -1 and chk_idx < len(cells) else "none"
+
+                deps_list = [d.strip() for d in deps_raw.split(",") if d.strip()] if deps_raw not in ("none", "—", "-") else []
+
+                tasks[tid] = {
+                    "id": tid,
+                    "title": title,
+                    "type": t_type,
+                    "status": status,
+                    "owner": owner,
+                    "deps": deps_list,
+                    "session": session,
+                    "checkpoint": checkpoint,
+                    "original_line": lines[line_idx] if line_idx < len(lines) else "",
+                }
 
             # Extract outputs from Task Details block
             det_start, det_end = ASTMemoryMapper.locate_heading_block(content, "##", "Task Details")
@@ -351,16 +536,16 @@ class TaskRegistryState:
                 current_task = None
                 for line in det_lines:
                     if line.startswith("### "):
-                        current_task = line.replace("### ", "").strip()
+                        current_task = line.replace("### ", "").split(":", 1)[0].strip()
                     elif current_task and current_task in tasks and "- **Outputs**:" in line:
                         out_str = line.split(":", 1)[1].strip()
                         tasks[current_task]["outputs"] = [o.strip() for o in out_str.split(",") if o.strip()]
-            
+
             # Default empty outputs
             for t_id in tasks:
                 if "outputs" not in tasks[t_id]:
                     tasks[t_id]["outputs"] = []
-                    
+
             return tasks
 
         except FileNotFoundError:
@@ -378,74 +563,66 @@ class TaskRegistryState:
         try:
             with open(self.md_path, "r", encoding="utf-8") as f:
                 content = f.read()
-            
+
             start_idx, end_idx = ASTMemoryMapper.locate_heading_block(content, "##", "Task Registry")
-            if start_idx == -1: return
+            if start_idx == -1:
+                return
             lines = content.splitlines()
+            reg_lines = lines[start_idx + 1 : end_idx]
 
-            header_line = next((l for l in lines[start_idx+1:end_idx] if "|" in l and "Task ID" in l), None)
-            stat_idx, owner_idx, sess_idx, chk_idx = 4, 5, 7, 8
-            if header_line:
-                headers = [h.strip() for h in header_line.split("|")]
-                for idx, h in enumerate(headers):
-                    if h == "Status": stat_idx = idx
-                    elif h == "Owner": owner_idx = idx
-                    elif "Session" in h: sess_idx = idx
-                    elif "Checkpoint" in h: chk_idx = idx
+            table = MarkdownTable(reg_lines)
+            if not table.headers:
+                return
 
-            new_block = []
-            for line in lines[start_idx+1:end_idx]:
-                parts = [p.strip() for p in line.split("|")]
-                if len(parts) >= 5 and "Task ID" not in parts[1] and not parts[1].strip().startswith("---"):
-                    tid = parts[1].strip()
-                    if tid in tasks:
-                        t_data = tasks[tid]
-                        max_req_idx = max(stat_idx, owner_idx, sess_idx, chk_idx)
-                        
-                        # Pad parts array if malformed without hardcoding length
-                        while len(parts) <= max_req_idx + 1:
-                            parts.append(" ")
-                            
-                        parts[stat_idx] = f" {t_data.get('status', 'unknown')} "
-                        parts[owner_idx] = f" {t_data.get('owner', '—')} "
-                        parts[sess_idx] = f" {t_data.get('session', '—')} "
-                        parts[chk_idx] = f" {t_data.get('checkpoint', 'none')} "
-                        
-                        # Preserve all trailing custom columns
-                        if parts[-1].strip() != "":
-                            parts.append("")
-                        new_block.append("|".join(parts))
-                    else:
-                        new_block.append(line)
-                else:
-                    new_block.append(line)
-            # --- NEW: Dual-Update for Task Details ---
+            id_idx = table.get_column_index("Task ID")
+            stat_idx = table.get_column_index("Status")
+            owner_idx = table.get_column_index("Owner")
+            sess_idx = table.get_column_index("Session")
+            chk_idx = table.get_column_index("Checkpoint")
+
+            new_reg_lines = list(reg_lines)
+            for row_line_idx, cells in table.rows:
+                if id_idx == -1 or id_idx >= len(cells):
+                    continue
+                tid = cells[id_idx].strip()
+                if tid in tasks:
+                    t_data = tasks[tid]
+                    max_idx = max(filter(lambda x: x != -1, [id_idx, stat_idx, owner_idx, sess_idx, chk_idx]), default=len(cells) - 1)
+                    while len(cells) <= max_idx:
+                        cells.append("—")
+
+                    if stat_idx != -1:
+                        cells[stat_idx] = t_data.get("status", "unknown")
+                    if owner_idx != -1:
+                        cells[owner_idx] = t_data.get("owner", "—")
+                    if sess_idx != -1:
+                        cells[sess_idx] = t_data.get("session", "—")
+                    if chk_idx != -1:
+                        cells[chk_idx] = t_data.get("checkpoint", "none")
+
+                    new_reg_lines[row_line_idx] = format_markdown_row(cells)
+
+            # Dual-Update for Task Details
             det_start, det_end = ASTMemoryMapper.locate_heading_block(content, "##", "Task Details")
             if det_start != -1:
                 current_task = None
                 import re
                 for i in range(det_start + 1, det_end):
-                    line = lines[i].strip()
-                    
-                    # Track which task block we are currently inside
-                    if line.startswith("### T-"):
-                        match = re.match(r"^###\s+(T-\d{3,4})", line)
-                        if match:
-                            current_task = match.group(1)
-                    
-                    # Apply cached updates to the details block
+                    line_str = lines[i].strip()
+                    if line_str.startswith("### "):
+                        m = re.match(r"^###\s+(T-\d{3,4})", line_str)
+                        if m:
+                            current_task = m.group(1)
                     if current_task and current_task in tasks:
-                        if line.startswith("- **Status**:"):
+                        if line_str.startswith("- **Status**:"):
                             lines[i] = f"- **Status**: {tasks[current_task]['status']}"
-                        elif line.startswith("- **Owner**:"):
+                        elif line_str.startswith("- **Owner**:"):
                             lines[i] = f"- **Owner**: {tasks[current_task]['owner']}"
-                        elif line.startswith("- **Checkpoint**:") and 'checkpoint' in tasks[current_task]:
+                        elif line_str.startswith("- **Checkpoint**:") and "checkpoint" in tasks[current_task]:
                             lines[i] = f"- **Checkpoint**: {tasks[current_task]['checkpoint']}"
-            # -----------------------------------------
-                        
-            new_content = "\n".join(lines[:start_idx+1] + new_block + lines[end_idx:])
-            with open(self.md_path, "w", encoding="utf-8") as f:
-                f.write(new_content)
+
+            new_content = "\n".join(lines[: start_idx + 1] + new_reg_lines + lines[end_idx:])
+            _atomic_write_memory_unlocked(new_content)
         except Exception as e:
             raise IOError(f"Critical State Error: Failed to sync task registry to memory.md: {e}")
 
@@ -578,9 +755,21 @@ async def register_task_batch(tasks: list[dict]) -> str:
                 import re
                 existing_ids = re.findall(r'T-(\d{3,4})', search_blocks)
                 next_num = max([int(x) for x in existing_ids]) + 1 if existing_ids else 1
-                
                 existing_task_ids = set([f"T-{int(x):03d}" for x in existing_ids])
-                incoming_task_ids = [f"T-{next_num + i:03d}" for i in range(len(tasks))]
+
+                incoming_task_ids = []
+                for i, task in enumerate(tasks):
+                    custom_id = task.get("id")
+                    if custom_id:
+                        if custom_id in existing_task_ids:
+                            return f"Error: Duplicate task ID {custom_id} already exists in registry. Task batch creation rejected."
+                        if custom_id in incoming_task_ids:
+                            return f"Error: Duplicate task ID {custom_id} in incoming batch. Task batch creation rejected."
+                        incoming_task_ids.append(custom_id)
+                    else:
+                        auto_id = f"T-{next_num + i:03d}"
+                        incoming_task_ids.append(auto_id)
+
                 union_task_ids = existing_task_ids.union(incoming_task_ids)
                 
                 det_start, det_end = ASTMemoryMapper.locate_heading_block(content, "##", "Task Details")
@@ -622,16 +811,21 @@ async def register_task_batch(tasks: list[dict]) -> str:
                             if d not in union_task_ids:
                                 return f"Error: Dependency {d} does not exist in registry or current batch. Task batch creation rejected."
 
-                    rows_to_insert.append(f"| {task_id} | {title} | {task_type} | pending | — | {deps} | — | none |")
+                    rows_to_insert.append(format_markdown_row([task_id, title, task_type, "pending", "—", deps, "—", "none"]))
                     details_to_insert.append(f"\n### {task_id}: {title}\n- **Type**: {task_type}\n- **Status**: pending\n- **Owner**: —\n- **Depends On**: {deps}\n- **Assigned Session**: —\n- **Description**: {description}\n- **Inputs**: none\n- **Outputs**: {outputs}\n- **Success Criteria**: {success_criteria}\n- **Estimated Effort**: {estimated_effort}\n- **Parallelizable**: yes\n- **CodeGraph Impact**: {codegraph_impact}\n- **Checkpoint**: none\n- **Resume Instructions**: none\n- **Notes**: —\n")
 
                 lines = lines[:det_end] + details_to_insert + lines[det_end:]
                 
                 reg_start_new, reg_end_new = ASTMemoryMapper.locate_heading_block("\n".join(lines), "##", "Task Registry")
                 
+                # Find exact last table row inside Task Registry block
                 reg_insert = reg_end_new
                 for i in range(reg_end_new - 1, reg_start_new, -1):
-                    if lines[i].strip():
+                    line_str = lines[i].strip()
+                    if line_str.startswith("|") and not line_str.startswith("|---"):
+                        reg_insert = i + 1
+                        break
+                    elif line_str.startswith("|---"):
                         reg_insert = i + 1
                         break
                 
@@ -742,7 +936,7 @@ async def append_session_log_row(session_id: str, task_id: str) -> str:
     """Appends a new tracking row to the Session Log table in memory.md."""
     from datetime import datetime
     start_time = datetime.now().isoformat()
-    row = f"| {session_id} | {start_time} | — | {task_id} | in_progress | — |"
+    row = format_markdown_row([session_id, start_time, "—", task_id, "in_progress"])
     async with _MEMORY_MUTEX:
         async with get_registry_lock():
             def _append():
@@ -775,16 +969,19 @@ async def read_code_block(file_path: str, symbol_name: str) -> str:
 
         # Generic fallback: keyword + exact word boundary detection
         import re
+        MAX_FALLBACK_LINES = 1000
         for i, line in enumerate(lines):
             if re.search(rf"\b(def|class|function|fn|func|struct|impl)\s+{re.escape(symbol_name)}\b", line):
                 start = i
                 indent = len(line) - len(line.lstrip())
                 end = start + 1
-                while end < len(lines):
+                lines_scanned = 0
+                while end < len(lines) and lines_scanned < MAX_FALLBACK_LINES:
                     stripped = lines[end].strip()
                     if stripped and (len(lines[end]) - len(lines[end].lstrip())) <= indent and not stripped.startswith(("#", "//", "/*", "*", "@")):
                         break
                     end += 1
+                    lines_scanned += 1
                 return f"# {file_path} lines {start+1}-{end}\n" + "\n".join(lines[start:end])
 
         return f"Symbol '{symbol_name}' not found in {file_path}"

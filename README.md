@@ -161,21 +161,26 @@ yani-engine prioritizes safety during execution with two primary mechanisms:
 
 ## 🏗️ Core Architecture (Decoupled & Modular)
 
-yani-engine has a strictly decoupled architecture designed for scale and clarity.
+yani-engine has a strictly decoupled, production-grade architecture designed for scale, resilience, and full observability.
 
 ```mermaid
 graph TD
-    CLI["yani_engine/cli/main.py"] -->|"Hydrates"| CFG["yani_engine/core/config.py"]
+    CLI["yani_engine/cli/main.py"] -->|"Hydrates Config"| CFG["yani_engine/core/config.py"]
     CLI -->|"Dispatches"| ORC["yani_engine/core/orchestrator.py"]
     
-    CFG -->|"Injects Providers"| ORC
+    ORC -->|"Telemetry Traces & Metrics"| TEL["yani_engine/core/telemetry.py"]
+    ORC -->|"Command Handlers"| CMD["yani_engine/commands/ (docs, audit, llm, resume, handlers)"]
+    ORC -->|"Wave & Task Execution"| EXE["yani_engine/core/executor.py"]
+    
+    EXE -->|"Agent Loop & Backoff"| AGT["yani_engine/core/agent_loop.py"]
+    EXE -->|"Prompt Composition"| PMT["yani_engine/core/prompts.py"]
+    EXE -->|"Process-Isolated Sandbox"| SB["yani_engine/core/sandbox.py"]
     
     ORC -->|"Multi-Loop Async Mutex"| LCK["yani_engine/core/locks.py"]
-    ORC -->|"AST State Machine"| ST["yani_engine/core/state.py"]
+    ORC -->|"AST State Machine & Cache"| ST["yani_engine/core/state.py"]
     ORC -->|"Semantic Wave Planning"| PL["yani_engine/core/planner.py"]
-    ORC -->|"Process-Isolated Sandbox"| SB["yani_engine/core/sandbox.py"]
     
-    ORC -->|"MCP RPC Protocol"| MCP["CodeGraph & Context7"]
+    ORC -->|"Resilient MCP (Circuit Breaker)"| MCP["CodeGraph & Context7"]
     ORC -->|"Provider Interface"| LLM["yani_engine/core/llm_provider.py"]
     
     LLM --> Gemini["GeminiProvider"]
@@ -188,6 +193,29 @@ graph TD
 yani-engine automatically balances cost and performance by routing tasks based on their estimated effort:
 * **The Brain (Cloud):** Heavy architectural refactors (`large` effort) are routed to powerful cloud models like `gemini-3.1-pro-preview`.
 * **The Hands (Local):** Simple file changes and audits (`small`/`medium` effort) are routed to local inference hardware via Ollama or vLLM to conserve API credits.
+
+---
+
+## 📊 OpenTelemetry & Observability
+
+yani-engine includes enterprise-grade OpenTelemetry tracing and metrics instrumentation:
+
+* **Distributed Spans (`@trace_async_step` & `trace_span`)**: Automatically creates structured spans for CLI commands (`command.execute`), parallel waves (`wave.execute`), individual worker tasks (`wave.worker_task`), LLM inference turns (`llm.send_message`), and MCP tool executions (`mcp.call_tool`).
+* **Real-Time Token & Latency Metrics**:
+  * `yani_engine_llm_tokens_total`: Counter tracking prompt, completion, cached, and total tokens per model and command.
+  * `yani_engine_llm_latency_seconds`: Histogram tracking vendor round-trip latency.
+  * `yani_engine_mcp_tool_duration_seconds`: Histogram measuring MCP RPC tool execution latency.
+  * `yani_engine_circuit_breaker_events_total`: Metric tracking circuit breaker trips and resets.
+* **OTLP / Structlog Export**: Output traces directly to OTLP collectors (Jaeger, Grafana Tempo, Honeycomb) via `--otlp-endpoint` or formatted JSON / colorized terminal logs.
+
+---
+
+## 🛡️ MCP Persistent Circuit Breaker
+
+External MCP subprocesses (`npx` codegraph and context7) are protected by a stateful `PersistentCircuitBreaker`:
+* **State Persistence**: Serializes trip state to `.yani/cache/circuit_breaker_{server}.json` with configurable TTL (default 10 minutes).
+* **Fault Isolation**: If a tool fails consecutively (threshold = 3), the circuit trips to `OPEN`, immediately fast-failing downstream calls to prevent event loop starvation.
+* **Probing / Half-Open**: Periodically probes offline servers with lightweight ping calls to automatically recover when dependencies restart.
 
 ---
 
@@ -231,6 +259,7 @@ sequenceDiagram
 * **MultiLoopAsyncLock Proxy**: Preserves global singleton object identity across imports while dynamically routing lock futures to the active event loop, preventing `RuntimeError: Event loop is closed` across multi-cycle test suites.
 * **Non-Blocking File Locking**: Cross-process `_FILE_LOCK` acquisitions run on background thread pools (`asyncio.to_thread`), preventing 120-second filesystem lock waits from freezing the main asyncio event loop.
 * **AST DOM Manipulation**: Utilizes a custom `ASTMemoryMapper` (backed by `markdown-it-py`) to manipulate markdown blocks as a structural DOM, eliminating race conditions and string-clobbering bugs.
+* **Resilient Table CRUD**: Uses `split_markdown_cells` and `format_markdown_row` to protect table serialization from unescaped pipe collisions.
 
 ---
 
@@ -238,7 +267,7 @@ sequenceDiagram
 
 * **/yani-engine start**: Ingests documentation and maps out an atomic task plan.
 * **/yani-engine execute**: Executes registered tasks in dependency order.
-* **/yani-engine iterate**: Evaluates user prompts against the current state and decomposes into tasks.
+* **/yani-engine iterate**: Evaluates user prompts against current state and decomposes into tasks.
 * **/yani-engine audit**: Runs the QA Harness Loop to autonomously generate fixes.
 * **/yani-engine resume**: Detects interrupted tasks and offers recovery options.
 * **/yani-engine rollback**: Safely restores files from checkpoints.

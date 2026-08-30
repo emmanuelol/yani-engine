@@ -11,14 +11,19 @@ graph TD
     CLI["yani_engine/cli/main.py"] -->|"Hydrates"| CFG["yani_engine/core/config.py"]
     CLI -->|"Dispatches"| ORC["yani_engine/core/orchestrator.py"]
     
-    CFG -->|"Injects Providers"| ORC
+    ORC -->|"Telemetry Traces & Metrics"| TEL["yani_engine/core/telemetry.py"]
+    ORC -->|"Command Handlers"| CMD["yani_engine/commands/ (docs, audit, llm, resume, handlers)"]
+    ORC -->|"Wave & Task Execution"| EXE["yani_engine/core/executor.py"]
+    
+    EXE -->|"Agent Loop & Backoff"| AGT["yani_engine/core/agent_loop.py"]
+    EXE -->|"Prompt Composition"| PMT["yani_engine/core/prompts.py"]
+    EXE -->|"Process-Isolated Sandbox"| SB["yani_engine/core/sandbox.py"]
     
     ORC -->|"Multi-Loop Async Mutex"| LCK["yani_engine/core/locks.py"]
-    ORC -->|"AST State Machine"| ST["yani_engine/core/state.py"]
+    ORC -->|"AST State Machine & Cache"| ST["yani_engine/core/state.py"]
     ORC -->|"Semantic Wave Planning"| PL["yani_engine/core/planner.py"]
-    ORC -->|"Process-Isolated Sandbox"| SB["yani_engine/core/sandbox.py"]
     
-    ORC -->|"MCP RPC Protocol"| MCP["CodeGraph & Context7 MCP Servers"]
+    ORC -->|"Resilient MCP (Circuit Breaker)"| MCP["CodeGraph & Context7"]
     ORC -->|"Provider Interface"| LLM["yani_engine/core/llm_provider.py"]
     
     LLM --> Gemini["GeminiProvider"]
@@ -165,3 +170,72 @@ All state mutations to `memory.md` MUST route exclusively through `update_task_r
 1. **`MultiLoopAsyncLock`**: Idempotent asyncio proxy preserving object memory addresses across imports (`id(get_registry_lock()) == id(orch_lock())`) while dynamically provisioning loop-safe `asyncio.Lock()` instances mapped to `id(asyncio.get_running_loop())`. Eliminates `RuntimeError: Event loop is closed` across multi-cycle test suites.
 2. **Non-Blocking FileLock**: Synchronous `filelock.FileLock` operations are offloaded to worker threads via `asyncio.to_thread`, preventing 120-second filesystem lock waits from stalling the main event loop.
 3. **AST DOM Manipulation**: The state machine utilizes `ASTMemoryMapper` (backed by `markdown-it-py`) to parse markdown tables into structural DOM representations, preserving arbitrary trailing columns and preventing race conditions.
+4. **Resilient Table CRUD**: Implements `split_markdown_cells` and `format_markdown_row` AST sanitization routines to prevent pipe-character payload corruption.
+
+---
+
+## 8. OpenTelemetry Observability Architecture
+
+yani-engine embeds OpenTelemetry SDK tracing and metrics into every critical execution path:
+
+```mermaid
+flowchart TD
+    subgraph Spans
+    A["command.execute"] --> B["wave.execute"]
+    B --> C["wave.worker_task"]
+    C --> D["llm.send_message"]
+    C --> E["mcp.call_tool"]
+    end
+
+    subgraph Metrics
+    D -.-> M1["yani_engine_llm_tokens_total"]
+    D -.-> M2["yani_engine_llm_latency_seconds"]
+    E -.-> M3["yani_engine_mcp_tool_duration_seconds"]
+    F["PersistentCircuitBreaker"] -.-> M4["yani_engine_circuit_breaker_events_total"]
+    end
+
+    subgraph Exporters
+    Spans --> EXP{"OTLP / Console / Structlog"}
+    Metrics --> EXP
+    EXP --> JAEGER["OTLP Collector (Jaeger / Grafana Tempo)"]
+    EXP --> CONSOLE["Structured JSON / Console Logs"]
+    end
+```
+
+### Telemetry Core Elements:
+* **`TracerProvider` & `MeterProvider`**: Initialized during orchestrator bootstrap in `init_telemetry()`. Automatically handles graceful shutdown with `shutdown_telemetry()`.
+* **Span Context Propagation**: Decorators (`@trace_async_step`) and context managers (`trace_span`) track trace ID, parent span ID, task IDs, models, error traces, and retry attempts.
+* **Structlog Formatting**: Standardized key-value structured logging with optional OTLP proto exporter via `--otlp-endpoint`.
+
+---
+
+## 9. Persistent Circuit Breaker (MCP Fault Tolerance)
+
+To prevent hung or crashing Node.js `npx` subprocesses from blocking the main agent loop, yani-engine applies a persistent circuit-breaker pattern:
+
+```mermaid
+stateDiagram-v2
+    [*] --> CLOSED
+
+    CLOSED --> OPEN : Consecutive Failures >= 3
+    note right of CLOSED
+        Normal operation.
+        RPC calls routed to MCP stdio.
+    end note
+
+    OPEN --> HALF_OPEN : Cool-off TTL Expired (10 min)
+    note right of OPEN
+        Fast-fail: calls rejected immediately.
+        State persisted to .yani/cache/
+    end note
+
+    HALF_OPEN --> CLOSED : Probe Call Succeeded
+    HALF_OPEN --> OPEN : Probe Call Failed
+    note right of HALF_OPEN
+        Lightweight health check call dispatched.
+    end note
+```
+
+* **Storage**: Serialized JSON state saved at `.yani/cache/circuit_breaker_{server_name}.json`.
+* **Cross-Execution Resilience**: Circuit trip state survives engine reboots, preventing cascading boot-loops on unresponsive local services.
+

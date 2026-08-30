@@ -32,24 +32,24 @@ async def test_iterate_manifest_options():
     assert "enrich" in option_names, "Enrich parameter is missing from the manifest."
 
 @pytest.mark.asyncio
-@patch("yani_engine.core.orchestrator.LLMOrchestrator._get_sliced_memory", new_callable=AsyncMock)
-async def test_iterate_memory_slicing_token_clamp(mock_sliced_memory):
+async def test_iterate_memory_slicing_token_clamp():
     """Verify that iterate does NOT request the token-heavy 'Task Details' section."""
     orch = LLMOrchestrator()
-    
+
     # Mock the read_file tool to provide a fake SYSTEM_INSTRUCTIONS.md to pass the setup
     async def mock_read_file(path, **kwargs):
         return "mock content"
     orch.local_tools[0] = mock_read_file
-    
-    mock_sliced_memory.return_value = "Mocked Memory Slice"
-    
-    await orch._get_system_instructions(command="iterate", task_id=None)
-    
+
+    mock_sliced_memory = AsyncMock(return_value="Mocked Memory Slice")
+    orch.prompt_builder._get_sliced_memory = mock_sliced_memory
+
+    await orch.prompt_builder._get_system_instructions(command="iterate", task_id=None)
+
     # Check the exact array passed to _get_sliced_memory
     mock_sliced_memory.assert_called_once()
     requested_sections = mock_sliced_memory.call_args[0][0]
-    
+
     assert "Task Details" not in requested_sections, "CRITICAL: Task Details must be excluded to prevent token bleed."
     assert "Task Registry" in requested_sections, "Task Registry must be included for context."
 

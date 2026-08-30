@@ -9,6 +9,8 @@ async def main_async():
     parser.add_argument("command", choices=["start", "execute", "resume", "report", "rollback", "update-docs", "audit", "iterate", "status"])
     parser.add_argument("--model", help="Model override")
     parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose mode")
+    parser.add_argument("--trace", action="store_true", help="Enable OpenTelemetry tracing")
+    parser.add_argument("--otlp-endpoint", type=str, help="OpenTelemetry OTLP endpoint URL")
     parser.add_argument("--budget-limit", type=int)
     parser.add_argument("--budget-threshold", type=int)
     parser.add_argument("--start-at", type=int)
@@ -18,6 +20,8 @@ async def main_async():
     # Hydrate the global config singleton with CLI overrides
     if args.model: config.model = args.model
     if args.verbose: config.verbose = args.verbose
+    if args.trace: config.enable_telemetry = True
+    if args.otlp_endpoint: config.otlp_endpoint = args.otlp_endpoint
     if args.budget_limit: config.budget_limit = args.budget_limit
     if args.budget_threshold: config.budget_threshold_pct = args.budget_threshold
     if args.start_at: config.start_at_index = args.start_at
