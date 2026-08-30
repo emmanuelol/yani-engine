@@ -18,14 +18,14 @@ During the planning phase, changes undergo a rigorous 10-step CodeGraph Impact A
 9. **Execution Approval**: Approves the modification scope for the execution wave.
 10. **State Registration**: Logs the blast radius data into the Task Registry field.
 
-## 3. Execution (6-Step Checkpoint & Rollback Protocol)
-When running `/yani-engine execute`, the central yani-engine logic executes tasks using its isolated `.venv`. Each file modification strictly adheres to the 6-Step Checkpoint & Rollback Protocol:
-1. **Pre-Write Snapshot**: `CheckpointManager` logs the current state of the file before any modification.
-2. **Rollback Backup Generation**: The original file is safely copied to `.yani/rollbacks/{task_id}/{encoded_path}`.
-3. **Registry Update**: A `planned` entry is created in the `Change Log` of `memory.md`.
-4. **Shadow File Creation**: The new code is written to `.yani/tmp/{task_id}_{encoded_path}.tmp` for Diff-Gate review.
-5. **Diff-Gate Review**: VS Code (or Terminal) presents the diff against the rollback backup.
-6. **Commit or Revert**: If approved, `.tmp` atomically overwrites the target; if rejected, the rollback copy is restored to clear out any intermediate artifacts.
+## 3. Execution (Zero-Copy Worktree Sandbox & Checkpoint Protocol)
+When running `/yani-engine execute`, tasks are dynamically scheduled into parallel waves. Each worker executes in an isolated environment under strict guardrails:
+1. **Ephemeral Git Worktree Allocation**: Workers requiring bash or test execution instantiate a zero-copy Git Worktree at `.yani/shadow_{worker_id}` linked to an isolated Docker container (`yani-base:latest`), bypassing slow directory cloning.
+2. **Pydantic Validation Gate**: State mutations (`update_task_registry_row`, `register_task_batch`) validate payloads against Pydantic models before acquiring mutexes, returning character-capped error traces ($\le 1600$ chars) on schema errors to prevent token bleed.
+3. **Pre-Write Snapshot & Rollback**: Before modifying target files, `CheckpointManager` backs up originals to `.yani/rollbacks/{task_id}/{encoded_path}` and logs a `planned` entry in `memory.md`.
+4. **Shadow Staging**: Modified code is staged to `.yani/tmp/{task_id}_{encoded_path}.tmp`.
+5. **Diff-Gate Review**: Interactive modal compares staged `.tmp` against rollback backup in VS Code or rich terminal diff.
+6. **Commit or Revert**: Upon approval, staged files atomically overwrite targets; upon rejection, rollback copies restore the clean tree.
 
 ## 4. `yani-skill` Deterministic Workflow (Alternative Strict Path)
 When invoking `/yani-skill` (or `/yani-engine:yani-skill`), the execution follows an evidence-based, four-phase lifecycle:
@@ -35,8 +35,8 @@ When invoking `/yani-skill` (or `/yani-engine:yani-skill`), the execution follow
 4. **Deterministic Audit**: Executes `diff_audit.py` comparing the working tree to the base branch and asserting all `--expect` convention guards were satisfied before prompting for human commit authorization.
 
 ## 5. Communication & Optimization
-### Caveman Integration (Dynamic Output Compression)
-To maximize token savings during execution, yani-engine leverages the **Caveman** skill. This enforces an ultra-compressed communication mode, aggressively filtering out pleasantries and redundant markdown formatting from the LLM’s output. It operates at multiple intensity levels to cut token usage by up to 75% while retaining full technical accuracy during heavy multi-turn loops.
+### Caveman Integration & Token Bleed Envelope
+To maximize token savings during execution, yani-engine leverages **Caveman Mode** for ultra-compressed communication (cutting prompt tokens by up to 75%). When tool parameter errors occur, validation messages are bounded by `_format_validation_error` to protect prompt history from hallucinated input overflow.
 
 ### Knowledge Registry Vault Operations
 At the completion of complex tasks, yani-engine logs durable learnings to the Knowledge Vault (`knowledge/`):
