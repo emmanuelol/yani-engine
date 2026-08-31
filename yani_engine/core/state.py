@@ -86,7 +86,7 @@ def _format_validation_error(e: ValidationError, max_len: int = 1400) -> str:
     """Formats Pydantic validation error with a strict character boundary to prevent context-window token bleed."""
     err_json = e.json()
     if len(err_json) > max_len:
-        err_json = err_json[:max_len] + "\n... [TRUNCATED: Payload too large. Ensure descriptions and code blocks are concise.]"
+        err_json = err_json[:max_len] + "\n... [TRUNCATED: Payload too large. Ensure descriptions are concise.]"
     return f"State mutation rejected: Invalid arguments. Please fix and retry:\n{err_json}"
 
 
