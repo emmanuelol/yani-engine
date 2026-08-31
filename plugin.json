@@ -6,6 +6,7 @@
     "commands/start.json",
     "commands/audit.json",
     "commands/execute.json",
+    "commands/generate-demo.json",
     "commands/iterate.json",
     "commands/report.json",
     "commands/rollback.json",
