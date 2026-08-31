@@ -1,0 +1,5 @@
+{
+  "name": "generate-demo",
+  "description": "Generates professional terminal demo GIFs using VHS. LLM writes the script, deterministic binary renders it.",
+  "execute": "skills/generate-demo/SKILL.md"
+}

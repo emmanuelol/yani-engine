@@ -48,11 +48,13 @@ async def _ensure_warm_sandbox(task_id: str = None, worker_id: str = None, sandb
             shadow_dir = os.path.abspath(f".yani/shadow_{active_id}")
             branch_name = f"yani-worker-{active_id}"
 
+            # Prune stale worktrees first so git unlocks any branch associations
+            subprocess.run(["git", "worktree", "prune"], capture_output=True, check=False)
             if os.path.exists(shadow_dir):
                 subprocess.run(["git", "worktree", "remove", "--force", shadow_dir], capture_output=True, check=False)
                 shutil.rmtree(shadow_dir, ignore_errors=True)
+            # Unconditionally prune the branch name to prevent "branch already exists" errors
             subprocess.run(["git", "branch", "-D", branch_name], capture_output=True, check=False)
-            subprocess.run(["git", "worktree", "prune"], capture_output=True, check=False)
 
             is_git_repo = False
             try:
@@ -156,6 +158,13 @@ def _cleanup_all_sandboxes():
         for shadow_dir in glob.glob(".yani/shadow_*"):
             subprocess.run(["git", "worktree", "remove", "--force", shadow_dir], capture_output=True, check=False)
             shutil.rmtree(shadow_dir, ignore_errors=True)
+        # Unconditionally prune any lingering yani-worker-* branches
+        b_res = subprocess.run(["git", "branch", "--list", "yani-worker-*"], capture_output=True, text=True, timeout=10, check=False)
+        if b_res.stdout.strip():
+            for b in b_res.stdout.splitlines():
+                b_name = b.strip().lstrip("* ")
+                if b_name:
+                    subprocess.run(["git", "branch", "-D", b_name], capture_output=True, timeout=10, check=False)
     except Exception:
         pass
 
