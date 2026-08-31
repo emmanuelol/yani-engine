@@ -2,7 +2,7 @@
 
 **The Production-Grade Safety Harness for Autonomous AI Coding Agents.**
 
-[![Tests](https://img.shields.io/badge/tests-63%20passed-success.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-65%20passed-success.svg)](tests/)
 [![Python](https://img.shields.io/badge/python-%3E%3D3.10-blue.svg)](pyproject.toml)
 [![Sandbox](https://img.shields.io/badge/sandbox-Zero--Trust%20Docker-orange.svg)](Dockerfile)
 [![Observability](https://img.shields.io/badge/telemetry-OpenTelemetry%20%7C%20OTLP-purple.svg)](yani_engine/core/telemetry.py)
@@ -209,15 +209,15 @@ sequenceDiagram
 
 ## 🧪 Verification & Test Suite
 
-Run the full automated test suite (63 unit, integration, and chaos tests):
+Run the full automated test suite (65 unit, integration, and chaos tests):
 
 ```bash
 pytest tests/ -q
 ```
 
 ```
-...............................................................          [100%]
-63 passed, 2 warnings in 7.83s
+.................................................................        [100%]
+65 passed, 2 warnings in 5.68s
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for testing guidelines and pull request workflows.
