@@ -67,14 +67,15 @@ async def test_update_task_registry_concurrency():
         
 @pytest.mark.asyncio
 async def test_mock_llm_provider():
+    from yani_engine.core.task_executor import TaskExecutor
     provider = MockLLMProvider()
     orchestrator = LLMOrchestrator()
     orchestrator.sandbox_mode = "native"
     orchestrator.provider = provider
     orchestrator.providers = {"cloud": provider}
     
-    # Run the orchestrator with mock provider
-    await orchestrator.execute_task("T-001", "Mock Task")
+    # Run the task executor with mock provider
+    await TaskExecutor(orchestrator).execute_task("T-001", "Mock Task")
     
     assert provider.session_created is True
     assert len(provider.messages_sent) > 0

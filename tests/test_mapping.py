@@ -2,7 +2,8 @@ import os
 from unittest.mock import patch, MagicMock
 import pytest
 
-from yani_engine.core.orchestrator import LLMOrchestrator as YaniEngineCLI
+from yani_engine.core.mcp_manager import create_mcp_wrapper
+from yani_engine.core.config import config
 
 @pytest.mark.parametrize("raw_tool_name,expected_sanitized_name,input_properties,expected_annotations", [
     (
@@ -26,15 +27,15 @@ from yani_engine.core.orchestrator import LLMOrchestrator as YaniEngineCLI
 ])
 @patch.dict(os.environ, {"GEMINI_API_KEY": "dummy_key"})
 def test_mcp_wrapper_sanitization(raw_tool_name, expected_sanitized_name, input_properties, expected_annotations):
-    cli = YaniEngineCLI()
     server_prefix = raw_tool_name.split("/")[0].split("-")[0]
-    cli.mcp_sessions = {server_prefix: MagicMock()}
+    mcp_sessions = {server_prefix: MagicMock()}
+    mcp_locks = {}
     
     dummy_tool = MagicMock()
     dummy_tool.name = raw_tool_name
     dummy_tool.inputSchema = {"properties": input_properties} if input_properties is not None else {}
     
-    wrapper = cli._create_mcp_wrapper(server_prefix, dummy_tool)
+    wrapper = create_mcp_wrapper(server_prefix, dummy_tool, mcp_sessions, mcp_locks, config)
     assert wrapper.__name__ == expected_sanitized_name, f"Expected {expected_sanitized_name}, got {wrapper.__name__}"
     assert wrapper.__qualname__ == expected_sanitized_name, f"Expected {expected_sanitized_name}, got {wrapper.__qualname__}"
     

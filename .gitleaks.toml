@@ -1,0 +1,27 @@
+# gitleaks configuration for yani-engine
+# See: https://github.com/gitleaks/gitleaks
+
+title = "yani-engine gitleaks config"
+
+[extend]
+# Use the official gitleaks default ruleset
+useDefault = true
+
+[[rules]]
+id = "openclaw-token"
+description = "OpenClaw Auth Token"
+regex = '''OPENCLAW_TOKEN\s*=\s*[a-f0-9]{48}'''
+tags = ["key", "openclaw"]
+
+[[rules]]
+id = "tunnel-jwt"
+description = "Cloudflare / Tunnel JWT token"
+regex = '''TUNNEL_TOKEN\s*=\s*eyJ[A-Za-z0-9._-]{50,}'''
+tags = ["key", "tunnel", "jwt"]
+
+[allowlist]
+description = "Global allowlist"
+paths = [
+  '''.env.example''',
+  '''\.gitleaks\.toml''',
+]

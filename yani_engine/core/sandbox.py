@@ -44,20 +44,45 @@ async def _ensure_warm_sandbox(task_id: str = None, worker_id: str = None, sandb
             # Ruthlessly purge any exited or crashed containers holding the target name
             subprocess.run(["docker", "rm", "-f", container_name], capture_output=True, check=False)
                 
-            # Create Shadow Clone Atomically
+            # Create Shadow Worktree / Clone Atomically
             shadow_dir = os.path.abspath(f".yani/shadow_{active_id}")
-            shadow_tmp = f"{shadow_dir}.tmp"
-            
-            if os.path.exists(shadow_tmp):
-                shutil.rmtree(shadow_tmp)
-            os.makedirs(shadow_tmp, exist_ok=True)
-            
-            # Remove copy_function=os.link to prevent Hard Link Sandbox Escapes
-            ignore_patterns = shutil.ignore_patterns(
-                ".git", ".venv", "venv", "env", ".pytest_cache", "__pycache__", 
-                "node_modules", ".yani", ".codegraph", "*.tmp", "*.bak", "shadow_*"
-            )
-            shutil.copytree(os.getcwd(), shadow_tmp, ignore=ignore_patterns, dirs_exist_ok=True)
+            branch_name = f"yani-worker-{active_id}"
+
+            # Prune stale worktrees first so git unlocks any branch associations
+            subprocess.run(["git", "worktree", "prune"], capture_output=True, check=False)
+            if os.path.exists(shadow_dir):
+                subprocess.run(["git", "worktree", "remove", "--force", shadow_dir], capture_output=True, check=False)
+                shutil.rmtree(shadow_dir, ignore_errors=True)
+            # Unconditionally prune the branch name to prevent "branch already exists" errors
+            subprocess.run(["git", "branch", "-D", branch_name], capture_output=True, check=False)
+
+            is_git_repo = False
+            try:
+                chk_git = subprocess.run(["git", "rev-parse", "--is-inside-work-tree"], capture_output=True, text=True, check=False)
+                is_git_repo = (chk_git.returncode == 0 and chk_git.stdout.strip() == "true")
+            except Exception:
+                is_git_repo = False
+
+            if is_git_repo:
+                os.makedirs(".yani", exist_ok=True)
+                wt_res = subprocess.run(
+                    ["git", "worktree", "add", "-b", branch_name, shadow_dir, "HEAD"],
+                    capture_output=True, text=True, check=False
+                )
+                if wt_res.returncode != 0:
+                    os.makedirs(shadow_dir, exist_ok=True)
+                    ignore_patterns = shutil.ignore_patterns(
+                        ".git", ".venv", "venv", "env", ".pytest_cache", "__pycache__", 
+                        "node_modules", ".yani", ".codegraph", "*.tmp", "*.bak", "shadow_*"
+                    )
+                    shutil.copytree(os.getcwd(), shadow_dir, ignore=ignore_patterns, dirs_exist_ok=True)
+            else:
+                os.makedirs(shadow_dir, exist_ok=True)
+                ignore_patterns = shutil.ignore_patterns(
+                    ".git", ".venv", "venv", "env", ".pytest_cache", "__pycache__", 
+                    "node_modules", ".yani", ".codegraph", "*.tmp", "*.bak", "shadow_*"
+                )
+                shutil.copytree(os.getcwd(), shadow_dir, ignore=ignore_patterns, dirs_exist_ok=True)
             
             # Dynamic Target Image Resolution
             target_image = "yani-base:latest"
@@ -108,8 +133,11 @@ async def _teardown_warm_sandbox(task_id: str = None, worker_id: str = None):
             container_name = f"yani-sandbox-{project_hash}-{active_id}"
             subprocess.run(["docker", "rm", "-f", container_name], capture_output=True)
             shadow_dir = os.path.abspath(f".yani/shadow_{active_id}")
+            branch_name = f"yani-worker-{active_id}"
+            subprocess.run(["git", "worktree", "remove", "--force", shadow_dir], capture_output=True, check=False)
+            subprocess.run(["git", "branch", "-D", branch_name], capture_output=True, check=False)
             if os.path.exists(shadow_dir):
-                shutil.rmtree(shadow_dir)
+                shutil.rmtree(shadow_dir, ignore_errors=True)
         except Exception:
             pass
     await asyncio.to_thread(_do_teardown)
@@ -126,8 +154,17 @@ def _cleanup_all_sandboxes():
         if res.stdout.strip():
             for cid in res.stdout.strip().splitlines():
                 subprocess.run(["docker", "rm", "-f", cid], capture_output=True, timeout=10)
+        subprocess.run(["git", "worktree", "prune"], capture_output=True, timeout=10, check=False)
         for shadow_dir in glob.glob(".yani/shadow_*"):
+            subprocess.run(["git", "worktree", "remove", "--force", shadow_dir], capture_output=True, check=False)
             shutil.rmtree(shadow_dir, ignore_errors=True)
+        # Unconditionally prune any lingering yani-worker-* branches
+        b_res = subprocess.run(["git", "branch", "--list", "yani-worker-*"], capture_output=True, text=True, timeout=10, check=False)
+        if b_res.stdout.strip():
+            for b in b_res.stdout.splitlines():
+                b_name = b.strip().lstrip("* ")
+                if b_name:
+                    subprocess.run(["git", "branch", "-D", b_name], capture_output=True, timeout=10, check=False)
     except Exception:
         pass
 

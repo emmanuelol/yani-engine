@@ -1,23 +1,18 @@
-import asyncio
 import os
-import stat
+import pytest
 from yani_engine.core.sandbox import execute_bash
 
-async def test_permissions():
-    result = await execute_bash("touch /workspace/test_perm.txt")
-    print("Command Output:", result)
-    
-    file_path = "test_perm.txt"
-    if os.path.exists(file_path):
-        stat_info = os.stat(file_path)
-        print(f"File UID: {stat_info.st_uid}")
-        print(f"Host UID: {os.getuid()}")
-        if stat_info.st_uid == os.getuid():
-            print("SUCCESS: File is owned by the host user.")
-        else:
-            print("FAILURE: File is NOT owned by the host user.")
-    else:
-        print("FAILURE: File not found.")
 
-if __name__ == "__main__":
-    asyncio.run(test_permissions())
+@pytest.mark.asyncio
+async def test_permissions(tmp_path):
+    original_cwd = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        result = await execute_bash("touch test_perm.txt", sandbox_mode="native")
+        file_path = tmp_path / "test_perm.txt"
+        assert file_path.exists()
+        stat_info = os.stat(file_path)
+        assert stat_info.st_uid == os.getuid()
+    finally:
+        os.chdir(original_cwd)
+

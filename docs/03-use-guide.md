@@ -4,19 +4,31 @@ yani-engine operates dynamically. Whenever you invoke the `yani-engine` command,
 
 ## CLI Commands and Flags
 
-yani-engine commands accept several granular flags to control behavior:
+### Global Execution Flags
+- `--trace`: (Type: `bool`, Default: `false`) Enable OpenTelemetry distributed tracing and metrics recording.
+- `--otlp-endpoint <url>`: (Default: `None`) Export telemetry traces directly to an OpenTelemetry collector over HTTP/Protobuf.
+- `--log-format <console|json>`: (Default: `console`) Select structlog output format.
+- `--model <name>`: Override default model tier for the run.
+- `-v`, `--verbose`: Enable detailed verbose logging and interactive Diff-Gate modals.
 
+### Command Reference
 - `yani-engine start`: Ingests documentation and registers an atomic task plan for the current project.
   - `--docs <path>`: (Default: `./docs`) Explicitly point yani-engine to a documentation directory for discovery.
-- `yani-engine execute`: Runs the registered tasks in dependency order.
-  - `--dry-run`: (Type: `bool`, Default: `false`) Execute tasks but don't apply changes to disk, useful for validating task dependencies.
-  - `-v`: (Type: `bool`, Default: `false`) Verbose mode; enables the manual Diff-Gate review process via VS Code.
-- `yani-engine iterate`: Evaluates a user prompt against the current project state and decomposes it into atomic tasks.
-  - `--enrich`: (Type: `bool`, Default: `false`) Automatically pulls extra context from Context7 before planning.
+- `yani-engine execute`: Runs registered tasks in parallel waves matching dependency constraints.
+  - `--dry-run`: (Type: `bool`, Default: `false`) Execute task planner without modifying working tree.
+  - `-v`: (Type: `bool`, Default: `false`) Verbose mode with interactive Diff-Gate review.
+- `yani-engine iterate`: Evaluates a prompt against project memory and generates bounded task batches.
+  - `--enrich`: (Type: `bool`, Default: `false`) Automatically queries Context7 semantic docs before planning.
 - `yani-engine audit`: Runs the QA Harness Loop against completed tasks to autonomously generate fixes.
-  - `--budget-threshold <pct>`: (Type: `integer`, Default: `80`) Specify the threshold percentage for token budget exhaustion before triggering a graceful shutdown.
-- `yani-engine resume`: Detects stale locks and offers options to resume, rollback, or skip.
-- `yani-engine report`: Generates an improvement report using CodeGraph metrics.
+  - `--budget-threshold <pct>`: (Type: `integer`, Default: `80`) Specify token exhaustion threshold percentage.
+- `yani-engine resume`: Detects stale locks / interrupted tasks with options to Resume (`R`), Rollback (`B`), or Skip (`S`).
+- `yani-engine rollback`: Safely restores files from `.yani/rollbacks/` checkpoints.
+  - `<task_id>`: Restore a specific task (e.g. `T-001`).
+  - `--all`: Roll back all modified files across the current session.
+- `yani-engine update-docs`: Inspects git changes and CodeGraph AST symbols to register documentation update tasks.
+  - `--docs <path>`: Target documentation path (default `./docs`).
+- `yani-engine report`: Generates an improvement report using CodeGraph AST metrics.
+- `yani-engine status`: Displays live Task Registry status and MCP server health.
 - `yani-engine:yani-skill` (or `/yani-skill`): **Lite Fast-Path Mode** — Lightweight, deterministic planner & auditor for daily pairing without Docker setup.
 
 ---

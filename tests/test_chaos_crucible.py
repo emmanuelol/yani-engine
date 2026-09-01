@@ -3,7 +3,7 @@ import glob
 import pytest
 import shutil
 import asyncio
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, AsyncMock
 
 # Import the modules we need to test
 from yani_engine.core.sandbox import _ensure_warm_sandbox, _teardown_warm_sandbox, execute_bash
@@ -94,9 +94,18 @@ async def test_unattended_orphan_recovery_deadlock(mock_confirm, setup_test_env)
 
 # 3. test_native_qa_intercept_syntax_error()
 @pytest.mark.asyncio
-async def test_native_qa_intercept_syntax_error(setup_test_env):
+@patch("yani_engine.core.mcp_manager.connect_mcp", new_callable=AsyncMock)
+@patch("yani_engine.commands.audit_handler.subprocess.run")
+async def test_native_qa_intercept_syntax_error(mock_subprocess_run, mock_connect_mcp, setup_test_env):
     """Asserts that the native audit loop intercepts syntax errors and blocks execution."""
     
+    # Mock subprocess.run for uvx ruff check
+    mock_run_res = MagicMock()
+    mock_run_res.returncode = 1
+    mock_run_res.stdout = "src/broken.py:1:21: E999 SyntaxError: invalid syntax"
+    mock_run_res.stderr = ""
+    mock_subprocess_run.return_value = mock_run_res
+
     # Write a broken file
     os.makedirs("src", exist_ok=True)
     with open("src/broken.py", "w") as f:
