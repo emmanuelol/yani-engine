@@ -41,9 +41,10 @@ from yani_engine.core.state import (
 )
 from yani_engine.core.review_ui import batch_diff_review
 from yani_engine.core.config import config
+from yani_engine.core.types import BudgetExhaustedException
 
 if TYPE_CHECKING:
-    from yani_engine.core.orchestrator import LLMOrchestrator, BudgetExhaustedException
+    from yani_engine.core.orchestrator import LLMOrchestrator
 
 
 class WaveExecutor:
@@ -68,7 +69,6 @@ class WaveExecutor:
         Args:
             args: Raw CLI argument list (forwarded for future flag support).
         """
-        from yani_engine.core.orchestrator import BudgetExhaustedException
         from yani_engine.core.planner import WavePlanner
 
         orch = self._orch
@@ -239,7 +239,6 @@ class WaveExecutor:
         Raises BudgetExhaustedException to terminate all sibling workers
         via asyncio.wait(FIRST_EXCEPTION).
         """
-        from yani_engine.core.orchestrator import BudgetExhaustedException
         from yani_engine.core.telemetry import trace_span
 
         orch = self._orch

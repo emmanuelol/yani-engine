@@ -44,6 +44,7 @@ from yani_engine.core.state import (
 )
 from yani_engine.core.sandbox import execute_bash
 from yani_engine.core.state import read_file
+from yani_engine.core.types import BudgetExhaustedException
 
 if TYPE_CHECKING:
     from yani_engine.core.orchestrator import LLMOrchestrator
@@ -71,7 +72,6 @@ class TaskExecutor:
             BudgetExhaustedException: re-raised after marking task as
                 interrupted, so WaveExecutor can propagate it upward.
         """
-        from yani_engine.core.orchestrator import BudgetExhaustedException
         from yani_engine.core.sandbox import _ensure_warm_sandbox
 
         o = self._o  # shorthand reference

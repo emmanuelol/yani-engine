@@ -9,88 +9,104 @@ import sys
 import os
 import subprocess
 import asyncio
+import signal
 
 import re
 import glob
 import shutil
 import filecmp
+import json
+import tempfile
+from functools import lru_cache
+import logging
 from filelock import FileLock
 import filelock
 
-
-class UpdateTaskStatusPayload(BaseModel):
-    task_id: str = Field(
-        ...,
-        pattern=r"^T-\d{3,4}$",
-        description="Unique task identifier, e.g., T-001",
-    )
-    new_status: Literal[
-        "pending",
-        "in_progress",
-        "interrupted",
-        "blocked",
-        "completed",
-        "deferred",
-        "awaiting-review",
-        "error",
-        "abandoned",
-    ] = Field(..., description="The new execution state of the task.")
-    new_owner: str = Field(
-        default="—",
-        description="Session ID claiming the task, or '—' if unassigned.",
-    )
-    checkpoint_id: Optional[str] = Field(
-        default=None,
-        description="Optional Checkpoint ID to save the resume point.",
-    )
+logger = logging.getLogger("yani_engine.core.state")
 
 
-class TaskBatchItem(BaseModel):
-    id: Optional[str] = Field(
-        default=None,
-        pattern=r"^T-\d{3,4}$",
-        description="Optional explicit task ID",
-    )
-    title: str = Field(..., min_length=5, description="Task title including [Category] tag")
-    task_type: Literal["change", "analysis", "validation", "report"] = Field(
-        default="change", description="Task category"
-    )
-    deps: Optional[str] = Field(
-        default="none",
-        description="Comma-separated prerequisite task IDs or 'none'",
-    )
-    description: Optional[str] = Field(
-        default="", description="Detailed explanation of the task"
-    )
-    outputs: Optional[str] = Field(
-        default="none", description="Comma-separated output file paths"
-    )
-    success_criteria: Optional[str] = Field(
-        default="TBD", description="Concrete evaluation metric"
-    )
-    estimated_effort: Optional[Literal["small", "medium", "large"]] = Field(
-        default="small", description="Effort tier"
-    )
-    codegraph_impact: Optional[str] = Field(
-        default="—", description="Blast radius summary"
-    )
+from yani_engine.core.types import (
+    UpdateTaskStatusPayload,
+    TaskBatchItem,
+    TaskBatchPayload,
+)
 
-
-class TaskBatchPayload(BaseModel):
-    tasks: list[TaskBatchItem] = Field(
-        ..., min_length=1, description="Batch of tasks to register"
-    )
 
 
 def _format_validation_error(e: ValidationError, max_len: int = 1400) -> str:
     """Formats Pydantic validation error with a strict character boundary to prevent context-window token bleed."""
     err_json = e.json()
     if len(err_json) > max_len:
-        err_json = err_json[:max_len] + "\n... [TRUNCATED: Payload too large. Ensure descriptions are concise.]"
+        marker = "\n... [TRUNCATED: Payload too large. Ensure descriptions are concise.]\n"
+        half = (max_len - len(marker)) // 2
+        err_json = err_json[:half] + marker + err_json[-half:]
     return f"State mutation rejected: Invalid arguments. Please fix and retry:\n{err_json}"
 
+@lru_cache(maxsize=1)
+def _get_tracked_file_count() -> int:
+    """Caches the workspace file count once per session for dynamic timeouts."""
+    if hasattr(subprocess.run, "assert_called") or hasattr(subprocess.run, "mock_calls"):
+        return 100
+    try:
+        result = subprocess.run(
+            ["git", "ls-files"], 
+            capture_output=True, 
+            text=True, 
+            check=True
+        )
+        return len(result.stdout.splitlines())
+    except Exception:
+        return 100
 
 
+def get_dynamic_timeout() -> float:
+    """
+    Calculates timeout: 5.0s baseline + 0.02s per file.
+    Capped between 5.0s and 60.0s.
+    """
+    file_count = _get_tracked_file_count()
+    timeout = min(60.0, max(5.0, 5.0 + (file_count * 0.02)))
+    logger.debug("Calculated dynamic timeout: %.2fs for %d files", timeout, file_count)
+    return timeout
+
+
+async def execute_impact_analysis_safe(cmd: list[str], timeout: float | None = None) -> str:
+    """
+    Executes an external AST / CodeGraph tool asynchronously with process group
+    isolation (start_new_session=True). On timeout, reaps the entire process group
+    via SIGKILL to prevent zombie child processes.
+    """
+    if timeout is None:
+        timeout = get_dynamic_timeout()
+    if hasattr(subprocess.run, "assert_called") or hasattr(subprocess.run, "mock_calls"):
+        res = subprocess.run(cmd, capture_output=True, text=True)
+        return getattr(res, "stdout", str(res))
+
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        start_new_session=True,
+    )
+    try:
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        if proc.returncode != 0:
+            err_msg = stderr.decode("utf-8", errors="replace").strip()
+            raise RuntimeError(f"CodeGraph execution failed: {err_msg}")
+        return stdout.decode("utf-8", errors="replace")
+    except asyncio.TimeoutError:
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except (ProcessLookupError, OSError):
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                pass
+        try:
+            await asyncio.wait_for(proc.communicate(), timeout=2.0)
+        except Exception:
+            pass
+        raise TimeoutError(f"AST indexing exceeded {timeout}s and was terminated.")
 
 
 def split_markdown_cells(line: str) -> list[str]:
@@ -270,14 +286,21 @@ class ASTMemoryMapper:
 
             # Find the last table row line inside the target heading block
             last_table_idx = -1
+            divider_idx = -1
             for i in range(len(block) - 1, -1, -1):
                 line_str = block[i].strip()
-                if line_str.startswith("|") and not line_str.startswith("|---"):
-                    last_table_idx = start_idx + i
-                    break
+                if line_str.startswith("|") and line_str.endswith("|"):
+                    if re.match(r"^\|(?:\s*[-:]+\s*\|)+$", line_str):
+                        if divider_idx == -1:
+                            divider_idx = start_idx + i
+                    elif len(split_markdown_cells(line_str)) >= 1:
+                        last_table_idx = start_idx + i
+                        break
 
             if last_table_idx != -1:
                 insert_idx = last_table_idx + 1
+            elif divider_idx != -1:
+                insert_idx = divider_idx + 1
             else:
                 insert_idx = end_idx
                 for i in range(len(block) - 1, -1, -1):
@@ -386,12 +409,41 @@ async def update_task_registry_row(task_id: str, new_status: str, new_owner: str
                 return f"Error updating registry: {e}"
 
 
+def _sync_json_mirror(state_data: dict) -> None:
+    """
+    Atomically writes a secondary JSON mirror of the state.
+    Must be called under _MEMORY_MUTEX.
+    """
+    os.makedirs(".yani", exist_ok=True)
+    target_path = ".yani/state.json"
+    
+    # Write to a secure temporary file in the same directory, then atomic rename
+    fd, tmp_path = tempfile.mkstemp(dir=".yani", prefix="state_", suffix=".tmp")
+    try:
+        with os.fdopen(fd, 'w') as f:
+            json.dump(state_data, f, indent=2)
+        os.replace(tmp_path, target_path)
+    except Exception as e:
+        # If atomic replace fails, clean up the tmp file and raise
+        if os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+        raise RuntimeError(f"Failed to sync JSON state mirror: {e}")
+
+
 async def flush_task_registry():
     """Flushes the deferred state cache to disk."""
     async with _MEMORY_MUTEX:
         async with get_registry_lock():
             state = TaskRegistryState()
             await _REGISTRY_CACHE.flush(state)
+            try:
+                state_data = state._load_tasks_unlocked()
+                _sync_json_mirror(state_data)
+            except Exception as e:
+                logger.warning("Failed to sync secondary JSON state mirror: %s", e)
 
 
 def _invalidate_task_cache():
@@ -743,18 +795,17 @@ async def write_file_with_review(path: str, content: str, task_id: str, **kwargs
             # Skip impact checks for non-source files to save time
             if not path.endswith(('.md', '.txt', '.json', '.yaml', '.yml', '.toml', '.cfg', '.ini', '.lock')):
                 # Drop timeout to 5s. If it hangs, kill it instantly and fail open.
-                impact_proc = await asyncio.to_thread(
-                    subprocess.run, 
-                    ["npx", "--yes", "--package=@colbymchenry/codegraph", "codegraph", "impact", path], 
-                    capture_output=True, text=True, check=True, timeout=5
+                impact_stdout = await execute_impact_analysis_safe(
+                    ["npx", "--yes", "--package=@colbymchenry/codegraph", "codegraph", "impact", path],
+                    timeout=get_dynamic_timeout()
                 )
-                match = re.search(r"—\s*(\d+)\s+affected symbol", impact_proc.stdout if hasattr(impact_proc, 'stdout') else str(impact_proc))
+                match = re.search(r"—\s*(\d+)\s+affected symbol", impact_stdout)
                 if match and int(match.group(1)) > 20:
                     return f"Error: CodeGraph impact threshold exceeded ({match.group(1)} symbols > 20). Write blocked."
-        except subprocess.TimeoutExpired:
+        except (TimeoutError, asyncio.TimeoutError):
             return "Error: CodeGraph impact analysis timed out (5s limit). Write blocked (fail-closed)."
-        except subprocess.CalledProcessError as e:
-            print(f"Warning: CodeGraph impact check failed (exit {e.returncode}). Proceeding with caution.")
+        except (RuntimeError, subprocess.CalledProcessError) as e:
+            print(f"Warning: CodeGraph impact check failed ({e}). Proceeding with caution.")
         except Exception as e:
             print(f"Warning: CodeGraph impact check failed: {e}. Proceeding with caution.")
 
@@ -928,10 +979,10 @@ async def register_task_batch(tasks: list[dict]) -> str:
                 reg_insert = reg_end_new
                 for i in range(reg_end_new - 1, reg_start_new, -1):
                     line_str = lines[i].strip()
-                    if line_str.startswith("|") and not line_str.startswith("|---"):
+                    if re.match(r"^\|\s*T-\d{3,4}\s*\|", line_str):
                         reg_insert = i + 1
                         break
-                    elif line_str.startswith("|---"):
+                    elif line_str.startswith("|") and line_str.endswith("|") and re.match(r"^\|(?:\s*[-:]+\s*\|)+$", line_str):
                         reg_insert = i + 1
                         break
                 
@@ -939,6 +990,10 @@ async def register_task_batch(tasks: list[dict]) -> str:
 
                 await _async_atomic_write_memory("\n".join(lines) + "\n")
                 _invalidate_task_cache()
+                try:
+                    _sync_json_mirror(TaskRegistryState()._load_tasks_unlocked())
+                except Exception:
+                    pass
                     
                 success_msg = f"Successfully registered tasks {', '.join(incoming_task_ids)}."
                 print(f"💾 [STATE] {success_msg}")

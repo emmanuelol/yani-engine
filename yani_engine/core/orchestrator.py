@@ -30,13 +30,16 @@ from yani_engine.core.config import config
 from yani_engine.core.archiver import archive_stale_sessions
 
 
+from yani_engine.core.types import (
+    BudgetExhaustedException,
+    DependencyGraphError,
+    UpdateTaskStatusPayload,
+    TaskBatchItem,
+    TaskBatchPayload,
+)
+
+
 class PlanValidator:
-    pass
-
-class BudgetExhaustedException(Exception):
-    pass
-
-class DependencyGraphError(Exception):
     pass
 
 class BudgetManager:
