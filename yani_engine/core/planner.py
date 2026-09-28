@@ -1,6 +1,7 @@
 import ast
 import os
-from yani_engine.core.state import TaskRegistryState
+from yani_engine.core.state import TaskRegistryState, execute_impact_analysis_safe, get_dynamic_timeout
+from yani_engine.core.types import DependencyGraphError
 
 class WavePlanner:
     def __init__(self, start_at_index: int = 0, mcp_sessions: dict = None):
@@ -25,14 +26,12 @@ class WavePlanner:
 
         if os.path.exists(".codegraph"):
             try:
-                import subprocess, asyncio
-                res = await asyncio.to_thread(
-                    subprocess.run,
+                stdout_str = await execute_impact_analysis_safe(
                     ["npx", "--yes", "--package=@colbymchenry/codegraph", "codegraph", "impact", file_path],
-                    capture_output=True, text=True, timeout=5
+                    timeout=get_dynamic_timeout()
                 )
-                self._impact_cache[file_path] = res.stdout
-                return res.stdout
+                self._impact_cache[file_path] = stdout_str
+                return stdout_str
             except Exception:
                 pass
         self._impact_cache[file_path] = ""
@@ -116,8 +115,6 @@ class WavePlanner:
                         blocked.append(f"{t_id} (missing: {', '.join(unfulfilled)})")
                     err_msg = f"Dependency cycle or unresolvable dependencies detected: {'; '.join(blocked)}"
                     print(f"Warning: Cannot schedule remaining pending tasks. {err_msg}")
-                    from yani_engine.core.orchestrator import DependencyGraphError
-
                     raise DependencyGraphError(err_msg)
 
             waves.append(current_wave)

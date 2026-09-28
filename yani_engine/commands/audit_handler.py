@@ -35,9 +35,10 @@ from yani_engine.core.state import (
     flush_task_registry,
 )
 from yani_engine.core.sandbox import execute_bash
+from yani_engine.core.types import BudgetExhaustedException
 
 if TYPE_CHECKING:
-    from yani_engine.core.orchestrator import LLMOrchestrator, BudgetExhaustedException
+    from yani_engine.core.orchestrator import LLMOrchestrator
 
 
 async def handle_audit(orchestrator: "LLMOrchestrator", args: list) -> None:
@@ -53,9 +54,6 @@ async def handle_audit(orchestrator: "LLMOrchestrator", args: list) -> None:
     """
     from rich.console import Console
     from rich.table import Table
-
-    # Import at call-time to avoid circular top-level import
-    from yani_engine.core.orchestrator import BudgetExhaustedException
 
     console = Console()
 
