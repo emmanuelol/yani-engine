@@ -150,3 +150,114 @@ async def test_end_to_end_flush_generates_json_mirror(tmp_path):
         os.chdir(original_cwd)
 
 
+@pytest.mark.asyncio
+async def test_flush_task_registry_graceful_degradation_on_json_error(tmp_path):
+    """Verify that flush_task_registry does not crash if secondary JSON mirror fails."""
+    from unittest.mock import patch
+    import os
+    from yani_engine.core.state import update_task_registry_row, flush_task_registry, _invalidate_task_cache
+
+    original_cwd = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        _invalidate_task_cache()
+        content = """# Memory
+
+## Task Registry
+| Task ID | Title | Type | Status | Owner | Depends On | Assigned Session | Checkpoint |
+|---|---|---|---|---|---|---|---|
+| T-001 | Base Task | change | pending | — | none | — | none |
+"""
+        with open("memory.md", "w", encoding="utf-8") as f:
+            f.write(content)
+
+        await update_task_registry_row("T-001", "in_progress")
+        # Injected catastrophic failure in secondary mirror
+        with patch("yani_engine.core.state._sync_json_mirror", side_effect=RuntimeError("Simulated disk full")):
+            # Must not raise RuntimeError
+            await flush_task_registry()
+
+        # Primary source of truth memory.md MUST still be cleanly updated
+        with open("memory.md", "r", encoding="utf-8") as f:
+            mem = f.read()
+        assert "in_progress" in mem
+    finally:
+        _invalidate_task_cache()
+        os.chdir(original_cwd)
+
+
+def test_get_dynamic_timeout_observability(caplog):
+    """Verify that get_dynamic_timeout emits debug telemetry log."""
+    import logging
+    from yani_engine.core.state import get_dynamic_timeout
+
+    with caplog.at_level(logging.DEBUG):
+        timeout = get_dynamic_timeout()
+        assert timeout >= 5.0
+        assert any("Calculated dynamic timeout:" in r.message for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_table_insertion_ignores_stray_pipes(tmp_path):
+    """Verify table row insertion ignores non-table lines with pipes."""
+    import os
+    from yani_engine.core.state import ASTMemoryMapper, format_markdown_row, register_task_batch, _invalidate_task_cache
+
+    original_cwd = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        _invalidate_task_cache()
+        content = """# Memory
+
+## Change Log
+| Timestamp | Task ID | Target Path | Summary | Status | Rationale |
+|---|---|---|---|---|---|
+| 2026-08-29T00:00:00 | T-001 | main.py | init | applied | bootstrap |
+
+> Note: this is a blockquote | with a stray pipe | that should not count as table row
+
+## Task Registry
+| Task ID | Title | Type | Status | Owner | Depends On | Assigned Session | Checkpoint |
+|---|---|---|---|---|---|---|---|
+| T-001 | Task One | change | completed | — | none | — | none |
+
+| Invalid non-task row |
+
+## Task Details
+### T-001: Task One
+- **Status**: completed
+"""
+        with open("memory.md", "w", encoding="utf-8") as f:
+            f.write(content)
+
+        # 1. Test append_to_markdown_table ignores blockquote with pipe
+        new_log = format_markdown_row(["2026-08-29T01:00:00", "T-002", "app.py", "update", "applied", "feat"])
+        success = ASTMemoryMapper.append_to_markdown_table("memory.md", "Change Log", new_log)
+        assert success
+
+        with open("memory.md", "r", encoding="utf-8") as f:
+            mem1 = f.read()
+
+        lines = mem1.splitlines()
+        row_t1 = next(i for i, l in enumerate(lines) if "T-001 | main.py" in l)
+        row_t2 = next(i for i, l in enumerate(lines) if "T-002 | app.py" in l)
+        assert row_t2 == row_t1 + 1
+
+        # 2. Test register_task_batch inserts after T-001, not after invalid row
+        batch = [{"id": "T-002", "title": "[Core] Task Two", "deps": "none"}]
+        res = await register_task_batch(batch)
+        assert "Successfully registered tasks T-002" in res
+
+        with open("memory.md", "r", encoding="utf-8") as f:
+            mem2 = f.read()
+
+        lines2 = mem2.splitlines()
+        reg_t1 = next(i for i, l in enumerate(lines2) if "T-001 | Task One" in l)
+        reg_t2 = next(i for i, l in enumerate(lines2) if "T-002 | [Core] Task Two" in l)
+        assert reg_t2 == reg_t1 + 1
+    finally:
+        _invalidate_task_cache()
+        os.chdir(original_cwd)
+
+
+

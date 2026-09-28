@@ -18,8 +18,11 @@ import filecmp
 import json
 import tempfile
 from functools import lru_cache
+import logging
 from filelock import FileLock
 import filelock
+
+logger = logging.getLogger("yani_engine.core.state")
 
 
 from yani_engine.core.types import (
@@ -62,7 +65,9 @@ def get_dynamic_timeout() -> float:
     Capped between 5.0s and 60.0s.
     """
     file_count = _get_tracked_file_count()
-    return min(60.0, max(5.0, 5.0 + (file_count * 0.02)))
+    timeout = min(60.0, max(5.0, 5.0 + (file_count * 0.02)))
+    logger.debug("Calculated dynamic timeout: %.2fs for %d files", timeout, file_count)
+    return timeout
 
 
 async def execute_impact_analysis_safe(cmd: list[str], timeout: float | None = None) -> str:
@@ -281,14 +286,21 @@ class ASTMemoryMapper:
 
             # Find the last table row line inside the target heading block
             last_table_idx = -1
+            divider_idx = -1
             for i in range(len(block) - 1, -1, -1):
                 line_str = block[i].strip()
-                if line_str.startswith("|") and not line_str.startswith("|---"):
-                    last_table_idx = start_idx + i
-                    break
+                if line_str.startswith("|") and line_str.endswith("|"):
+                    if re.match(r"^\|(?:\s*[-:]+\s*\|)+$", line_str):
+                        if divider_idx == -1:
+                            divider_idx = start_idx + i
+                    elif len(split_markdown_cells(line_str)) >= 1:
+                        last_table_idx = start_idx + i
+                        break
 
             if last_table_idx != -1:
                 insert_idx = last_table_idx + 1
+            elif divider_idx != -1:
+                insert_idx = divider_idx + 1
             else:
                 insert_idx = end_idx
                 for i in range(len(block) - 1, -1, -1):
@@ -427,8 +439,11 @@ async def flush_task_registry():
         async with get_registry_lock():
             state = TaskRegistryState()
             await _REGISTRY_CACHE.flush(state)
-            state_data = state._load_tasks_unlocked()
-            _sync_json_mirror(state_data)
+            try:
+                state_data = state._load_tasks_unlocked()
+                _sync_json_mirror(state_data)
+            except Exception as e:
+                logger.warning("Failed to sync secondary JSON state mirror: %s", e)
 
 
 def _invalidate_task_cache():
@@ -964,10 +979,10 @@ async def register_task_batch(tasks: list[dict]) -> str:
                 reg_insert = reg_end_new
                 for i in range(reg_end_new - 1, reg_start_new, -1):
                     line_str = lines[i].strip()
-                    if line_str.startswith("|") and not line_str.startswith("|---"):
+                    if re.match(r"^\|\s*T-\d{3,4}\s*\|", line_str):
                         reg_insert = i + 1
                         break
-                    elif line_str.startswith("|---"):
+                    elif line_str.startswith("|") and line_str.endswith("|") and re.match(r"^\|(?:\s*[-:]+\s*\|)+$", line_str):
                         reg_insert = i + 1
                         break
                 
